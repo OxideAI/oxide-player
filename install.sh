@@ -98,8 +98,10 @@ fetch_source() {
 
 build_backend() {
   log "Building backend (release)..."
-  ( cd "$SRC_DIR/backend" && cargo build --release )
-  run install -Dm0755 "$SRC_DIR/backend/target/release/oxide-player" "$BIN_DIR/oxide-player"
+  # backend/ is a workspace member, so cargo places the binary in the
+  # workspace root target/ dir, not backend/target/.
+  ( cd "$SRC_DIR" && cargo build --release )
+  run install -Dm0755 "$SRC_DIR/target/release/oxide-player" "$BIN_DIR/oxide-player"
   log "Installed backend -> $BIN_DIR/oxide-player"
 }
 
