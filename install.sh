@@ -73,23 +73,16 @@ ensure_rust() {
   export PATH="$HOME/.cargo/bin:$PATH"
 }
 
-ensure_cargo_bin() {
-  command -v "$1" >/dev/null 2>&1 && return 0
-  if ! command -v cargo-binstall >/dev/null 2>&1; then
-    log "Installing cargo-binstall..."
-    run cargo install cargo-binstall
-  fi
-  run cargo binstall -y "$1" || run cargo install "$1"
-}
-
 ensure_camilladsp() {
   if command -v camilladsp >/dev/null 2>&1; then
     log "camilladsp present: $(camilladsp --version 2>&1 | head -1)"
     return
   fi
   ensure_rust
-  log "Installing camilladsp..."
-  ensure_cargo_bin camilladsp
+  # camilladsp is not published to crates.io; build from the official repo,
+  # pinned to a release tag for reproducible installs.
+  log "Installing camilladsp (pinned to v4.1.3)..."
+  run cargo install --git https://github.com/HEnquist/camilladsp --tag v4.1.3 camilladsp
 }
 
 fetch_source() {
