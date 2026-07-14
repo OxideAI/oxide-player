@@ -1,0 +1,27 @@
+[Unit]
+Description=oxide-player — audiophile MPD + CamillaDSP controller
+Documentation=https://github.com/your-org/oxide-player
+# Start only once MPD and CamillaDSP are ready.
+After=network-online.target mpd.service camilladsp.service
+Wants=mpd.service camilladsp.service
+RequiresMountsFor=/var/lib/oxide-player
+
+[Service]
+Type=simple
+User=oxide
+Group=oxide
+# Run from the data dir so relative paths in the config resolve predictably.
+WorkingDirectory=/var/lib/oxide-player
+ExecStart=/usr/local/bin/oxide-player -c /etc/oxide-player/config.json
+# Higher scheduling priority for glitch-free audio under load.
+Nice=-5
+# Restart on crash, but not on clean exit (exit code 0).
+Restart=on-failure
+RestartSec=3
+# Cap logging; journald captures stdout/stderr.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=oxide-player
+
+[Install]
+WantedBy=multi-user.target

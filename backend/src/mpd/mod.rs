@@ -1,0 +1,367 @@
+use crate::error::{AppError, AppResult};
+use crate::types::{OutputDevice, PlaybackState, QueueEntry};
+use mpd_client::client::Connection as MpdConnection;
+use mpd_client::commands::definitions::{CurrentSong, Queue, Status};
+use mpd_client::tag::Tag;
+use mpd_client::Client;
+use mpd_protocol::command::Command;
+use std::sync::Arc;
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+
+#[derive(Clone)]
+pub struct Mpd {
+    inner: Arc<MpdInner>,
+}
+
+struct MpdInner {
+    host: String,
+    port: u16,
+    conn: Mutex<Option<MpdConnection>>,
+    active_track: Mutex<Option<i64>>,
+}
+
+pub struct MpdStatus {
+    pub state: PlaybackState,
+    pub volume: u8,
+    pub elapsed: f64,
+    pub duration: f64,
+    pub error: Option<String>,
+    pub current_uri: Option<String>,
+    pub current_track: Option<u32>,
+    pub current_id: Option<u64>,
+    pub random: bool,
+}
+
+impl Mpd {
+    pub async fn connect(host: &str, port: u16) -> Self {
+        Mpd {
+            inner: Arc::new(MpdInner {
+                host: host.to_string(),
+                port,
+                conn: Mutex::new(None),
+                active_track: Mutex::new(None),
+            }),
+        }
+    }
+
+    async fn client(&self) -> AppResult<Client> {
+        let mut guard = self.inner.conn.lock().await;
+        if guard.is_none() {
+            let stream = TcpStream::connect((self.inner.host.as_str(), self.inner.port))
+                .await
+                .map_err(|e| AppError::Mpd(format!("connect {}:{}: {e}", self.inner.host, self.inner.port)))?;
+            let (client, _handle) = Client::connect(stream)
+                .await
+                .map_err(|e| AppError::Mpd(format!("mpd handshake: {e}")))?;
+            *guard = Some((client, _handle));
+        }
+        Ok(guard.as_ref().unwrap().0.clone())
+    }
+
+    pub async fn raw(&self, cmd: Command) -> AppResult<()> {
+        let client = self.client().await?;
+        client
+            .raw_command(cmd)
+            .await
+            .map_err(|e| AppError::Mpd(format!("command failed: {e}")))?;
+        Ok(())
+    }
+
+    pub async fn status(&self) -> AppResult<MpdStatus> {
+        let client = self.client().await?;
+        let status = client
+            .command(Status)
+            .await
+            .map_err(|e| AppError::Mpd(format!("status: {e}")))?;
+
+        let state = match status.state {
+            mpd_client::responses::PlayState::Playing => PlaybackState::Playing,
+            mpd_client::responses::PlayState::Paused => PlaybackState::Paused,
+            mpd_client::responses::PlayState::Stopped => PlaybackState::Stopped,
+        };
+
+        let (current_uri, current_track, current_id) = match status.current_song {
+            Some(_) => match client.command(CurrentSong).await.ok().flatten() {
+                Some(s) => {
+                    let (_, track) = s.song.number();
+                    let track = if track == 0 { None } else { Some(track as u32) };
+                    (Some(s.song.url), track, Some(s.id.0))
+                }
+                None => (None, None, None),
+            },
+            None => (None, None, None),
+        };
+        tracing::debug!(has_current = status.current_song.is_some(), ?current_uri, "mpd status");
+
+        Ok(MpdStatus {
+            state,
+            volume: status.volume,
+            elapsed: status.elapsed.map(|d| d.as_secs_f64()).unwrap_or(0.0),
+            duration: status.duration.map(|d| d.as_secs_f64()).unwrap_or(0.0),
+            error: status.error,
+            current_uri,
+            current_track,
+            current_id,
+            random: status.random,
+        })
+    }
+
+    pub async fn outputs(&self) -> AppResult<Vec<OutputDevice>> {
+        let client = self.client().await?;
+        let frame = client
+            .raw_command(Command::new("outputs"))
+            .await
+            .map_err(|e| AppError::Mpd(format!("outputs: {e}")))?;
+
+        let mut out = Vec::new();
+        let mut cur_id: Option<u32> = None;
+        let mut cur_name = String::new();
+        let mut cur_enabled = false;
+
+        let flush = |id: &mut Option<u32>, name: &mut String, enabled: &mut bool, out: &mut Vec<OutputDevice>| {
+            if let Some(id) = id.take() {
+                out.push(OutputDevice {
+                    id,
+                    name: std::mem::take(name),
+                    enabled: *enabled,
+                });
+            }
+            *enabled = false;
+        };
+
+        for (k, v) in &frame {
+            match k {
+                "outputid" => {
+                    flush(&mut cur_id, &mut cur_name, &mut cur_enabled, &mut out);
+                    cur_id = v.parse().ok();
+                }
+                "outputname" => cur_name = v.to_string(),
+                "outputenabled" => cur_enabled = v == "1",
+                _ => {}
+            }
+        }
+        flush(&mut cur_id, &mut cur_name, &mut cur_enabled, &mut out);
+        Ok(out)
+    }
+
+    /// Add `uri` to the queue, returning its queue song id. `uri` must match
+    /// MPD's database exactly; keep MPD's index in sync via [`Self::rescan`]
+    /// (done on library refresh) so scanner and MPD agree on filenames.
+    async fn add_uri(&self, uri: &str) -> AppResult<u64> {
+        use mpd_client::commands::definitions::Add;
+        let client = self.client().await?;
+        let id = client
+            .command(Add::uri(uri))
+            .await
+            .map_err(|e| AppError::Mpd(format!("add: {e}")))?;
+        Ok(id.0)
+    }
+
+    pub async fn play_uri(&self, uri: &str) -> AppResult<()> {
+        let id = self.add_uri(uri).await?;
+        self.raw(Command::new("playid").argument(id)).await
+    }
+
+    /// Incrementally update MPD's database (rescans changed files).
+    pub async fn update(&self) -> AppResult<()> {
+        self.raw(Command::new("update")).await
+    }
+
+    /// Force a full rescan of MPD's database, re-reading every file. Fixes
+    /// stale/incorrect index entries that would make `add` fail or point at a
+    /// path that no longer exists on disk.
+    pub async fn rescan(&self) -> AppResult<()> {
+        self.raw(Command::new("rescan")).await
+    }
+
+    /// Insert `uri` immediately after the currently playing song, or at the
+    /// front of the queue when nothing is playing. Returns the new queue id.
+    pub async fn play_next(
+        &self,
+        uri: &str,
+        start: f64,
+        end: Option<f64>,
+    ) -> AppResult<u64> {
+        use mpd_client::commands::definitions::Add;
+        let client = self.client().await?;
+        let id = client
+            .command(Add::uri(uri).after_current(0))
+            .await
+            .map_err(|e| AppError::Mpd(format!("add: {e}")))?;
+        if (start > 0.0 || end.is_some()) && start >= 0.0 {
+            let range = match end {
+                Some(e) => format!("{}:{}", start.max(0.0), e.max(start)),
+                None => format!("{}:", start.max(0.0)),
+            };
+            self.raw(Command::new("rangeid").argument(id.0).argument(range))
+                .await?;
+        }
+        Ok(id.0)
+    }
+
+    /// Empty the play queue.
+    pub async fn clear(&self) -> AppResult<()> {
+        self.raw(Command::new("clear")).await
+    }
+
+    /// Append `uri` to a saved playlist. `uri` is added whole (MPD's
+    /// `playlistadd` returns no per-song id, so CUE ranges are not applied here;
+    /// ranges are a queue concern handled by `play_next`/queue inserts).
+    pub async fn add_to_playlist(&self, name: &str, uri: &str) -> AppResult<()> {
+        use mpd_client::commands::definitions::AddToPlaylist;
+        let client = self.client().await?;
+        client
+            .command(AddToPlaylist::new(name, uri))
+            .await
+            .map_err(|e| AppError::Mpd(format!("playlistadd: {e}")))?;
+        Ok(())
+    }
+
+    /// Return the current play queue (in order). CUE tracks carry their
+    /// `[start, end)` `range` so callers can tell them apart.
+    pub async fn queue(&self) -> AppResult<Vec<QueueEntry>> {
+        let client = self.client().await?;
+        let songs = client
+            .command(Queue::all())
+            .await
+            .map_err(|e| AppError::Mpd(format!("playlistinfo: {e}")))?;
+        Ok(songs
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let tag = |t: Tag| s.song.tags.get(&t).and_then(|v| v.first().cloned());
+                QueueEntry {
+                    pos: i as u32,
+                    id: s.id.0,
+                    uri: s.song.url.clone(),
+                    title: tag(Tag::Title),
+                    artist: tag(Tag::Artist),
+                    album: tag(Tag::Album),
+                    duration: s.song.duration.map(|d| d.as_secs_f64()),
+                }
+            })
+            .collect())
+    }
+
+    /// Shuffle the entire play queue.
+    pub async fn shuffle(&self) -> AppResult<()> {
+        self.raw(Command::new("shuffle")).await
+    }
+
+    /// Add `uri` to the queue and start playing it from `start` seconds in.
+    /// Used for CUE-sheet tracks, whose backing file is a full album.
+    pub async fn play_uri_at(&self, uri: &str, start: f64) -> AppResult<()> {
+        self.play_uri(uri).await?;
+        self.seek(start).await
+    }
+
+    /// Add `uri` and play only the `[start, end)` portion of it, then let MPD
+    /// advance to whatever is next in the queue. Used for CUE-sheet tracks so
+    /// playback stops precisely at the track boundary instead of bleeding into
+    /// the next track's audio. `end` of `None` plays through to end-of-file.
+    pub async fn play_uri_range(
+        &self,
+        uri: &str,
+        start: f64,
+        end: Option<f64>,
+    ) -> AppResult<()> {
+        let id = self.add_uri(uri).await?;
+        let range = match end {
+            Some(e) => format!("{}:{}", start.max(0.0), e.max(start)),
+            None => format!("{}:", start.max(0.0)),
+        };
+        self.raw(Command::new("rangeid").argument(id).argument(range))
+            .await?;
+        self.raw(Command::new("playid").argument(id)).await
+    }
+
+    pub async fn play(&self) -> AppResult<()> {
+        self.raw(Command::new("play")).await
+    }
+
+    /// Start playing the queue entry with the given song `id`.
+    pub async fn play_position(&self, pos: u32) -> AppResult<()> {
+        self.raw(Command::new("play").argument(pos)).await
+    }
+
+    /// Remove a single entry from the play queue by its position (0-based).
+    pub async fn delete_position(&self, pos: u32) -> AppResult<()> {
+        self.raw(Command::new("delete").argument(pos)).await
+    }
+
+    /// Toggle MPD's random (shuffle) play mode.
+    pub async fn random(&self, on: bool) -> AppResult<()> {
+        self.raw(Command::new("random").argument(if on { 1u8 } else { 0u8 }))
+            .await
+    }
+
+    pub async fn pause(&self, pause: bool) -> AppResult<()> {
+        self.raw(Command::new("pause").argument(if pause { 1u8 } else { 0u8 }))
+            .await
+    }
+
+    pub async fn stop(&self) -> AppResult<()> {
+        self.raw(Command::new("stop")).await
+    }
+
+    pub async fn next(&self) -> AppResult<()> {
+        self.raw(Command::new("next")).await
+    }
+
+    pub async fn previous(&self) -> AppResult<()> {
+        self.raw(Command::new("previous")).await
+    }
+
+    pub async fn seek(&self, seconds: f64) -> AppResult<()> {
+        self.raw(Command::new("seekcur").argument(seconds.max(0.0) as u64))
+            .await
+    }
+
+    pub async fn set_volume(&self, volume: u8) -> AppResult<()> {
+        self.raw(Command::new("setvol").argument(volume))
+            .await
+    }
+
+    pub async fn enable_output(&self, id: u32) -> AppResult<()> {
+        self.raw(Command::new("enableoutput").argument(id))
+            .await
+    }
+
+    pub async fn disable_output(&self, id: u32) -> AppResult<()> {
+        self.raw(Command::new("disableoutput").argument(id))
+            .await
+    }
+
+    pub async fn clear_error(&self) -> AppResult<()> {
+        self.raw(Command::new("clearerror")).await
+    }
+
+    pub async fn set_active_track(&self, id: Option<i64>) {
+        *self.inner.active_track.lock().await = id;
+    }
+
+    pub async fn active_track(&self) -> Option<i64> {
+        *self.inner.active_track.lock().await
+    }
+
+    pub async fn save_playlist(&self, name: &str) -> AppResult<()> {
+        use mpd_client::commands::definitions::SaveQueueAsPlaylist;
+        let client = self.client().await?;
+        client
+            .command(SaveQueueAsPlaylist(name))
+            .await
+            .map_err(|e| AppError::Mpd(format!("save: {e}")))?;
+        Ok(())
+    }
+
+    pub async fn list_playlists(&self) -> AppResult<Vec<String>> {
+        use mpd_client::commands::definitions::GetPlaylists;
+        let client = self.client().await?;
+        let lists = client
+            .command(GetPlaylists)
+            .await
+            .map_err(|e| AppError::Mpd(format!("listplaylists: {e}")))?;
+        Ok(lists.into_iter().map(|p| p.name).collect())
+    }
+}

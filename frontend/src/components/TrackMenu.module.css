@@ -1,0 +1,153 @@
+.trackMenu {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.trackMenuBtn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  border-radius: 6px;
+}
+
+.trackMenuBtn:hover {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+
+.trackMenuPop {
+  position: absolute;
+  right: 0;
+  top: 1.6rem;
+  z-index: 30;
+  min-width: 12rem;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.trackMenuItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 0.5rem 0.6rem;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.trackMenuItem:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.trackMenuModal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.trackMenuModalBox {
+  background: var(--bg-elev-2);
+  border-radius: 14px;
+  padding: 1.1rem 1.2rem;
+  min-width: 16rem;
+  max-width: 22rem;
+  width: 100%;
+}
+
+.trackMenuModalTitle {
+  font-weight: 600;
+  margin-bottom: 0.6rem;
+}
+
+.trackMenuPlaylistList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.trackMenuEmpty {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  padding: 0.4rem 0;
+}
+
+.trackMenuClose {
+  margin-top: 0.8rem;
+  width: 100%;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  color: var(--text);
+  padding: 0.45rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* File info modal */
+.fileInfoBox {
+  background: var(--bg-elev-2);
+  border-radius: 14px;
+  padding: 1.2rem 1.3rem;
+  min-width: 18rem;
+  max-width: 26rem;
+  width: 100%;
+  max-height: 80vh;
+  overflow: auto;
+}
+
+.fileInfoHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+
+.fileInfoTitle {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.fileInfoSection {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin: 0.9rem 0 0.3rem;
+}
+
+.fileInfoRow {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: 0.5rem;
+  padding: 0.18rem 0;
+  font-size: 0.88rem;
+  word-break: break-word;
+}
+
+.fileInfoLabel {
+  color: var(--text-dim);
+}
+
+.fileInfoValue {
+  color: var(--text);
+}
