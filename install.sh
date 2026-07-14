@@ -82,7 +82,7 @@ ensure_camilladsp() {
   # camilladsp is not published to crates.io; build from the official repo,
   # pinned to a release tag for reproducible installs.
   log "Installing camilladsp (pinned to v4.1.3)..."
-  run cargo install --git https://github.com/HEnquist/camilladsp --tag v4.1.3 camilladsp
+  run cargo install --git https://github.com/HEnquist/camilladsp --tag v4.1.3
 }
 
 fetch_source() {
