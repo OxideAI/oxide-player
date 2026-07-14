@@ -1,0 +1,159 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 760px;
+}
+
+.h {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.dim {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.error {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--danger);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.profile {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.device {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--accent);
+  font-size: 0.95rem;
+}
+
+.modes {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.mode,
+.modeActive {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.8rem;
+  text-transform: capitalize;
+}
+
+.modeActive {
+  background: var(--accent);
+  color: #04121c;
+  border-color: var(--accent);
+}
+
+.fields {
+  display: flex;
+  gap: 1rem;
+  border: none;
+  padding: 0;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.field input,
+.field select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+}
+
+.eqHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.add {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.bands {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.band {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.band select,
+.bandField input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+}
+
+.bandField {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  gap: 0.15rem;
+}
+
+.remove {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--danger);
+  padding: 0.35rem 0.55rem;
+}
+
+.save {
+  align-self: flex-start;
+  background: var(--accent);
+  color: #04121c;
+  border: none;
+  border-radius: var(--radius);
+  padding: 0.5rem 1.2rem;
+  font-weight: 600;
+}
+
+.save:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
