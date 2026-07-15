@@ -54,6 +54,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/dsp", put(dsp_set))
         .route("/api/playlists", get(playlists))
         .route("/api/playlists", post(save_playlist))
+        // Playlist names are a single path segment, so a name containing '/'
+        // cannot be addressed by these routes (it is still listed and usable
+        // via MPD directly). Avoid '/' in playlist names.
         .route("/api/playlists/{name}", get(playlist_tracks))
         .route("/api/playlists/{name}/add", post(playlist_add))
         .route("/api/playlists/{name}/play", post(playlist_play))
@@ -348,24 +351,27 @@ async fn playlist_add(
     Path(name): Path<String>,
     Json(b): Json<PlaylistAddBody>,
 ) -> AppResult<StatusCode> {
-    let lists = s.mpd().list_playlists().await?;
-    if !lists.iter().any(|l| l == &name) {
-        return Err(AppError::NotFound(format!("playlist '{name}'")));
-    }
+    require_playlist(&s, &name).await?;
     for t in into_tracks(b.tracks) {
         s.mpd().add_to_playlist(&name, &t.uri).await?;
     }
     Ok(StatusCode::OK)
 }
 
+/// 404 unless `name` is an existing saved playlist.
+async fn require_playlist(s: &AppState, name: &str) -> AppResult<()> {
+    let lists = s.mpd().list_playlists().await?;
+    if !lists.iter().any(|l| l == name) {
+        return Err(AppError::NotFound(format!("playlist '{name}'")));
+    }
+    Ok(())
+}
+
 async fn playlist_tracks(
     State(s): State<AppState>,
     Path(name): Path<String>,
 ) -> AppResult<Json<Vec<crate::types::QueueEntry>>> {
-    let lists = s.mpd().list_playlists().await?;
-    if !lists.iter().any(|l| l == &name) {
-        return Err(AppError::NotFound(format!("playlist '{name}'")));
-    }
+    require_playlist(&s, &name).await?;
     Ok(Json(s.mpd().playlist_tracks(&name).await?))
 }
 
@@ -373,10 +379,7 @@ async fn playlist_play(
     State(s): State<AppState>,
     Path(name): Path<String>,
 ) -> AppResult<StatusCode> {
-    let lists = s.mpd().list_playlists().await?;
-    if !lists.iter().any(|l| l == &name) {
-        return Err(AppError::NotFound(format!("playlist '{name}'")));
-    }
+    require_playlist(&s, &name).await?;
     s.mpd().play_playlist(&name).await?;
     // Refresh the cached status so the UI reflects the new queue immediately.
     let _ = s.refresh_status().await;
@@ -393,10 +396,7 @@ async fn playlist_remove(
     Path(name): Path<String>,
     Json(b): Json<PlaylistRemoveBody>,
 ) -> AppResult<StatusCode> {
-    let lists = s.mpd().list_playlists().await?;
-    if !lists.iter().any(|l| l == &name) {
-        return Err(AppError::NotFound(format!("playlist '{name}'")));
-    }
+    require_playlist(&s, &name).await?;
     s.mpd().remove_from_playlist(&name, b.pos).await?;
     Ok(StatusCode::OK)
 }
@@ -411,10 +411,7 @@ async fn playlist_rename(
     Path(name): Path<String>,
     Json(b): Json<PlaylistRenameBody>,
 ) -> AppResult<StatusCode> {
-    let lists = s.mpd().list_playlists().await?;
-    if !lists.iter().any(|l| l == &name) {
-        return Err(AppError::NotFound(format!("playlist '{name}'")));
-    }
+    require_playlist(&s, &name).await?;
     if b.new_name.trim().is_empty() {
         return Err(AppError::BadRequest("new playlist name is empty".into()));
     }
@@ -426,10 +423,7 @@ async fn playlist_delete(
     State(s): State<AppState>,
     Path(name): Path<String>,
 ) -> AppResult<StatusCode> {
-    let lists = s.mpd().list_playlists().await?;
-    if !lists.iter().any(|l| l == &name) {
-        return Err(AppError::NotFound(format!("playlist '{name}'")));
-    }
+    require_playlist(&s, &name).await?;
     s.mpd().delete_playlist(&name).await?;
     Ok(StatusCode::OK)
 }

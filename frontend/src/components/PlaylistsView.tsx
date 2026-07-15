@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { QueueItem } from '../types'
 import styles from './PlaylistsView.module.css'
@@ -22,6 +22,9 @@ export function PlaylistsView() {
   const [tracksError, setTracksError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  // Monotonic token so a slow playlist fetch can't paint tracks for a
+  // playlist the user has since navigated away from.
+  const openReq = useRef(0)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -58,16 +61,20 @@ export function PlaylistsView() {
       setTracks([])
       return
     }
+    const token = ++openReq.current
     setOpen(n)
     setTracks([])
     setTracksError(null)
     setTracksLoading(true)
     try {
-      setTracks(await api.playlist(n))
+      const fetched = await api.playlist(n)
+      if (token !== openReq.current) return
+      setTracks(fetched)
     } catch (e) {
+      if (token !== openReq.current) return
       setTracksError(e instanceof Error ? e.message : String(e))
     } finally {
-      setTracksLoading(false)
+      if (token === openReq.current) setTracksLoading(false)
     }
   }
 

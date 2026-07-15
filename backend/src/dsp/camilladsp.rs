@@ -116,22 +116,18 @@ impl DspManager {
             .context("send reload to camilladsp")?;
 
         // CamillaDSP replies with either a success or {"Error": ...} message.
-        // Keep the socket open until we read it so a rejected reload surfaces as
-        // a real error instead of a silent success.
-        let resp = tokio::time::timeout(std::time::Duration::from_secs(5), read.next())
-            .await
-            .with_context(|| "timed out waiting for camilladsp reload response")?
-            .with_context(|| "camilladsp websocket closed before sending a response")?
-            .map_err(|e| anyhow::anyhow!("read camilladsp reload response: {e}"))?;
-        match resp {
-            Message::Text(text) => {
+        // Wait briefly for that reply so a rejected reload surfaces as a real
+        // error instead of a silent success. Some builds/versions stay silent
+        // on success, so a missing reply, a close, or a non-text frame is
+        // treated as accepted -- only an explicit {"Error": ...} fails the apply.
+        match tokio::time::timeout(std::time::Duration::from_secs(5), read.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
                 let v: serde_json::Value = serde_json::from_str(&text)
                     .with_context(|| format!("parse camilladsp reload response: {text}"))?;
                 if let Some(err) = v.get("Error") {
                     anyhow::bail!("camilladsp rejected config reload: {err}");
                 }
             }
-            Message::Close(_) => {}
             _ => {}
         }
         write.close().await.ok();

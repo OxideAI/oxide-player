@@ -2,9 +2,10 @@ use crate::error::{AppError, AppResult};
 use crate::types::{OutputDevice, PlaybackState, QueueEntry};
 use mpd_client::client::Connection as MpdConnection;
 use mpd_client::commands::definitions::{
-    CurrentSong, DeletePlaylist, GetPlaylist, LoadPlaylist, Queue, RemoveFromPlaylist, RenamePlaylist,
-    Status,
+    ClearQueue, CurrentSong, DeletePlaylist, GetPlaylist, LoadPlaylist, Play, Queue,
+    RemoveFromPlaylist, RenamePlaylist, Status,
 };
+use mpd_client::commands::SongPosition;
 use mpd_client::tag::Tag;
 use mpd_client::Client;
 use mpd_protocol::command::Command;
@@ -436,14 +437,15 @@ impl Mpd {
 
     /// Replace the play queue with a saved playlist and start playback from the
     /// first track. MPD 0.24 has no `playid`; we play by 0-based position.
+    /// `clear` + `load` + `play` are sent as a single command list so a
+    /// concurrent request cannot slip a command in between and corrupt the queue.
     pub async fn play_playlist(&self, name: &str) -> AppResult<()> {
-        self.clear().await?;
         let client = self.client().await?;
         client
-            .command(LoadPlaylist::name(name))
+            .command_list((ClearQueue, LoadPlaylist::name(name), Play::song(SongPosition(0))))
             .await
-            .map_err(|e| AppError::Mpd(format!("load {name}: {e}")))?;
-        self.play_position(0).await
+            .map_err(|e| AppError::Mpd(format!("play playlist {name}: {e}")))?;
+        Ok(())
     }
 
     /// Remove the track at `pos` (0-based) from a saved playlist.
