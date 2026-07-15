@@ -50,7 +50,14 @@ export function LibraryView({
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [playingUri, setPlayingUri] = useState<string | null>(null)
-  const [openFolder, setOpenFolder] = useState<string | null>(null)
+  const [openFolder, setOpenFolder] = useState<string | null>(() => {
+    try { return localStorage.getItem('oxide:album') }
+    catch { return null }
+  })
+  useEffect(() => {
+    if (openFolder !== null) localStorage.setItem('oxide:album', openFolder)
+    else localStorage.removeItem('oxide:album')
+  }, [openFolder])
   const [toast, setToast] = useState<string | null>(null)
 
   const toastTimer = useRef<number | undefined>(undefined)
@@ -121,6 +128,11 @@ export function LibraryView({
       ),
     )
   }, [folders, query])
+
+  useEffect(() => {
+    if (openFolder !== null && folders.length > 0 && !folders.some((f) => f.key === openFolder))
+      setOpenFolder(null)
+  }, [folders, openFolder])
 
   const current = useMemo(
     () => (openFolder !== null ? folders.find((f) => f.key === openFolder) ?? null : null),

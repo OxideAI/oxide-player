@@ -20,7 +20,14 @@ const TABS: { id: Tab; label: string }[] = [
 export function App() {
   const [status, setStatus] = useState<PlayerStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('library')
+  const [tab, setTab] = useState<Tab>(() => {
+    try {
+      const saved = localStorage.getItem('oxide:tab')
+      return TABS.some((t) => t.id === saved) ? (saved as Tab) : 'library'
+    } catch {
+      return 'library'
+    }
+  })
   const [refreshToken, setRefreshToken] = useState(0)
   const [navOpen, setNavOpen] = useState(false)
   const [kiosk] = useState(() => window.location.pathname === '/kiosk')
@@ -135,6 +142,7 @@ export function App() {
 
   const go = (t: Tab) => {
     setTab(t)
+    localStorage.setItem('oxide:tab', t)
     setNavOpen(false)
   }
 

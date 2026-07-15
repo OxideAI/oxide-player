@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = config::Cli::parse();
-    let config = config::Config::load(cli.config.as_deref(), &cli)?;
+    let (config, config_path) = config::Config::load(cli.config.as_deref(), &cli)?;
 
     if !cli.allow_root && running_as_root() {
         tracing::warn!(
@@ -66,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("MPD not started: {e}");
     }
 
-    let state = state::AppState::new(config, db, dsp, mpd, cli.config.clone());
+    let state = state::AppState::new(config, db, dsp, mpd, config_path);
     state.spawn_status_poller();
 
     // The frontend is served from this same origin, so no cross-origin access
