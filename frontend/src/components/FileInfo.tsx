@@ -1,5 +1,6 @@
 import type { Track } from '../types'
 import { fmtTime, displayTitle, audioQuality } from '../util'
+import styles from './TrackMenu.module.css'
 
 interface Props {
   track: Track
@@ -22,21 +23,21 @@ export function FileInfo({ track, onClose }: Props) {
     : null
 
   return (
-    <div className="trackMenuModal" onClick={onClose}>
-      <div className="fileInfoBox" onClick={(e) => e.stopPropagation()}>
-        <div className="fileInfoHead">
-          <span className="fileInfoTitle">{displayTitle(track)}</span>
-          <button className="trackMenuClose" onClick={onClose} aria-label="Close">
+    <div className={styles.trackMenuModal} onClick={onClose}>
+      <div className={styles.fileInfoBox} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.fileInfoHead}>
+          <span className={styles.fileInfoTitle}>{displayTitle(track)}</span>
+          <button className={styles.trackMenuClose} onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
 
-        <div className="fileInfoSection">Location</div>
+        <div className={styles.fileInfoSection}>Location</div>
         <Row label="File" value={track.path} />
         <Row label="URI" value={track.uri} />
         <Row label="Modified" value={mtime} />
 
-        <div className="fileInfoSection">Audio</div>
+        <div className={styles.fileInfoSection}>Audio</div>
         <Row label="Format" value={track.format} />
         {track.format || track.sample_rate ? (
           <Row label="Quality" value={audioQuality(track)} />
@@ -58,7 +59,7 @@ export function FileInfo({ track, onClose }: Props) {
           <Row label="CUE track" value={String(track.cue_index)} />
         ) : null}
 
-        <div className="fileInfoSection">Tags</div>
+        <div className={styles.fileInfoSection}>Tags</div>
         <Row label="Title" value={track.title} />
         <Row label="Artist" value={track.artist} />
         <Row label="Album" value={track.album} />

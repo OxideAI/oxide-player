@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::dsp::DspManager;
 use crate::library::LibraryDb;
-use crate::mpd::Mpd;
+use crate::mpd::{Mpd, MpdStatus};
 use crate::types::PlayerStatus;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -66,23 +66,32 @@ impl AppState {
         // ("No such song" / "No such file" / "No such directory") and either
         // stops or auto-skips to the next track. Drop the dead entry from the
         // library so it stops being clickable; if MPD is stuck on it, advance.
+        // DB work runs off the async runtime via spawn_blocking.
         if let Ok(ms) = &mpd_status {
             if let Some(err) = &ms.error {
                 let missing = err.contains("No such song")
                     || err.contains("No such file")
                     || err.contains("No such directory");
                 if missing {
-                    let mut removed = false;
-                    if let Some(uri) = &ms.current_uri {
-                        if self.inner.db.delete_by_uri_if_missing(uri).unwrap_or(false) {
-                            removed = true;
+                    let db = self.inner.db.clone();
+                    let uri = ms.current_uri.clone();
+                    let err_text = err.clone();
+                    let removed = tokio::task::spawn_blocking(move || {
+                        let mut removed = false;
+                        if let Some(uri) = &uri {
+                            if db.delete_by_uri_if_missing(uri).unwrap_or(false) {
+                                removed = true;
+                            }
                         }
-                    }
-                    if let Some(p) = missing_path_from_error(err) {
-                        if self.inner.db.delete_by_path_if_missing(&p).unwrap_or(false) {
-                            removed = true;
+                        if let Some(p) = missing_path_from_error(&err_text) {
+                            if db.delete_by_path_if_missing(&p).unwrap_or(false) {
+                                removed = true;
+                            }
                         }
-                    }
+                        removed
+                    })
+                    .await
+                    .unwrap_or(false);
                     if removed {
                         let _ = self.inner.mpd.next().await;
                         let _ = self.inner.mpd.clear_error().await;
@@ -94,59 +103,14 @@ impl AppState {
         let mut status = self.inner.status.write().await;
         match mpd_status {
             Ok(ms) => {
+                let current_song = self.resolve_current_song(&ms).await;
                 status.state = ms.state;
                 status.volume = ms.volume;
                 status.elapsed = ms.elapsed;
                 status.duration = ms.duration;
                 status.error = ms.error;
                 status.random = ms.random;
-                status.current_song = {
-                    let by_active = self
-                        .inner
-                        .mpd
-                        .active_track()
-                        .await
-                        .and_then(|id| {
-                            ms.current_uri.as_ref().and_then(|uri| {
-                                self.inner
-                                    .db
-                                    .track_by_id(id)
-                                    .ok()
-                                    .flatten()
-                                    .filter(|t| &t.uri == uri)
-                                    .map(|t| t)
-                            })
-                        });
-                    let by_elapsed = ms.current_uri.as_ref().and_then(|uri| {
-                        self.inner
-                            .db
-                            .track_by_uri_and_elapsed(uri, ms.elapsed)
-                            .ok()
-                            .flatten()
-                    });
-                    let by_uri = ms.current_uri.as_ref().and_then(|uri| {
-                        self.inner
-                            .db
-                            .track_by_uri_cue(uri, ms.current_track.map(|t| t as i32))
-                            .ok()
-                            .flatten()
-                    });
-                    by_active
-                        .or(by_elapsed)
-                        .or(by_uri)
-                        .map(|t| crate::types::TrackRef {
-                            id: t.id,
-                            uri: t.uri,
-                            title: t.title,
-                            artist: t.artist,
-                            album: t.album,
-                            has_cover: t.has_cover,
-                            format: t.format,
-                            sample_rate: t.sample_rate,
-                            bit_depth: t.bit_depth,
-                            channels: t.channels,
-                        })
-                };
+                status.current_song = current_song;
             }
             Err(e) => {
                 status.error = Some(e.to_string());
@@ -156,6 +120,50 @@ impl AppState {
             Ok(o) => o,
             Err(_) => Vec::new(),
         };
+    }
+
+    /// Resolve the now-playing track from the library. Runs synchronous SQLite
+    /// queries off the async runtime via `spawn_blocking`.
+    async fn resolve_current_song(&self, ms: &MpdStatus) -> Option<crate::types::TrackRef> {
+        let db = self.inner.db.clone();
+        let active = self.inner.mpd.active_track().await;
+        let uri = ms.current_uri.clone();
+        let elapsed = ms.elapsed;
+        let current_track = ms.current_track;
+        let track = tokio::task::spawn_blocking(move || {
+            let by_active = active.and_then(|id| {
+                uri.as_ref().and_then(|u| {
+                    db.track_by_id(id)
+                        .ok()
+                        .flatten()
+                        .filter(|t| &t.uri == u)
+                })
+            });
+            let by_elapsed = uri
+                .as_ref()
+                .and_then(|u| db.track_by_uri_and_elapsed(u, elapsed).ok().flatten());
+            let by_uri = uri.as_ref().and_then(|u| {
+                db.track_by_uri_cue(u, current_track.map(|t| t as i32))
+                    .ok()
+                    .flatten()
+            });
+            by_active.or(by_elapsed).or(by_uri)
+        })
+        .await
+        .ok()
+        .flatten()?;
+        Some(crate::types::TrackRef {
+            id: track.id,
+            uri: track.uri,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            has_cover: track.has_cover,
+            format: track.format,
+            sample_rate: track.sample_rate,
+            bit_depth: track.bit_depth,
+            channels: track.channels,
+        })
     }
 
     pub fn spawn_status_poller(&self) {

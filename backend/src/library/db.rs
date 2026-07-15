@@ -52,7 +52,14 @@ impl LibraryDb {
                 UNIQUE(uri, cue_index)
             );
             CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
-            CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);",
+            CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
+            -- SQLite treats NULLs as distinct in a UNIQUE constraint, so the
+            -- (uri, cue_index) key alone let incremental rescans insert
+            -- duplicate non-CUE rows. This partial index keeps at most one
+            -- non-CUE (cue_index IS NULL) row per uri, so INSERT OR REPLACE
+            -- dedupes on rescan while CUE tracks keep their own key.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_uri_noncue
+                ON tracks(uri) WHERE cue_index IS NULL;",
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
         // Idempotent schema upgrades for CUE support (only on pre-existing tables).

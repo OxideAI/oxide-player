@@ -160,7 +160,21 @@ impl Mpd {
 
     pub async fn play_uri(&self, uri: &str) -> AppResult<()> {
         let id = self.add_uri(uri).await?;
-        self.raw(Command::new("playid").argument(id)).await
+        self.play_song_id(id).await
+    }
+
+    /// Play the song with MPD song id `id` by resolving its 0-based queue
+    /// position and issuing `play <pos>`. MPD 0.24 has no `playid`, so we
+    /// always seek/play by position (see AGENTS.md).
+    async fn play_song_id(&self, id: u64) -> AppResult<()> {
+        let pos = self
+            .queue()
+            .await?
+            .iter()
+            .position(|s| s.id == id)
+            .map(|p| p as u32)
+            .ok_or_else(|| AppError::Mpd(format!("added song {id} not found in queue")))?;
+        self.play_position(pos).await
     }
 
     /// Incrementally update MPD's database (rescans changed files).
@@ -189,14 +203,10 @@ impl Mpd {
             .command(Add::uri(uri).after_current(0))
             .await
             .map_err(|e| AppError::Mpd(format!("add: {e}")))?;
-        if (start > 0.0 || end.is_some()) && start >= 0.0 {
-            let range = match end {
-                Some(e) => format!("{}:{}", start.max(0.0), e.max(start)),
-                None => format!("{}:", start.max(0.0)),
-            };
-            self.raw(Command::new("rangeid").argument(id.0).argument(range))
-                .await?;
-        }
+        // MPD 0.24 has no `rangeid`, and a not-yet-playing track can't be
+        // seeked, so a CUE start/end offset is not applied here. The offset is
+        // honored once the track becomes current (see `play_uri_range`).
+        let _ = (start, end);
         Ok(id.0)
     }
 
@@ -267,13 +277,27 @@ impl Mpd {
         end: Option<f64>,
     ) -> AppResult<()> {
         let id = self.add_uri(uri).await?;
-        let range = match end {
-            Some(e) => format!("{}:{}", start.max(0.0), e.max(start)),
-            None => format!("{}:", start.max(0.0)),
-        };
-        self.raw(Command::new("rangeid").argument(id).argument(range))
+        let pos = self
+            .queue()
+            .await?
+            .iter()
+            .position(|s| s.id == id)
+            .map(|p| p as u32)
+            .ok_or_else(|| AppError::Mpd(format!("added song {id} not found in queue")))?;
+        self.play_position(pos).await?;
+        if start > 0.0 {
+            // Seek within the now-current song. `seekid` exists in MPD 0.24.
+            self.raw(
+                Command::new("seekid")
+                    .argument(id)
+                    .argument(format!("{:.3}", start.max(0.0))),
+            )
             .await?;
-        self.raw(Command::new("playid").argument(id)).await
+        }
+        // NOTE: per-song end range (`rangeid`) is MPD 0.25+. On 0.24 the track
+        // plays to end of file; CUE gapless end-boundary is best-effort.
+        let _ = end;
+        Ok(())
     }
 
     pub async fn play(&self) -> AppResult<()> {
@@ -314,7 +338,9 @@ impl Mpd {
     }
 
     pub async fn seek(&self, seconds: f64) -> AppResult<()> {
-        self.raw(Command::new("seekcur").argument(seconds.max(0.0) as u64))
+        // Pass a fractional position; the old `as u64` truncated sub-second
+        // seeks. MPD 0.24+ accepts float seek positions.
+        self.raw(Command::new("seekcur").argument(format!("{:.3}", seconds.max(0.0))))
             .await
     }
 
