@@ -50,7 +50,11 @@ export function LibraryView({
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [playingUri, setPlayingUri] = useState<string | null>(null)
-  const [openFolder, setOpenFolder] = useState<string | null>(null)
+  const [openFolder, setOpenFolder] = useState<string | null>(() => localStorage.getItem('oxide:album'))
+  useEffect(() => {
+    if (openFolder !== null) localStorage.setItem('oxide:album', openFolder)
+    else localStorage.removeItem('oxide:album')
+  }, [openFolder])
   const [toast, setToast] = useState<string | null>(null)
 
   const toastTimer = useRef<number | undefined>(undefined)

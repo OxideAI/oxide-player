@@ -43,7 +43,17 @@ impl Config {
                     .with_context(|| format!("reading config {}", path.display()))?;
                 serde_json::from_str(&text).with_context(|| "parsing config json")?
             }
-            None => Config::default_config(),
+            None => {
+                let defaults = Config::default_config();
+                let persisted = defaults.data_dir.join("config.json");
+                if persisted.exists() {
+                    let text = std::fs::read_to_string(&persisted)
+                        .with_context(|| format!("reading config {}", persisted.display()))?;
+                    serde_json::from_str(&text).with_context(|| "parsing config json")?
+                } else {
+                    defaults
+                }
+            }
         };
 
         if let Some(host) = &cli.mpd_host {

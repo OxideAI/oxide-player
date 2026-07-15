@@ -20,15 +20,6 @@ pub enum ResamplePreset {
     Extreme,
 }
 
-impl ResamplePreset {
-    pub fn sox_quality(&self) -> u8 {
-        match self {
-            ResamplePreset::Balanced => 3,
-            ResamplePreset::High => 5,
-            ResamplePreset::Extreme => 7,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
