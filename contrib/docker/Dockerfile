@@ -7,9 +7,8 @@
 # Build:
 #   docker build -t oxide-install-test -f contrib/docker/Dockerfile .
 #
-# Run (privileged + cgroup mount are required for systemd):
-#   docker run -d --privileged --name oxide-test \
-#     -v /sys/fs/cgroup:/sys/fs/cgroup:ro oxide-install-test
+# Run (privileged is required for systemd):
+#   docker run -d --privileged --name oxide-test oxide-install-test
 #
 # Then drop into it and run the installer, e.g.:
 #   docker exec -it oxide-test bash -c \
