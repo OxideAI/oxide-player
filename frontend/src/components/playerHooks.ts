@@ -17,7 +17,6 @@ export function useSmoothElapsed(status: PlayerStatus | null, duration: number):
     baseRef.current = { e: v, t: performance.now() }
     setElapsed(v)
   }, [])
-
   useEffect(() => {
     const e = status?.elapsed ?? 0
     baseRef.current = { e, t: performance.now() }
