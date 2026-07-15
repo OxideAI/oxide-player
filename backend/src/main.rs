@@ -47,7 +47,11 @@ async fn main() -> anyhow::Result<()> {
             .clone()
             .unwrap_or_else(|| DEFAULT_CAPTURE_DEVICE.to_string()),
         config.camilladsp_capture_rate.unwrap_or(DEFAULT_CAPTURE_RATE),
+        config.camilladsp_autostart,
+        config.camilladsp_binary.clone(),
     );
+
+    dsp.ensure_running().await;
 
     let mpd = mpd::Mpd::connect(
         &config.mpd_host,

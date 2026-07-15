@@ -3,7 +3,10 @@ use crate::dsp::profile::DspProfile;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
@@ -20,6 +23,10 @@ pub struct DspManager {
 struct DspInner {
     config_path: PathBuf,
     ws_url: Option<String>,
+    ws_host: Option<String>,
+    ws_port: Option<u16>,
+    autostart: bool,
+    binary: Option<String>,
     capture_device: String,
     capture_rate: u32,
     profiles: Mutex<HashMap<String, DspProfile>>,
@@ -31,16 +38,83 @@ impl DspManager {
         ws_url: Option<String>,
         capture_device: String,
         capture_rate: u32,
+        autostart: bool,
+        binary: Option<String>,
     ) -> Self {
+        let (ws_host, ws_port) = ws_url
+            .as_deref()
+            .and_then(parse_ws)
+            .map(|(h, p)| (Some(h), Some(p)))
+            .unwrap_or((None, None));
         DspManager {
             inner: Arc::new(DspInner {
                 config_path,
                 ws_url,
+                ws_host,
+                ws_port,
+                autostart,
+                binary,
                 capture_device,
                 capture_rate,
                 profiles: Mutex::new(HashMap::new()),
             }),
         }
+    }
+
+    /// Start CamillaDSP if it isn't already running and autostart is enabled.
+    /// Mirrors the MPD autostart flow: best-effort, never fatal. A config file
+    /// must already exist (written by a prior apply) for it to be launched.
+    pub async fn ensure_running(&self) {
+        if !self.inner.autostart {
+            return;
+        }
+        let (host, port) = match (self.inner.ws_host.clone(), self.inner.ws_port) {
+            (Some(h), Some(p)) => (h, p),
+            _ => return,
+        };
+        if !is_localhost(&host) {
+            return;
+        }
+        if tcp_reachable(&host, port).await {
+            tracing::info!("CamillaDSP reachable at {host}:{port}");
+            return;
+        }
+        if !self.inner.config_path.exists() {
+            tracing::debug!("CamillaDSP config not yet written; will start on first DSP apply");
+            return;
+        }
+        tracing::warn!("CamillaDSP not reachable at {host}:{port}; attempting to start it");
+        if let Err(e) = self.start_daemon(&host, port).await {
+            tracing::warn!("failed to launch camilladsp: {e}");
+            return;
+        }
+        for attempt in 1..=20 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if tcp_reachable(&host, port).await {
+                tracing::info!("CamillaDSP started at {host}:{port}");
+                return;
+            }
+            tracing::debug!("CamillaDSP not up yet, retry {attempt}/20");
+        }
+        tracing::warn!("launched camilladsp but it did not become reachable at {host}:{port}");
+    }
+
+    /// Spawn the `camilladsp` binary (detached) with the websocket server bound
+    /// to the configured host/port. Returns Ok immediately; the child runs in
+    /// the background (CamillaDSP does not daemonize, so we don't await it).
+    async fn start_daemon(&self, host: &str, port: u16) -> Result<()> {
+        let binary = self.inner.binary.clone().unwrap_or_else(|| "camilladsp".to_string());
+        let mut cmd = tokio::process::Command::new(&binary);
+        cmd.arg("--address")
+            .arg(host)
+            .arg("--port")
+            .arg(port.to_string())
+            .arg(&self.inner.config_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd.spawn()
+            .map_err(|e| anyhow::anyhow!("failed to launch '{binary}': {e}"))?;
+        Ok(())
     }
 
     pub async fn seed(&self, profiles: Vec<DspProfile>) {
@@ -76,6 +150,19 @@ impl DspManager {
             .lock()
             .await
             .insert(profile.device.clone(), profile);
+        // If CamillaDSP is configured for autostart and isn't up yet, launch it
+        // now that we have a config file to feed it, so the reload below lands.
+        if self.inner.autostart {
+            if let (Some(host), Some(port)) = (self.inner.ws_host.clone(), self.inner.ws_port) {
+                if is_localhost(&host) && !tcp_reachable(&host, port).await {
+                    if let Err(e) = self.start_daemon(&host, port).await {
+                        tracing::warn!("failed to launch camilladsp on apply: {e}");
+                    } else {
+                        tokio::time::sleep(Duration::from_millis(800)).await;
+                    }
+                }
+            }
+        }
         if let Some(url) = &self.inner.ws_url {
             self.send_reload(url).await?;
         }
@@ -92,13 +179,25 @@ impl DspManager {
     }
 
     async fn send_reload(&self, url: &str) -> Result<()> {
-        let (ws, _) = tokio::time::timeout(
+        let connect = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             tokio_tungstenite::connect_async(url),
         )
-        .await
-        .with_context(|| format!("camilladsp websocket {url} timed out"))?
-        .map_err(|e| anyhow::anyhow!("connect camilladsp websocket {url}: {e}"))?;
+        .await;
+        let (ws, _) = match connect {
+            // Connection refused / CamillaDSP not running: the config file is
+            // already on disk, so treat the live reload as best-effort instead
+            // of failing the whole apply (mirrors the `ws_url: None` path).
+            Ok(Err(e)) => {
+                tracing::warn!("camilladsp reload skipped, not reachable at {url}: {e}");
+                return Ok(());
+            }
+            Err(_) => {
+                tracing::warn!("camilladsp reload skipped, websocket {url} timed out");
+                return Ok(());
+            }
+            Ok(Ok(ws)) => ws,
+        };
         let (mut write, mut read) = ws.split();
         let path = self.inner.config_path.to_string_lossy().to_string();
         let msg = serde_json::json!({ "Reload": { "config": path } }).to_string();
@@ -127,6 +226,32 @@ impl DspManager {
     }
 }
 
+/// Parse a `ws://host:port` (or `wss://...`) URL into its host and port.
+fn parse_ws(url: &str) -> Option<(String, u16)> {
+    let without_scheme = url
+        .strip_prefix("ws://")
+        .or_else(|| url.strip_prefix("wss://"))?;
+    let without_path = without_scheme.split('/').next().unwrap_or(without_scheme);
+    let (host, port) = without_path.rsplit_once(':')?;
+    let port = port.parse().ok()?;
+    let host = if let Some(h) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        h.to_string()
+    } else {
+        host.to_string()
+    };
+    Some((host, port))
+}
+
+fn is_localhost(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]" | "0.0.0.0")
+}
+
+async fn tcp_reachable(host: &str, port: u16) -> bool {
+    tokio::time::timeout(Duration::from_secs(2), TcpStream::connect((host, port)))
+        .await
+        .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +274,8 @@ mod tests {
             None, // no websocket -> exercises the write-only path
             "hw:Loopback,1".to_string(),
             44100,
+            false, // autostart off in tests
+            None,
         )
     }
 
