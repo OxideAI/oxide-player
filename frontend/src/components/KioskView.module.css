@@ -1,0 +1,159 @@
+.kiosk {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3vh;
+  padding: 4vh 6vw;
+  background: #0c0d10;
+  color: #f2f2f2;
+  font-family: system-ui, sans-serif;
+  overflow: hidden;
+}
+
+.exit {
+  position: absolute;
+  top: 2vh;
+  right: 2vw;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #888;
+  text-decoration: none;
+  font-size: 20px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.exit:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.art {
+  width: 52vmin;
+  height: 52vmin;
+  border-radius: 12px;
+  background: #1a1c20 center / cover no-repeat;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.note {
+  font-size: 18vmin;
+  color: #2c2f35;
+}
+
+.meta {
+  text-align: center;
+  max-width: 90vw;
+}
+
+.title {
+  font-size: 4.4vmin;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub {
+  margin-top: 1vh;
+  font-size: 2.6vmin;
+  color: #9aa0a8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quality {
+  margin-top: 0.6vh;
+  font-size: 2vmin;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 1.5vw;
+  width: 70vw;
+  max-width: 900px;
+}
+
+.bar {
+  flex: 1;
+  height: 8px;
+  accent-color: #4f9dff;
+  cursor: pointer;
+}
+
+.time {
+  font-size: 2vmin;
+  color: #9aa0a8;
+  font-variant-numeric: tabular-nums;
+  min-width: 7ch;
+  text-align: center;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 3vw;
+}
+
+.btn {
+  width: 12vmin;
+  height: 12vmin;
+  max-width: 96px;
+  max-height: 96px;
+  border: none;
+  border-radius: 50%;
+  background: #1c1f24;
+  color: #f2f2f2;
+  font-size: 5vmin;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease;
+}
+.btn:hover {
+  background: #2a2e35;
+}
+
+.main {
+  background: #4f9dff;
+  color: #0c0d10;
+  width: 16vmin;
+  height: 16vmin;
+  max-width: 128px;
+  max-height: 128px;
+  font-size: 7vmin;
+}
+.main:hover {
+  background: #6cb0ff;
+}
+
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 1vw;
+  width: 40vw;
+  max-width: 480px;
+}
+
+.volume input {
+  flex: 1;
+  accent-color: #4f9dff;
+}
+
+.volIcon {
+  font-size: 3vmin;
+}

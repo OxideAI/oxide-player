@@ -19,3 +19,20 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Compound Engineering local config (machine-specific, never commit)
+.compound-engineering/
+
+# oxide-player runtime data
+/data/
+/frontend/dist/
+/frontend/node_modules/
+*.db
+covers/
+
+# OS / editor junk
+.DS_Store
+
+# Playwright MCP session artifacts
+.playwright-mcp/
+.agents/
