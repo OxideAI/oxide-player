@@ -25,11 +25,12 @@ export function NowPlaying({
   onVolume,
   onReloadStatus,
 }: Props) {
+  const loading = status === null
   const song = status?.current_song ?? null
   const duration = status?.duration ?? 0
   const playing = status?.state === 'playing'
 
-  const smoothElapsed = useSmoothElapsed(status, duration)
+  const { elapsed: smoothElapsed, reset: resetElapsed } = useSmoothElapsed(status, duration)
   const seek = useDragValue(smoothElapsed, onSeek)
   const vol = useDragValue(status?.volume ?? 0, onVolume)
   const displayElapsed = seek.isDragging() ? seek.local : smoothElapsed
@@ -72,7 +73,9 @@ export function NowPlaying({
   }
   const onScrubUp = (e: PointerEvent<HTMLDivElement>) => {
     if (!seek.isDragging()) return
-    seek.move(fracFromPointer(e.currentTarget, e.clientX) * duration)
+    const v = fracFromPointer(e.currentTarget, e.clientX) * duration
+    seek.move(v)
+    resetElapsed(v)
     seek.end()
   }
 
@@ -123,7 +126,7 @@ export function NowPlaying({
           </span>
         </a>
         <div className={styles.text}>
-          <div className={styles.title}>{song ? displayTitle(song) : 'Nothing playing'}</div>
+          <div className={styles.title}>{loading ? 'Loading…' : (song ? displayTitle(song) : 'Nothing playing')}</div>
           <div className={styles.artist}>
             {[song?.artist, song?.album].filter(Boolean).join(' — ')}
           </div>

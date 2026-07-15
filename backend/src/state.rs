@@ -180,19 +180,20 @@ impl AppState {
         let uri = ms.current_uri.clone();
         let elapsed = ms.elapsed;
         let current_track = ms.current_track;
+        let uri_for_blocking = uri.clone();
         let track = tokio::task::spawn_blocking(move || {
             let by_active = active.and_then(|id| {
-                uri.as_ref().and_then(|u| {
+                uri_for_blocking.as_ref().and_then(|u| {
                     db.track_by_id(id)
                         .ok()
                         .flatten()
                         .filter(|t| &t.uri == u)
                 })
             });
-            let by_elapsed = uri
+            let by_elapsed = uri_for_blocking
                 .as_ref()
                 .and_then(|u| db.track_by_uri_and_elapsed(u, elapsed).ok().flatten());
-            let by_uri = uri.as_ref().and_then(|u| {
+            let by_uri = uri_for_blocking.as_ref().and_then(|u| {
                 db.track_by_uri_cue(u, current_track.map(|t| t as i32))
                     .ok()
                     .flatten()
@@ -201,19 +202,34 @@ impl AppState {
         })
         .await
         .ok()
-        .flatten()?;
-        Some(crate::types::TrackRef {
-            id: track.id,
-            uri: track.uri,
-            title: track.title,
-            artist: track.artist,
-            album: track.album,
-            has_cover: track.has_cover,
-            format: track.format,
-            sample_rate: track.sample_rate,
-            bit_depth: track.bit_depth,
-            channels: track.channels,
-        })
+        .flatten()
+        .map(|t| crate::types::TrackRef {
+            id: t.id,
+            uri: t.uri,
+            title: t.title,
+            artist: t.artist,
+            album: t.album,
+            has_cover: t.has_cover,
+            format: t.format,
+            sample_rate: t.sample_rate,
+            bit_depth: t.bit_depth,
+            channels: t.channels,
+        });
+        // Fallback: MPD is playing a song but we couldn't resolve it from the
+        // library DB — still return a minimal TrackRef so the UI doesn't show
+        // "Nothing playing" for a song that is clearly audible.
+        track.or_else(|| uri.map(|u| crate::types::TrackRef {
+            id: 0,
+            uri: u,
+            title: None,
+            artist: None,
+            album: None,
+            has_cover: false,
+            format: None,
+            sample_rate: None,
+            bit_depth: None,
+            channels: None,
+        }))
     }
 
     pub fn spawn_status_poller(&self) {
