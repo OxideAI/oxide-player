@@ -40,6 +40,7 @@ fn load_mpdignore(dir: &Path) -> Vec<String> {
     let path = dir.join(".mpdignore");
     match std::fs::read_to_string(&path) {
         Ok(s) => s
+            .trim_start_matches('\u{FEFF}')
             .lines()
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
@@ -89,11 +90,11 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>, cues: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let p = entry.path();
-        let Some(name) = p.file_name().and_then(|n| n.to_str()).map(|n| n.to_string()) else {
-            continue;
-        };
-        if is_ignored(&name, &patterns) {
-            continue;
+        let name = p.file_name().and_then(|n| n.to_str()).map(|n| n.to_string());
+        if let Some(ref name) = name {
+            if is_ignored(name, &patterns) {
+                continue;
+            }
         }
         // Use symlink_metadata so we never follow directory symlinks: a symlink
         // loop (or a symlink to elsewhere on disk) would otherwise cause
