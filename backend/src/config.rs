@@ -34,7 +34,7 @@ impl Config {
         if let Some(port) = cli.mpd_port {
             config.mpd_port = port;
         }
-        if cli.listen != "0.0.0.0:8000" {
+        if cli.listen != "127.0.0.1:8000" {
             config.listen = cli.listen.clone();
         }
         Ok(config)
@@ -45,7 +45,10 @@ impl Config {
         Config {
             mpd_host: "127.0.0.1".to_string(),
             mpd_port: 6600,
-            listen: "0.0.0.0:8000".to_string(),
+            // Bind to localhost by default; override with --listen (or config)
+            // only when you intend to expose the (currently unauthenticated) API
+            // beyond this machine. See AGENTS.md / security notes.
+            listen: "127.0.0.1:8000".to_string(),
             data_dir: cwd.join("data"),
             library_dirs: vec![cwd.join("music")],
             static_dir: cwd.join("../frontend/dist"),
@@ -73,6 +76,10 @@ pub struct Cli {
     pub mpd_host: Option<String>,
     #[arg(long)]
     pub mpd_port: Option<u16>,
-    #[arg(long, default_value = "0.0.0.0:8000")]
+    #[arg(long, default_value = "127.0.0.1:8000")]
     pub listen: String,
+    /// Allow running as the root user. The server performs no privilege drop on
+    /// its own; this flag only silences the warning when launched as uid 0.
+    #[arg(long)]
+    pub allow_root: bool,
 }

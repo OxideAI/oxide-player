@@ -20,7 +20,7 @@ DATA_DIR="${DATA_DIR:-/var/lib/oxide-player}"
 CAMILLADSP_CONFIG="${CAMILLADSP_CONFIG:-/etc/camilladsp/config.yml}"
 CAMILLADSP_WS="${CAMILLADSP_WS:-ws://127.0.0.1:1234}"
 SERVICE_USER="${SERVICE_USER:-oxide}"
-LISTEN="${LISTEN:-0.0.0.0:8000}"
+LISTEN="${LISTEN:-127.0.0.1:8000}"
 MPD_MUSIC_DIR="${MPD_MUSIC_DIR:-/var/lib/mpd/music}"
 BUILD_DIR="${BUILD_DIR:-/tmp/oxide-player-build}"
 
