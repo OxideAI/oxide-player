@@ -25,6 +25,7 @@ target
 
 # oxide-player runtime data
 /data/
+/backend/data/*
 /frontend/dist/
 /frontend/node_modules/
 *.db
