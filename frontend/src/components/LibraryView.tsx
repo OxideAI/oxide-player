@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Track } from '../types'
 import { api } from '../api'
 import { fmtTime, displayTitle } from '../util'
@@ -52,9 +52,14 @@ export function LibraryView({
   const [openFolder, setOpenFolder] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
+  const toastTimer = useRef<number | undefined>(undefined)
   const notify = useCallback((msg: string) => {
     setToast(msg)
-    window.setTimeout(() => setToast(null), 2500)
+    if (toastTimer.current !== undefined) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), 2500)
+  }, [])
+  useEffect(() => () => {
+    if (toastTimer.current !== undefined) window.clearTimeout(toastTimer.current)
   }, [])
 
   // Highlight from the backend's actual now-playing state so the row is

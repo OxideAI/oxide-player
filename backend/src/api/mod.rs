@@ -93,7 +93,7 @@ async fn cover(State(s): State<AppState>, Path(id): Path<i64>) -> AppResult<Resp
     let dir = s.config().cover_cache_dir();
     for ext in ["jpg", "png", "bin"] {
         let p = dir.join(format!("{id}.{ext}"));
-        if let Ok(bytes) = std::fs::read(&p) {
+        if let Ok(bytes) = tokio::fs::read(&p).await {
             let ct = match ext {
                 "jpg" => "image/jpeg",
                 "png" => "image/png",
@@ -106,6 +106,7 @@ async fn cover(State(s): State<AppState>, Path(id): Path<i64>) -> AppResult<Resp
 }
 
 async fn library_scan(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    let _guard = s.scan_guard().await;
     let dirs = s.config().library_dirs.clone();
     let db = s.db().clone();
     let cover_dir = s.config().cover_cache_dir();
@@ -118,18 +119,18 @@ async fn library_scan(State(s): State<AppState>) -> AppResult<Json<serde_json::V
 }
 
 async fn library_refresh(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    let _guard = s.scan_guard().await;
     let dirs = s.config().library_dirs.clone();
     let db = s.db().clone();
     let cover_dir = s.config().cover_cache_dir();
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
-    let count = tokio::task::spawn_blocking(move || -> AppResult<u64> {
-        db.clear()?;
-        let _ = std::fs::remove_dir_all(&cover_dir);
-        std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
-        crate::library::scan(&dirs, &db, &cover_dir)
-    })
-    .await
-    .map_err(|e| AppError::Library(e.to_string()))??;
+    // Incremental scan: `scan` re-reads only files whose mtime changed and lets
+    // `prune_missing` drop entries whose files are gone, so a failed/partial scan
+    // can never wipe an existing library (previously we called `db.clear()`
+    // first, which left an empty catalog on error).
+    let count = tokio::task::spawn_blocking(move || crate::library::scan(&dirs, &db, &cover_dir))
+        .await
+        .map_err(|e| AppError::Library(e.to_string()))??;
     // Keep MPD's index in sync with the filesystem so every scanned track is
     // playable (a stale MPD db is the usual cause of "No such song" on add).
     let _ = s.mpd().rescan().await;
@@ -272,19 +273,33 @@ struct TrackRef {
     track_id: Option<i64>,
 }
 
-/// Accept either a single track object or an array of them, so the same
-/// handlers back both per-track and whole-album actions.
+/// Accept either a `{ tracks: ... }` envelope, a bare array of track objects,
+/// or a single track object, so the same handlers back both per-track and
+/// whole-album actions and stay consistent across endpoints.
 fn into_tracks(b: serde_json::Value) -> Vec<TrackRef> {
-    if let Some(arr) = b.as_array() {
+    let value = match b.get("tracks") {
+        Some(inner) => inner.clone(),
+        None => b,
+    };
+    if let Some(arr) = value.as_array() {
         arr.iter()
             .filter_map(|v| serde_json::from_value::<TrackRef>(v.clone()).ok())
             .collect()
     } else {
-        serde_json::from_value::<TrackRef>(b)
+        serde_json::from_value::<TrackRef>(value)
             .ok()
             .into_iter()
             .collect()
     }
+}
+
+/// Insert `t` immediately after the currently playing song and record it as the
+/// active (highlighted) track. Uses the DB track id from the request; never the
+/// MPD song id, which is a different namespace (see AGENTS.md).
+async fn enqueue(s: &AppState, t: &TrackRef) -> AppResult<()> {
+    s.mpd().play_next(&t.uri, t.start.unwrap_or(0.0), t.end).await?;
+    s.mpd().set_active_track(t.track_id).await;
+    Ok(())
 }
 
 async fn play_next(State(s): State<AppState>, Json(b): Json<serde_json::Value>) -> AppResult<StatusCode> {
@@ -292,12 +307,11 @@ async fn play_next(State(s): State<AppState>, Json(b): Json<serde_json::Value>) 
     if tracks.is_empty() {
         return Ok(StatusCode::OK);
     }
-    for t in &tracks {
-        let id = s
-            .mpd()
-            .play_next(&t.uri, t.start.unwrap_or(0.0), t.end)
-            .await?;
-        s.mpd().set_active_track(t.track_id.or(Some(id as i64))).await;
+    // Insert after the current song. Because each insert lands right after the
+    // current track, iterate in reverse so the resulting order matches the
+    // requested order (otherwise the queue would be reversed).
+    for t in tracks.iter().rev() {
+        enqueue(&s, t).await?;
     }
     Ok(StatusCode::OK)
 }
@@ -308,17 +322,13 @@ async fn clear_play(State(s): State<AppState>, Json(b): Json<serde_json::Value>)
         return Ok(StatusCode::OK);
     }
     s.mpd().clear().await?;
-    // First track becomes the new queue; play it. Remaining ones append in order.
+    // First track becomes the new queue; play it. Remaining ones are appended in
+    // order after it (reverse-inserted for the same ordering reason as above).
     let first = &tracks[0];
     s.mpd().play_uri_range(&first.uri, first.start.unwrap_or(0.0), first.end).await?;
     s.mpd().set_active_track(first.track_id).await;
-    for t in &tracks[1..] {
-        // Append to the end of the queue (position past the end).
-        let id = s
-            .mpd()
-            .play_next(&t.uri, t.start.unwrap_or(0.0), t.end)
-            .await?;
-        s.mpd().set_active_track(t.track_id.or(Some(id as i64))).await;
+    for t in tracks[1..].iter().rev() {
+        enqueue(&s, t).await?;
     }
     Ok(StatusCode::OK)
 }
@@ -345,7 +355,9 @@ async fn playlist_add(
 
 async fn queue(State(s): State<AppState>) -> AppResult<Json<crate::types::QueueResponse>> {
     let entries = s.mpd().queue().await?;
-    let current_pos = match s.mpd().status().await.ok().and_then(|st| st.current_id) {
+    // Use the cached current song id from the 1s status poller instead of a
+    // second MPD round-trip.
+    let current_pos = match s.status_snapshot().await.current_id {
         Some(id) => entries.iter().position(|e| e.id == id).map(|p| p as u32),
         None => None,
     };

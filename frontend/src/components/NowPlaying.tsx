@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import type { PlayerStatus, QueueResponse } from '../types'
 import { api } from '../api'
@@ -34,24 +34,32 @@ export function NowPlaying({
   const [queue, setQueue] = useState<QueueResponse | null>(null)
   const [queueOpen, setQueueOpen] = useState(false)
 
+  // Monotonic token so the 1s poll and post-mutation loads can't overwrite a
+  // fresher queue snapshot (fire-and-forget poll vs mutation race).
+  const reqId = useRef(0)
+  const loadQueue = useCallback(async () => {
+    const token = ++reqId.current
+    try {
+      const q = await api.queue()
+      if (token === reqId.current) setQueue(q)
+    } catch {
+      /* keep previous */
+    }
+  }, [])
+
   // Keep the open panel in sync with playback (next/prev, external changes).
   useEffect(() => {
     if (!queueOpen) return
-    let alive = true
-    const tick = async () => {
-      try {
-        const q = await api.queue()
-        if (alive) setQueue(q)
-      } catch {
-        /* keep previous */
-      }
-    }
-    const id = setInterval(tick, 1000)
-    return () => {
-      alive = false
-      clearInterval(id)
-    }
-  }, [queueOpen])
+    const id = setInterval(loadQueue, 1000)
+    return () => clearInterval(id)
+  }, [queueOpen, loadQueue])
+
+  // Mirror shuffle state in a ref so rapid clicks can't both read a stale
+  // `status.random` from the render closure and emit the same toggle twice.
+  const shuffleRef = useRef<boolean | undefined>(status?.random)
+  useEffect(() => {
+    shuffleRef.current = status?.random
+  }, [status?.random])
 
   const onScrub = (e: MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -61,25 +69,17 @@ export function NowPlaying({
 
   const toggleQueue = async () => {
     if (!queueOpen) {
-      try {
-        setQueue(await api.queue())
-      } catch {
-        setQueue({ entries: [], current: null })
-      }
+      await loadQueue()
     }
     setQueueOpen((o) => !o)
   }
 
   const onShuffle = async () => {
-    await api.shuffle(!status?.random)
+    const next = !shuffleRef.current
+    shuffleRef.current = next
+    await api.shuffle(next)
     onReloadStatus()
-    if (queueOpen) {
-      try {
-        setQueue(await api.queue())
-      } catch {
-        /* keep previous */
-      }
-    }
+    if (queueOpen) await loadQueue()
   }
 
   const onJump = async (pos: number) => {
@@ -91,11 +91,7 @@ export function NowPlaying({
   const onRemove = async (pos: number) => {
     await api.remove(pos)
     onReloadStatus()
-    try {
-      setQueue(await api.queue())
-    } catch {
-      /* keep previous */
-    }
+    await loadQueue()
   }
 
   return (

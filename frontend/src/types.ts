@@ -16,7 +16,8 @@ export interface Track extends TrackRef {
   genre: string | null
   year: number | null
   track: number | null
-  duration: number
+  duration: number | null
+  album_artist: string | null
   format: string | null
   sample_rate: number | null
   bit_depth: number | null

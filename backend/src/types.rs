@@ -79,6 +79,10 @@ pub struct PlayerStatus {
     pub state: PlaybackState,
     pub volume: u8,
     pub current_song: Option<TrackRef>,
+    /// MPD's current song id (a queue entry id, not a DB track id). Cached so
+    /// the queue endpoint can locate the playing position without a second MPD
+    /// round-trip.
+    pub current_id: Option<u64>,
     pub elapsed: f64,
     pub duration: f64,
     pub outputs: Vec<OutputDevice>,
@@ -92,6 +96,7 @@ impl PlayerStatus {
             state: PlaybackState::Stopped,
             volume: 0,
             current_song: None,
+            current_id: None,
             elapsed: 0.0,
             duration: 0.0,
             outputs: Vec::new(),

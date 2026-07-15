@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::dsp::DspManager;
 use crate::library::LibraryDb;
 use crate::mpd::{Mpd, MpdStatus};
-use crate::types::PlayerStatus;
+use crate::types::{PlaybackState, PlayerStatus};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -17,6 +17,9 @@ struct Inner {
     pub dsp: DspManager,
     pub mpd: Mpd,
     pub status: RwLock<PlayerStatus>,
+    /// Serializes library scans so concurrent scan/refresh requests can't stack
+    /// blocking-pool tasks and starve the runtime.
+    pub scan_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -28,6 +31,7 @@ impl AppState {
                 dsp,
                 mpd,
                 status: RwLock::new(PlayerStatus::stopped()),
+                scan_lock: tokio::sync::Mutex::new(()),
             }),
         };
         let profiles = state.inner.config.default_dsp_profiles.clone();
@@ -56,6 +60,11 @@ impl AppState {
 
     pub async fn status_snapshot(&self) -> PlayerStatus {
         self.inner.status.read().await.clone()
+    }
+
+    /// Acquire the scan serialization guard (held across a scan/refresh).
+    pub async fn scan_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.inner.scan_lock.lock().await
     }
 
     pub async fn refresh_status(&self) {
@@ -110,10 +119,19 @@ impl AppState {
                 status.duration = ms.duration;
                 status.error = ms.error;
                 status.random = ms.random;
+                status.current_id = ms.current_id;
                 status.current_song = current_song;
             }
             Err(e) => {
+                // MPD is unreachable (or the connection dropped): don't keep
+                // showing the last "Playing" track. Mark stopped and clear the
+                // now-playing fields so the UI reflects the lost link instead of
+                // a phantom playing state.
                 status.error = Some(e.to_string());
+                status.state = PlaybackState::Stopped;
+                status.current_id = None;
+                status.current_song = None;
+                status.elapsed = 0.0;
             }
         }
         status.outputs = match outputs {

@@ -88,18 +88,19 @@ export const api = {
       body: JSON.stringify({ name }),
     }).then((r) => json<unknown>(r)),
 
-  // `tracks` is a single track object or an array of them (whole album).
+  // `tracks` is a single track object or an array of them (whole album),
+  // wrapped in `{ tracks }` to match the add-to-playlist envelope.
   playNext: (tracks: unknown) =>
     fetch('/api/playback/play-next', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(tracks),
+      body: JSON.stringify({ tracks }),
     }).then((r) => json<unknown>(r)),
   clearAndPlay: (tracks: unknown) =>
     fetch('/api/playback/clear-play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(tracks),
+      body: JSON.stringify({ tracks }),
     }).then((r) => json<unknown>(r)),
   addToPlaylist: (name: string, tracks: unknown) =>
     fetch(`/api/playlists/${encodeURIComponent(name)}/add`, {

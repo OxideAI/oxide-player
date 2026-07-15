@@ -10,9 +10,9 @@ interface Props {
 function Row({ label, value }: { label: string; value: string | null }) {
   if (value === null || value === '') return null
   return (
-    <div className="fileInfoRow">
-      <span className="fileInfoLabel">{label}</span>
-      <span className="fileInfoValue">{value}</span>
+    <div className={styles.fileInfoRow}>
+      <span className={styles.fileInfoLabel}>{label}</span>
+      <span className={styles.fileInfoValue}>{value}</span>
     </div>
   )
 }
