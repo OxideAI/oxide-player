@@ -20,9 +20,12 @@ FROM debian:bookworm
 ENV DEBIAN_FRONTEND=noninteractive
 
 # systemd as init + CA certs (needed for the HTTPS git clone the installer does)
+# + build tools needed by install.sh: git, curl, nodejs (+npm) for the frontend
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      systemd systemd-sysv ca-certificates \
+      systemd systemd-sysv \
+      git curl ca-certificates \
+      nodejs npm \
  && rm -rf /var/lib/apt/lists/*
 
 # Let systemd run as the container init. Remove the getty/udev autostart
