@@ -60,15 +60,7 @@ impl DspManager {
 
     /// Persist the profile as a CamillaDSP config and signal a reload.
     pub async fn apply_profile(&self, profile: DspProfile) -> Result<()> {
-        // Defense-in-depth: the device string lands verbatim in the CamillaDSP
-        // config. Reject empty or control-character-laden values before we write
-        // a config that could break (or be abused to influence) audio output.
-        if profile.device.trim().is_empty()
-            || profile.device.contains('\n')
-            || profile.device.contains('\0')
-        {
-            anyhow::bail!("invalid dsp device name: {:?}", profile.device);
-        }
+        profile.validate().context("invalid dsp profile")?;
         let effective = profile.effective();
         let cfg = render_camilladsp_config(
             &effective,

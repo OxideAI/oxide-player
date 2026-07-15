@@ -5,6 +5,7 @@ import styles from './DspView.module.css'
 
 const PRESETS: ResamplePreset[] = ['balanced', 'high', 'extreme']
 const BAND_TYPES: EqBandType[] = ['peaking', 'low_shelf', 'high_shelf']
+const SAMPLE_RATES = [44100, 48000, 88200, 96000, 176400, 192000]
 
 function clone(p: DspProfile): DspProfile {
   return { ...p, eq_bands: p.eq_bands.map((b) => ({ ...b })) }
@@ -74,16 +75,19 @@ function ProfileEditor({
       <fieldset className={styles.fields} disabled={!resampling}>
         <label className={styles.field}>
           <span>Target sample rate</span>
-          <input
-            type="number"
-            min={44100}
-            step={1000}
+          <select
             value={draft.target_rate ?? ''}
-            placeholder="44100"
             onChange={(e) =>
               update({ target_rate: e.target.value ? Number(e.target.value) : null })
             }
-          />
+          >
+            <option value="">— pick a rate —</option>
+            {SAMPLE_RATES.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
         </label>
 
         <label className={styles.field}>
@@ -129,8 +133,9 @@ function ProfileEditor({
               freq
               <input
                 type="number"
-                min={20}
-                max={20000}
+                min={10}
+                max={24000}
+                step={1}
                 value={b.freq}
                 disabled={!resampling}
                 onChange={(e) => updateBand(i, { freq: Number(e.target.value) })}
@@ -140,6 +145,8 @@ function ProfileEditor({
               gain
               <input
                 type="number"
+                min={-20}
+                max={20}
                 step={0.5}
                 value={b.gain}
                 disabled={!resampling}
