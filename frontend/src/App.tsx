@@ -4,19 +4,17 @@ import { api } from './api'
 import { NowPlaying } from './components/NowPlaying'
 import { KioskView } from './components/KioskView'
 import { LibraryView } from './components/LibraryView'
-import { DevicesView } from './components/DevicesView'
-import { DspView } from './components/DspView'
+import { ConfigView } from './components/ConfigView'
 import { PlaylistsView } from './components/PlaylistsView'
 import { Reveal } from './components/Reveal'
 import styles from './App.module.css'
 
-type Tab = 'library' | 'devices' | 'dsp' | 'playlists'
+type Tab = 'library' | 'playlists' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'library', label: 'Library' },
   { id: 'playlists', label: 'Playlists' },
-  { id: 'devices', label: 'Devices' },
-  { id: 'dsp', label: 'DSP' },
+  { id: 'settings', label: 'Settings' },
 ]
 
 export function App() {
@@ -218,9 +216,8 @@ export function App() {
             isPlaying={status?.state === 'playing'}
           />
         )}
-        {tab === 'devices' && <DevicesView />}
-        {tab === 'dsp' && <DspView />}
         {tab === 'playlists' && <PlaylistsView />}
+        {tab === 'settings' && <ConfigView />}
       </main>
 
       <NowPlaying

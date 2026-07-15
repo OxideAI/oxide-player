@@ -15,8 +15,8 @@ const DEFAULT_INDEX_HTML: &str = "<!doctype html><html><head><meta charset=utf-8
 <title>Oxide</title></head><body><h1>Oxide</h1>\
 <p>Backend is running. Build the frontend into the static directory to use the UI.</p></body></html>";
 
-pub fn router(state: AppState) -> Router {
-    let static_dir = state.config().static_dir.clone();
+pub async fn router(state: AppState) -> Router {
+    let static_dir = state.config().await.static_dir.clone();
     let spa_dir = static_dir.clone();
     let spa_service = (move |_: Request| async move {
         let html = std::fs::read_to_string(spa_dir.join("index.html"))
@@ -63,6 +63,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/playlists/{name}/remove", post(playlist_remove))
         .route("/api/playlists/{name}/rename", post(playlist_rename))
         .route("/api/playlists/{name}", delete(playlist_delete))
+        .route("/api/config", get(config_get))
+        .route("/api/config", put(config_put))
+        .route("/api/config/library-dirs", post(config_add_dir))
+        .route("/api/config/library-dirs", delete(config_remove_dir))
         .fallback_service(
             ServeDir::new(static_dir.clone())
                 .append_index_html_on_directories(false)
@@ -98,7 +102,7 @@ async fn library_artists(State(s): State<AppState>) -> AppResult<Json<Vec<String
 }
 
 async fn cover(State(s): State<AppState>, Path(id): Path<i64>) -> AppResult<Response> {
-    let dir = s.config().cover_cache_dir();
+    let dir = s.config().await.cover_cache_dir();
     for ext in ["jpg", "png", "bin"] {
         let p = dir.join(format!("{id}.{ext}"));
         if let Ok(bytes) = tokio::fs::read(&p).await {
@@ -113,41 +117,111 @@ async fn cover(State(s): State<AppState>, Path(id): Path<i64>) -> AppResult<Resp
     Err(AppError::NotFound(format!("cover {id}")))
 }
 
-async fn library_scan(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+/// Scan the configured library directories into the DB. `incremental` chooses
+/// whether MPD's index is refreshed (`rescan`, keeps existing data) or fully
+/// rebuilt (`update`). Shared by the scan/refresh endpoints and library-dir
+/// edits so all three paths use the same pipeline.
+async fn run_scan(s: &AppState, incremental: bool) -> AppResult<u64> {
     let _guard = s.scan_guard().await;
-    let dirs = s.config().library_dirs.clone();
+    let cfg = s.config().await;
+    let dirs = cfg.library_dirs.clone();
     let db = s.db().clone();
-    let cover_dir = s.config().cover_cache_dir();
+    let cover_dir = cfg.cover_cache_dir();
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
     let count = tokio::task::spawn_blocking(move || crate::library::scan(&dirs, &db, &cover_dir))
         .await
         .map_err(|e| AppError::Library(e.to_string()))??;
-    let _ = s.mpd().update().await;
+    if incremental {
+        // Keep MPD's index in sync with the filesystem so every scanned track
+        // is playable (a stale MPD db is the usual cause of "No such song" on
+        // add). `scan` re-reads only files whose mtime changed and lets
+        // `prune_missing` drop entries whose files are gone.
+        let _ = s.mpd().rescan().await;
+    } else {
+        let _ = s.mpd().update().await;
+    }
+    Ok(count)
+}
+
+async fn library_scan(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    let count = run_scan(&s, false).await?;
     Ok(Json(serde_json::json!({ "scanned": count })))
 }
 
 async fn library_refresh(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
-    let _guard = s.scan_guard().await;
-    let dirs = s.config().library_dirs.clone();
-    let db = s.db().clone();
-    let cover_dir = s.config().cover_cache_dir();
-    std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
-    // Incremental scan: `scan` re-reads only files whose mtime changed and lets
-    // `prune_missing` drop entries whose files are gone, so a failed/partial scan
-    // can never wipe an existing library (previously we called `db.clear()`
-    // first, which left an empty catalog on error).
-    let count = tokio::task::spawn_blocking(move || crate::library::scan(&dirs, &db, &cover_dir))
-        .await
-        .map_err(|e| AppError::Library(e.to_string()))??;
-    // Keep MPD's index in sync with the filesystem so every scanned track is
-    // playable (a stale MPD db is the usual cause of "No such song" on add).
-    let _ = s.mpd().rescan().await;
+    let count = run_scan(&s, true).await?;
     Ok(Json(serde_json::json!({ "scanned": count })))
+}
+
+/// Serialized view of the current config for the Settings UI.
+async fn config_get(State(s): State<AppState>) -> AppResult<Json<crate::config::Config>> {
+    Ok(Json(s.config().await))
+}
+
+/// Replace the whole config (client sends the object it got from
+/// `GET /api/config`, possibly edited). Validated, persisted atomically, and
+/// swapped into memory. Editing live-applicable fields (e.g. `library_dirs`)
+/// takes effect immediately; restart-required fields persist for next launch.
+async fn config_put(
+    State(s): State<AppState>,
+    Json(body): Json<crate::config::Config>,
+) -> AppResult<Json<crate::config::Config>> {
+    body.validate()
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    s.set_config(body).await
+        .map_err(|e| AppError::Library(e.to_string()))?;
+    Ok(Json(s.config().await))
+}
+
+#[derive(Deserialize)]
+struct DirBody {
+    path: String,
+}
+
+/// Add a music library source folder. Must be an absolute path; duplicates are
+/// ignored. Persists and immediately rescans so the new source is picked up
+/// without a restart.
+async fn config_add_dir(
+    State(s): State<AppState>,
+    Json(b): Json<DirBody>,
+) -> AppResult<Json<serde_json::Value>> {
+    let path = std::path::PathBuf::from(&b.path);
+    if !path.is_absolute() {
+        return Err(AppError::BadRequest(
+            "library dir must be an absolute path".to_string(),
+        ));
+    }
+    let mut cfg = s.config().await;
+    if cfg.library_dirs.iter().any(|d| d == &path) {
+        return Ok(Json(serde_json::json!({ "scanned": 0, "duplicate": true })));
+    }
+    cfg.library_dirs.push(path);
+    s.set_config(cfg).await
+        .map_err(|e| AppError::Library(e.to_string()))?;
+    let count = run_scan(&s, true).await?;
+    Ok(Json(serde_json::json!({ "scanned": count })))
+}
+
+/// Remove a music library source folder by absolute path.
+async fn config_remove_dir(
+    State(s): State<AppState>,
+    Json(b): Json<DirBody>,
+) -> AppResult<StatusCode> {
+    let path = std::path::PathBuf::from(&b.path);
+    let mut cfg = s.config().await;
+    let before = cfg.library_dirs.len();
+    cfg.library_dirs.retain(|d| d != &path);
+    if cfg.library_dirs.len() == before {
+        return Err(AppError::NotFound(format!("library dir {}", path.display())));
+    }
+    s.set_config(cfg).await
+        .map_err(|e| AppError::Library(e.to_string()))?;
+    Ok(StatusCode::OK)
 }
 
 async fn library_rescan_art(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
     let db = s.db().clone();
-    let cover_dir = s.config().cover_cache_dir();
+    let cover_dir = s.config().await.cover_cache_dir();
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
     let with_cover =
         tokio::task::spawn_blocking(move || crate::library::scanner::rescan_art(&db, &cover_dir))
@@ -167,10 +241,11 @@ struct PlayBody {
 async fn play(State(s): State<AppState>, Json(b): Json<PlayBody>) -> AppResult<StatusCode> {
     match b.uri {
         Some(uri) => {
+            let mpd_uri = resolve_play_uri(&s, &uri).await;
             match (b.start, b.end) {
-                (Some(start), end) => s.mpd().play_uri_range(&uri, start, end).await?,
-                (None, Some(end)) => s.mpd().play_uri_range(&uri, 0.0, Some(end)).await?,
-                (None, None) => s.mpd().play_uri(&uri).await?,
+                (Some(start), end) => s.mpd().play_uri_range(&mpd_uri, start, end).await?,
+                (None, Some(end)) => s.mpd().play_uri_range(&mpd_uri, 0.0, Some(end)).await?,
+                (None, None) => s.mpd().play_uri(&mpd_uri).await?,
             }
             s.mpd().set_active_track(b.track_id).await;
         }
@@ -302,11 +377,23 @@ fn into_tracks(b: serde_json::Value) -> Vec<TrackRef> {
     }
 }
 
+/// Resolve a track `uri` to an absolute filesystem path MPD can `add`, falling
+/// back to the raw `uri` when no path is stored (e.g. CUE tracks, or tracks not
+/// in the DB). MPD's `music_directory` may differ from where files actually
+/// live, so feeding it an absolute path sidesteps that mismatch.
+async fn resolve_play_uri(s: &AppState, uri: &str) -> String {
+    match s.db().path_for_uri(uri) {
+        Ok(Some(p)) => p,
+        _ => uri.to_string(),
+    }
+}
+
 /// Insert `t` immediately after the currently playing song and record it as the
 /// active (highlighted) track. Uses the DB track id from the request; never the
 /// MPD song id, which is a different namespace (see AGENTS.md).
 async fn enqueue(s: &AppState, t: &TrackRef) -> AppResult<()> {
-    s.mpd().play_next(&t.uri, t.start.unwrap_or(0.0), t.end).await?;
+    let mpd_uri = resolve_play_uri(s, &t.uri).await;
+    s.mpd().play_next(&mpd_uri, t.start.unwrap_or(0.0), t.end).await?;
     s.mpd().set_active_track(t.track_id).await;
     Ok(())
 }
@@ -334,7 +421,8 @@ async fn clear_play(State(s): State<AppState>, Json(b): Json<serde_json::Value>)
     // First track becomes the new queue; play it. Remaining ones are appended in
     // order after it (reverse-inserted for the same ordering reason as above).
     let first = &tracks[0];
-    s.mpd().play_uri_range(&first.uri, first.start.unwrap_or(0.0), first.end).await?;
+    let mpd_uri = resolve_play_uri(&s, &first.uri).await;
+    s.mpd().play_uri_range(&mpd_uri, first.start.unwrap_or(0.0), first.end).await?;
     s.mpd().set_active_track(first.track_id).await;
     for t in tracks[1..].iter().rev() {
         enqueue(&s, t).await?;

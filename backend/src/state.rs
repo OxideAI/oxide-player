@@ -3,6 +3,7 @@ use crate::dsp::DspManager;
 use crate::library::LibraryDb;
 use crate::mpd::{Mpd, MpdStatus};
 use crate::types::{PlaybackState, PlayerStatus};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -12,7 +13,8 @@ pub struct AppState {
 }
 
 struct Inner {
-    pub config: Config,
+    pub config: RwLock<Config>,
+    pub config_path: Option<PathBuf>,
     pub db: LibraryDb,
     pub dsp: DspManager,
     pub mpd: Mpd,
@@ -23,10 +25,18 @@ struct Inner {
 }
 
 impl AppState {
-    pub fn new(config: Config, db: LibraryDb, dsp: DspManager, mpd: Mpd) -> Self {
+    pub fn new(
+        config: Config,
+        db: LibraryDb,
+        dsp: DspManager,
+        mpd: Mpd,
+        config_path: Option<PathBuf>,
+    ) -> Self {
+        let profiles = config.default_dsp_profiles.clone();
         let state = AppState {
             inner: Arc::new(Inner {
-                config,
+                config: RwLock::new(config),
+                config_path,
                 db,
                 dsp,
                 mpd,
@@ -34,7 +44,6 @@ impl AppState {
                 scan_lock: tokio::sync::Mutex::new(()),
             }),
         };
-        let profiles = state.inner.config.default_dsp_profiles.clone();
         let dsp = state.inner.dsp.clone();
         tokio::spawn(async move {
             dsp.seed(profiles).await;
@@ -54,8 +63,31 @@ impl AppState {
         &self.inner.mpd
     }
 
-    pub fn config(&self) -> &Config {
-        &self.inner.config
+    pub async fn config(&self) -> Config {
+        self.inner.config.read().await.clone()
+    }
+
+    /// The path the config was loaded from, if any. When the server started
+    /// from defaults (no `--config` file), this is `None` and config is
+    /// persisted to `<data_dir>/config.json` instead.
+    #[allow(dead_code)]
+    pub fn config_path(&self) -> Option<&PathBuf> {
+        self.inner.config_path.as_ref()
+    }
+
+    /// Replace the in-memory config and persist it to disk atomically. The
+    /// config file path is reused when known; otherwise we write a new
+    /// `config.json` into `data_dir`. Returns the path it was written to.
+    pub async fn set_config(&self, config: Config) -> anyhow::Result<PathBuf> {
+        let path = match &self.inner.config_path {
+            Some(p) => p.clone(),
+            None => config.data_dir.join("config.json"),
+        };
+        // Persist first so a failed write never desynchronizes memory from
+        // disk; only swap the in-memory value once the file is safely on disk.
+        config.write_to(&path)?;
+        *self.inner.config.write().await = config;
+        Ok(path)
     }
 
     pub async fn status_snapshot(&self) -> PlayerStatus {

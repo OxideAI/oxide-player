@@ -309,6 +309,24 @@ impl LibraryDb {
         Ok(ids.len() as u64)
     }
 
+    /// Return the stored absolute filesystem `path` for the whole-file track
+    /// identified by `uri` (CUE tracks are keyed by audio file, so we
+    /// match the non-CUE row). Used to feed MPD an absolute path that it
+    /// can `add` regardless of its `music_directory` (see `api::play`).
+    pub fn path_for_uri(&self, uri: &str) -> AppResult<Option<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let path: Option<String> = conn
+            .query_row(
+                "SELECT path FROM tracks WHERE uri = ? AND cue_index IS NULL LIMIT 1",
+                [uri],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        Ok(path)
+    }
+
+
     /// If the track(s) for `uri` point at a file that no longer exists, remove
     /// them. Returns true when something was deleted. Used when MPD reports a
     /// missing file mid-playback so the dead entry leaves the library.
