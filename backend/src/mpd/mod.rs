@@ -1,7 +1,11 @@
 use crate::error::{AppError, AppResult};
 use crate::types::{OutputDevice, PlaybackState, QueueEntry};
 use mpd_client::client::Connection as MpdConnection;
-use mpd_client::commands::definitions::{CurrentSong, Queue, Status};
+use mpd_client::commands::definitions::{
+    ClearQueue, CurrentSong, DeletePlaylist, GetPlaylist, LoadPlaylist, Play, Queue,
+    RemoveFromPlaylist, RenamePlaylist, Status,
+};
+use mpd_client::commands::SongPosition;
 use mpd_client::tag::Tag;
 use mpd_client::Client;
 use mpd_protocol::command::Command;
@@ -402,5 +406,84 @@ impl Mpd {
             .await
             .map_err(|e| AppError::Mpd(format!("listplaylists: {e}")))?;
         Ok(lists.into_iter().map(|p| p.name).collect())
+    }
+
+    /// Return the tracks in a saved playlist (in order). Positions are the
+    /// playlist's own 0-based indices, used for `remove_from_playlist`.
+    pub async fn playlist_tracks(&self, name: &str) -> AppResult<Vec<QueueEntry>> {
+        let client = self.client().await?;
+        let songs = client
+            .command(GetPlaylist(name))
+            .await
+            .map_err(|e| AppError::Mpd(format!("listplaylistinfo {name}: {e}")))?;
+        Ok(songs
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let tag = |t: Tag| s.tags.get(&t).and_then(|v| v.first().cloned());
+                QueueEntry {
+                    pos: i as u32,
+                    // Playlist entries have no queue SongId; mirror the position.
+                    id: i as u64,
+                    uri: s.url.clone(),
+                    title: tag(Tag::Title),
+                    artist: tag(Tag::Artist),
+                    album: tag(Tag::Album),
+                    duration: s.duration.map(|d| d.as_secs_f64()),
+                }
+            })
+            .collect())
+    }
+
+    /// Replace the play queue with a saved playlist and start playback from the
+    /// first track. MPD 0.24 has no `playid`; we play by 0-based position.
+    /// `clear` + `load` + `play` are sent as a single command list so a
+    /// concurrent request cannot slip a command in between and corrupt the queue.
+    pub async fn play_playlist(&self, name: &str) -> AppResult<()> {
+        let client = self.client().await?;
+        // Guard the empty-playlist case: `play 0` on an empty queue is a hard
+        // MPD error that would otherwise surface as a 500. Skip cleanly instead.
+        let songs = client
+            .command(GetPlaylist(name))
+            .await
+            .map_err(|e| AppError::Mpd(format!("listplaylistinfo {name}: {e}")))?;
+        if songs.is_empty() {
+            return Ok(());
+        }
+        client
+            .command_list((ClearQueue, LoadPlaylist::name(name), Play::song(SongPosition(0))))
+            .await
+            .map_err(|e| AppError::Mpd(format!("play playlist {name}: {e}")))?;
+        Ok(())
+    }
+
+    /// Remove the track at `pos` (0-based) from a saved playlist.
+    pub async fn remove_from_playlist(&self, name: &str, pos: u32) -> AppResult<()> {
+        let client = self.client().await?;
+        client
+            .command(RemoveFromPlaylist::position(name, pos as usize))
+            .await
+            .map_err(|e| AppError::Mpd(format!("playlistdelete {name} {pos}: {e}")))?;
+        Ok(())
+    }
+
+    /// Delete a saved playlist entirely.
+    pub async fn delete_playlist(&self, name: &str) -> AppResult<()> {
+        let client = self.client().await?;
+        client
+            .command(DeletePlaylist(name))
+            .await
+            .map_err(|e| AppError::Mpd(format!("rm {name}: {e}")))?;
+        Ok(())
+    }
+
+    /// Rename a saved playlist.
+    pub async fn rename_playlist(&self, from: &str, to: &str) -> AppResult<()> {
+        let client = self.client().await?;
+        client
+            .command(RenamePlaylist::new(from, to))
+            .await
+            .map_err(|e| AppError::Mpd(format!("rename {from} -> {to}: {e}")))?;
+        Ok(())
     }
 }

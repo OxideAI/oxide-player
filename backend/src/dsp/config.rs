@@ -6,6 +6,11 @@ use std::collections::HashMap;
 pub struct CamillaConfig {
     pub devices: Devices,
     pub samplerate: u32,
+    /// Capture device rate. Required whenever a resampler is present, otherwise
+    /// CamillaDSP assumes capture == output rate and rejects the config with a
+    /// "capture rate mismatch" error on reload.
+    #[serde(rename = "capture_samplerate", skip_serializing_if = "Option::is_none")]
+    pub capture_samplerate: Option<u32>,
     pub channels: u32,
     #[serde(default)]
     pub mixers: HashMap<String, serde_yaml::Value>,
@@ -92,8 +97,8 @@ pub fn render_camilladsp_config(
 ) -> CamillaConfig {
     let profile = profile.effective();
     let channels = 2u32;
-    let (samplerate, mut pipeline) = match profile.mode {
-        DspMode::BitPerfect => (capture_rate, Vec::new()),
+    let (samplerate, capture_samplerate, mut pipeline) = match profile.mode {
+        DspMode::BitPerfect => (capture_rate, None, Vec::new()),
         DspMode::Resample => {
             let target = profile.target_rate.unwrap_or(capture_rate);
             let step = PipelineStep::Resampler {
@@ -103,7 +108,7 @@ pub fn render_camilladsp_config(
                     quality: quality_name(profile.preset).to_string(),
                 },
             };
-            (target, vec![step])
+            (target, Some(capture_rate), vec![step])
         }
     };
 
@@ -132,6 +137,7 @@ pub fn render_camilladsp_config(
             },
         },
         samplerate,
+        capture_samplerate,
         channels,
         mixers: HashMap::new(),
         filters: HashMap::new(),
@@ -170,6 +176,7 @@ mod tests {
         p.preset = ResamplePreset::High;
         let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
         assert_eq!(cfg.samplerate, 96000);
+        assert_eq!(cfg.capture_samplerate, Some(44100));
         assert_eq!(cfg.pipeline.len(), 1);
         match &cfg.pipeline[0] {
             PipelineStep::Resampler { resampler } => {
@@ -178,6 +185,14 @@ mod tests {
             }
             _ => panic!("expected resampler"),
         }
+    }
+
+    #[test]
+    fn bit_perfect_omits_capture_samplerate() {
+        let p = base_profile();
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
+        assert_eq!(cfg.capture_samplerate, None);
+        assert_eq!(cfg.samplerate, 44100);
     }
 
     #[test]

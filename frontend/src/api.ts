@@ -2,6 +2,7 @@ import type {
   DspProfile,
   OutputDevice,
   PlayerStatus,
+  QueueItem,
   QueueResponse,
   Track,
 } from './types'
@@ -81,6 +82,28 @@ export const api = {
     }).then((r) => json<unknown>(r)),
 
   playlists: () => fetch('/api/playlists').then((r) => json<string[]>(r)),
+  playlist: (name: string) =>
+    fetch(`/api/playlists/${encodeURIComponent(name)}`).then((r) => json<QueueItem[]>(r)),
+  playPlaylist: (name: string) =>
+    fetch(`/api/playlists/${encodeURIComponent(name)}/play`, { method: 'POST' }).then((r) =>
+      json<unknown>(r),
+    ),
+  renamePlaylist: (name: string, newName: string) =>
+    fetch(`/api/playlists/${encodeURIComponent(name)}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_name: newName }),
+    }).then((r) => json<unknown>(r)),
+  removeFromPlaylist: (name: string, pos: number) =>
+    fetch(`/api/playlists/${encodeURIComponent(name)}/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pos }),
+    }).then((r) => json<unknown>(r)),
+  deletePlaylist: (name: string) =>
+    fetch(`/api/playlists/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) =>
+      json<unknown>(r),
+    ),
   savePlaylist: (name: string) =>
     fetch('/api/playlists', {
       method: 'POST',

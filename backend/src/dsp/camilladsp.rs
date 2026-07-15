@@ -9,8 +9,8 @@ use futures_util::SinkExt;
 use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::Message;
 
-const DEFAULT_CAPTURE_DEVICE: &str = "hw:Loopback,1";
-const DEFAULT_CAPTURE_RATE: u32 = 44100;
+pub const DEFAULT_CAPTURE_DEVICE: &str = "hw:Loopback,1";
+pub const DEFAULT_CAPTURE_RATE: u32 = 44100;
 
 #[derive(Clone)]
 pub struct DspManager {
@@ -20,15 +20,24 @@ pub struct DspManager {
 struct DspInner {
     config_path: PathBuf,
     ws_url: Option<String>,
+    capture_device: String,
+    capture_rate: u32,
     profiles: Mutex<HashMap<String, DspProfile>>,
 }
 
 impl DspManager {
-    pub fn new(config_path: PathBuf, ws_url: Option<String>) -> Self {
+    pub fn new(
+        config_path: PathBuf,
+        ws_url: Option<String>,
+        capture_device: String,
+        capture_rate: u32,
+    ) -> Self {
         DspManager {
             inner: Arc::new(DspInner {
                 config_path,
                 ws_url,
+                capture_device,
+                capture_rate,
                 profiles: Mutex::new(HashMap::new()),
             }),
         }
@@ -63,16 +72,18 @@ impl DspManager {
         let effective = profile.effective();
         let cfg = render_camilladsp_config(
             &effective,
-            DEFAULT_CAPTURE_DEVICE,
+            &self.inner.capture_device,
             &effective.device,
-            DEFAULT_CAPTURE_RATE,
+            self.inner.capture_rate,
         );
         self.write_config(&cfg).await?;
+        // Store the full profile (with its EQ bands) so toggling back from
+        // bit-perfect restores the user's DSP instead of a stripped copy.
         self.inner
             .profiles
             .lock()
             .await
-            .insert(effective.device.clone(), effective);
+            .insert(profile.device.clone(), profile);
         if let Some(url) = &self.inner.ws_url {
             self.send_reload(url).await?;
         }
@@ -96,13 +107,29 @@ impl DspManager {
         .await
         .with_context(|| format!("camilladsp websocket {url} timed out"))?
         .map_err(|e| anyhow::anyhow!("connect camilladsp websocket {url}: {e}"))?;
-        let (mut write, _read) = ws.split();
+        let (mut write, mut read) = ws.split();
         let path = self.inner.config_path.to_string_lossy().to_string();
         let msg = serde_json::json!({ "Reload": { "config": path } }).to_string();
         write
             .send(Message::Text(msg.into()))
             .await
             .context("send reload to camilladsp")?;
+
+        // CamillaDSP replies with either a success or {"Error": ...} message.
+        // Wait briefly for that reply so a rejected reload surfaces as a real
+        // error instead of a silent success. Some builds/versions stay silent
+        // on success, so a missing reply, a close, or a non-text frame is
+        // treated as accepted -- only an explicit {"Error": ...} fails the apply.
+        match tokio::time::timeout(std::time::Duration::from_secs(5), read.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let v: serde_json::Value = serde_json::from_str(&text)
+                    .with_context(|| format!("parse camilladsp reload response: {text}"))?;
+                if let Some(err) = v.get("Error") {
+                    anyhow::bail!("camilladsp rejected config reload: {err}");
+                }
+            }
+            _ => {}
+        }
         write.close().await.ok();
         Ok(())
     }
