@@ -7,6 +7,7 @@ mod mpd;
 mod state;
 mod types;
 
+use crate::state::AppState;
 use anyhow::Context;
 use clap::Parser;
 use tower_http::cors::CorsLayer;
@@ -51,12 +52,43 @@ async fn main() -> anyhow::Result<()> {
     // is needed. A permissive layer would let any website the user visits drive
     // the (currently unauthenticated) API. Tighten this if you expose the server
     // and serve the UI from a different origin.
-    let app = api::router(state).layer(CorsLayer::new());
+    let app = api::router(state.clone()).layer(CorsLayer::new());
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
     tracing::info!("oxide-player listening on http://{}", cli.listen);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(state))
+        .await?;
     Ok(())
+}
+
+/// Resolve when the process receives a termination signal (SIGINT/SIGTERM on
+/// Unix, Ctrl-C / close on other platforms). On trigger we stop MPD playback so
+/// the process does not leave music running after it exits. This is a deliberate
+/// choice: oxide-player is a control layer over MPD, but we halt playback rather
+/// than let it continue unattended once the controller is gone.
+async fn shutdown_signal(state: AppState) {
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigint = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+        let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        tokio::select! {
+            _ = sigint.recv() => {},
+            _ = sigterm.recv() => {},
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    terminate.await;
+
+    tracing::info!("shutting down: stopping playback");
+    if let Err(e) = state.mpd().stop().await {
+        tracing::warn!("failed to stop playback on exit: {e}");
+    }
 }
 
 /// Best-effort check for uid 0. Reads the real uid from /proc on Unix systems;
