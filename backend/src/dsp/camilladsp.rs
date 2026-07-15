@@ -100,7 +100,7 @@ impl DspManager {
         let path = self.inner.config_path.to_string_lossy().to_string();
         let msg = serde_json::json!({ "Reload": { "config": path } }).to_string();
         write
-            .send(Message::Text(msg))
+            .send(Message::Text(msg.into()))
             .await
             .context("send reload to camilladsp")?;
         write.close().await.ok();
