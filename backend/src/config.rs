@@ -14,6 +14,10 @@ pub struct Config {
     pub camilladsp_config_path: PathBuf,
     pub camilladsp_ws_url: Option<String>,
     #[serde(default)]
+    pub camilladsp_capture_device: Option<String>,
+    #[serde(default)]
+    pub camilladsp_capture_rate: Option<u32>,
+    #[serde(default)]
     pub default_dsp_profiles: Vec<crate::dsp::profile::DspProfile>,
 }
 
@@ -54,6 +58,8 @@ impl Config {
             static_dir: cwd.join("../frontend/dist"),
             camilladsp_config_path: cwd.join("data/camilladsp/config.yml"),
             camilladsp_ws_url: Some("ws://127.0.0.1:1234".to_string()),
+            camilladsp_capture_device: None,
+            camilladsp_capture_rate: None,
             default_dsp_profiles: Vec::new(),
         }
     }

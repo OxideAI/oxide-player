@@ -7,6 +7,7 @@ mod mpd;
 mod state;
 mod types;
 
+use crate::dsp::camilladsp::{DEFAULT_CAPTURE_DEVICE, DEFAULT_CAPTURE_RATE};
 use crate::state::AppState;
 use anyhow::Context;
 use clap::Parser;
@@ -41,6 +42,11 @@ async fn main() -> anyhow::Result<()> {
     let dsp = dsp::DspManager::new(
         config.camilladsp_config_path.clone(),
         config.camilladsp_ws_url.clone(),
+        config
+            .camilladsp_capture_device
+            .clone()
+            .unwrap_or_else(|| DEFAULT_CAPTURE_DEVICE.to_string()),
+        config.camilladsp_capture_rate.unwrap_or(DEFAULT_CAPTURE_RATE),
     );
 
     let mpd = mpd::Mpd::connect(&config.mpd_host, config.mpd_port).await;
