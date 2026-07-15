@@ -250,6 +250,7 @@ WantedBy=multi-user.target
 EOF
   fi
 
+  run mkdir -p /etc/modules-load.d
   echo "snd-aloop" > /etc/modules-load.d/oxide.conf
   run systemctl daemon-reload
   run systemctl enable mpd camilladsp oxide-player
