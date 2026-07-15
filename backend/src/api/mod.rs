@@ -268,6 +268,7 @@ async fn save_playlist(
     State(s): State<AppState>,
     Json(b): Json<SavePlaylistBody>,
 ) -> AppResult<StatusCode> {
+    validate_playlist_name(&b.name)?;
     s.mpd().save_playlist(&b.name).await?;
     Ok(StatusCode::OK)
 }
@@ -367,6 +368,19 @@ async fn require_playlist(s: &AppState, name: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Reject names the `/api/playlists/{name}` routes cannot address (a `/`
+/// splits the single path segment) or that are empty/whitespace.
+fn validate_playlist_name(name: &str) -> AppResult<()> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest("playlist name is empty".into()));
+    }
+    if trimmed.contains('/') {
+        return Err(AppError::BadRequest("playlist name must not contain '/'".into()));
+    }
+    Ok(())
+}
+
 async fn playlist_tracks(
     State(s): State<AppState>,
     Path(name): Path<String>,
@@ -412,10 +426,17 @@ async fn playlist_rename(
     Json(b): Json<PlaylistRenameBody>,
 ) -> AppResult<StatusCode> {
     require_playlist(&s, &name).await?;
-    if b.new_name.trim().is_empty() {
-        return Err(AppError::BadRequest("new playlist name is empty".into()));
+    validate_playlist_name(&b.new_name)?;
+    let new_name = b.new_name.trim();
+    if new_name != name {
+        let lists = s.mpd().list_playlists().await?;
+        if lists.iter().any(|l| l == new_name) {
+            return Err(AppError::BadRequest(format!(
+                "playlist '{new_name}' already exists"
+            )));
+        }
     }
-    s.mpd().rename_playlist(&name, &b.new_name).await?;
+    s.mpd().rename_playlist(&name, new_name).await?;
     Ok(StatusCode::OK)
 }
 

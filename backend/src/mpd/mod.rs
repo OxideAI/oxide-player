@@ -441,6 +441,15 @@ impl Mpd {
     /// concurrent request cannot slip a command in between and corrupt the queue.
     pub async fn play_playlist(&self, name: &str) -> AppResult<()> {
         let client = self.client().await?;
+        // Guard the empty-playlist case: `play 0` on an empty queue is a hard
+        // MPD error that would otherwise surface as a 500. Skip cleanly instead.
+        let songs = client
+            .command(GetPlaylist(name))
+            .await
+            .map_err(|e| AppError::Mpd(format!("listplaylistinfo {name}: {e}")))?;
+        if songs.is_empty() {
+            return Ok(());
+        }
         client
             .command_list((ClearQueue, LoadPlaylist::name(name), Play::song(SongPosition(0))))
             .await
