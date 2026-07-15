@@ -39,7 +39,10 @@ export function PlaylistsView() {
 
   return (
     <div className={styles.wrap}>
-      <h2 className={styles.h}>Playlists</h2>
+      <div>
+        <span className={styles.eyebrow}>Collections</span>
+        <h2 className={styles.h}>Playlists</h2>
+      </div>
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.saveRow}>

@@ -7,15 +7,24 @@ import { LibraryView } from './components/LibraryView'
 import { DevicesView } from './components/DevicesView'
 import { DspView } from './components/DspView'
 import { PlaylistsView } from './components/PlaylistsView'
+import { Reveal } from './components/Reveal'
 import styles from './App.module.css'
 
 type Tab = 'library' | 'devices' | 'dsp' | 'playlists'
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'library', label: 'Library' },
+  { id: 'playlists', label: 'Playlists' },
+  { id: 'devices', label: 'Devices' },
+  { id: 'dsp', label: 'DSP' },
+]
 
 export function App() {
   const [status, setStatus] = useState<PlayerStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('library')
   const [refreshToken, setRefreshToken] = useState(0)
+  const [navOpen, setNavOpen] = useState(false)
   const [kiosk] = useState(() => window.location.pathname === '/kiosk')
 
   const loadStatus = useCallback(async () => {
@@ -66,15 +75,6 @@ export function App() {
     }
   }, [status, loadStatus])
 
-  const stop = useCallback(async () => {
-    try {
-      await api.stop()
-      await loadStatus()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }, [loadStatus])
-
   const next = useCallback(async () => {
     try {
       await api.next()
@@ -122,7 +122,6 @@ export function App() {
       <KioskView
         status={status}
         onTogglePlay={togglePlay}
-        onStop={stop}
         onNext={next}
         onPrev={prev}
         onSeek={seek}
@@ -131,28 +130,66 @@ export function App() {
     )
   }
 
+  const go = (t: Tab) => {
+    setTab(t)
+    setNavOpen(false)
+  }
+
   return (
     <div className={styles.app}>
-      <header className={styles.header}>
-        <div className={styles.brand}>Oxide</div>
+      <header className={styles.nav}>
+        <button className={styles.brand} onClick={() => go('library')} aria-label="Oxide home">
+          <span className={styles.brandMark} aria-hidden>
+            <span className={styles.brandCore} />
+          </span>
+          <span className={styles.brandWord}>Oxide</span>
+        </button>
+
         <nav className={styles.tabs}>
-          {(['library', 'devices', 'dsp', 'playlists'] as Tab[]).map((t) => (
+          {TABS.map((t) => (
             <button
-              key={t}
-              className={t === tab ? styles.tabActive : styles.tab}
-              onClick={() => setTab(t)}
+              key={t.id}
+              className={t.id === tab ? styles.tabActive : styles.tab}
+              onClick={() => go(t.id)}
             >
-              {t}
+              {t.label}
             </button>
           ))}
-          <a className={styles.tab} href="/kiosk">
-            kiosk
-          </a>
         </nav>
+
+        <button
+          className={`${styles.burger} ${navOpen ? styles.burgerOpen : ''}`}
+          onClick={() => setNavOpen((o) => !o)}
+          aria-label={navOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={navOpen}
+        >
+          <span />
+          <span />
+        </button>
       </header>
+
+      <div className={`${styles.scrim} ${navOpen ? styles.scrimOn : ''}`} onClick={() => setNavOpen(false)} />
+
+      <div className={`${styles.overlay} ${navOpen ? styles.overlayOn : ''}`} aria-hidden={!navOpen}>
+        <div className={styles.overlayInner}>
+          {TABS.map((t, i) => (
+            <Reveal
+              key={t.id}
+              as="button"
+              delay={90 + i * 70}
+              className={`${styles.bigLink} ${t.id === tab ? styles.bigLinkActive : ''}`}
+              onClick={() => go(t.id)}
+            >
+              <span className={styles.bigIndex}>0{i + 1}</span>
+              {t.label}
+            </Reveal>
+          ))}
+        </div>
+      </div>
 
       {error && (
         <div className={styles.banner} role="alert">
+          <span className={styles.bannerDot} />
           {error}
         </div>
       )}
@@ -177,7 +214,6 @@ export function App() {
       <NowPlaying
         status={status}
         onTogglePlay={togglePlay}
-        onStop={stop}
         onNext={next}
         onPrev={prev}
         onSeek={seek}

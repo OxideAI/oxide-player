@@ -203,7 +203,10 @@ export function DspView() {
 
   return (
     <div className={styles.wrap}>
-      <h2 className={styles.h}>DSP profiles</h2>
+      <div>
+        <span className={styles.eyebrow}>Engine</span>
+        <h2 className={styles.h}>DSP profiles</h2>
+      </div>
       <p className={styles.dim}>
         Bit-perfect bypasses all processing. Resample + DSP applies a Soxr resampler and per-channel
         parametric EQ (R10: DSP is stripped in bit-perfect mode).
