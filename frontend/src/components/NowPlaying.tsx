@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { MouseEvent } from 'react'
+import type { PointerEvent } from 'react'
 import type { PlayerStatus, QueueResponse } from '../types'
 import { api } from '../api'
 import { fmtTime, displayTitle, audioQuality } from '../util'
 import { QueueView } from './QueueView'
+import { fracFromPointer, useDragValue, useSmoothElapsed } from './playerHooks'
 import styles from './NowPlaying.module.css'
 
 interface Props {
@@ -25,10 +26,14 @@ export function NowPlaying({
   onReloadStatus,
 }: Props) {
   const song = status?.current_song ?? null
-  const elapsed = status?.elapsed ?? 0
   const duration = status?.duration ?? 0
-  const fraction = duration > 0 ? Math.min(1, elapsed / duration) : 0
   const playing = status?.state === 'playing'
+
+  const smoothElapsed = useSmoothElapsed(status, duration)
+  const seek = useDragValue(smoothElapsed, onSeek)
+  const vol = useDragValue(status?.volume ?? 0, onVolume)
+  const displayElapsed = seek.isDragging() ? seek.local : smoothElapsed
+  const fraction = duration > 0 ? Math.min(1, seek.local / duration) : 0
 
   const [queue, setQueue] = useState<QueueResponse | null>(null)
   const [queueOpen, setQueueOpen] = useState(false)
@@ -55,10 +60,20 @@ export function NowPlaying({
     shuffleRef.current = status?.random
   }, [status?.random])
 
-  const onScrub = (e: MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const frac = (e.clientX - rect.left) / rect.width
-    if (duration > 0) onSeek(frac * duration)
+  const onScrubDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (duration <= 0) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    seek.begin()
+    seek.move(fracFromPointer(e.currentTarget, e.clientX) * duration)
+  }
+  const onScrubMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (!seek.isDragging()) return
+    seek.move(fracFromPointer(e.currentTarget, e.clientX) * duration)
+  }
+  const onScrubUp = (e: PointerEvent<HTMLDivElement>) => {
+    if (!seek.isDragging()) return
+    seek.move(fracFromPointer(e.currentTarget, e.clientX) * duration)
+    seek.end()
   }
 
   const toggleQueue = async () => {
@@ -129,20 +144,23 @@ export function NowPlaying({
           </button>
         </div>
         <div className={styles.progressWrap}>
-          <span className={styles.time}>{fmtTime(elapsed)}</span>
+          <span className={styles.time}>{fmtTime(displayElapsed)}</span>
           <div
             className={styles.progress}
-            onClick={onScrub}
             style={{ ['--frac' as string]: fraction }}
             role="slider"
             aria-label="Seek"
             aria-valuemin={0}
             aria-valuemax={Math.floor(duration)}
-            aria-valuenow={Math.floor(elapsed)}
+            aria-valuenow={Math.floor(displayElapsed)}
             tabIndex={0}
+            onPointerDown={onScrubDown}
+            onPointerMove={onScrubMove}
+            onPointerUp={onScrubUp}
+            onPointerCancel={onScrubUp}
             onKeyDown={(e) => {
-              if (e.key === 'ArrowRight') onSeek(Math.min(duration, elapsed + 5))
-              if (e.key === 'ArrowLeft') onSeek(Math.max(0, elapsed - 5))
+              if (e.key === 'ArrowRight') onSeek(Math.min(duration, displayElapsed + 5))
+              if (e.key === 'ArrowLeft') onSeek(Math.max(0, displayElapsed - 5))
             }}
           >
             <div className={styles.progressFill} />
@@ -188,9 +206,12 @@ export function NowPlaying({
             type="range"
             min={0}
             max={100}
-            value={status?.volume ?? 0}
-            style={{ ['--val' as string]: status?.volume ?? 0 }}
-            onChange={(e) => onVolume(Number(e.target.value))}
+            value={vol.local}
+            style={{ ['--val' as string]: vol.local }}
+            onPointerDown={vol.begin}
+            onChange={(e) => vol.move(Number(e.target.value))}
+            onPointerUp={vol.end}
+            onPointerCancel={vol.end}
             aria-label="Volume"
           />
         </div>

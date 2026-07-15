@@ -218,6 +218,7 @@
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
   cursor: pointer;
   overflow: hidden;
+  touch-action: none;
 }
 .progressFill {
   position: absolute;

@@ -1,6 +1,7 @@
 import type { PlayerStatus } from '../types'
 import { api } from '../api'
 import { fmtTime, displayTitle, audioQuality } from '../util'
+import { useDragValue, useSmoothElapsed } from './playerHooks'
 import styles from './KioskView.module.css'
 
 interface Props {
@@ -23,9 +24,14 @@ export function KioskView({
   const song = status?.current_song ?? null
   const cover = song?.has_cover ? api.coverUrl(song.id) : null
   const title = song ? displayTitle(song) : 'Nothing playing'
-  const elapsed = status?.elapsed ?? 0
   const duration = status?.duration ?? 0
   const playing = status?.state === 'playing'
+
+  const smoothElapsed = useSmoothElapsed(status, duration)
+  const seek = useDragValue(smoothElapsed, onSeek)
+  const vol = useDragValue(status?.volume ?? 0, onVolume)
+
+  const seekFrac = duration > 0 ? Math.min(1, seek.local / duration) : 0
 
   return (
     <div className={styles.kiosk}>
@@ -61,16 +67,19 @@ export function KioskView({
         </div>
 
         <div className={styles.progress}>
-          <span className={styles.time}>{fmtTime(elapsed)}</span>
+          <span className={styles.time}>{fmtTime(seek.isDragging() ? seek.local : smoothElapsed)}</span>
           <input
             className={styles.bar}
             type="range"
             min={0}
-            max={Math.floor(duration) || 0}
-            step={1}
-            value={Math.floor(elapsed)}
-            style={{ ['--frac' as string]: duration > 0 ? Math.min(1, elapsed / duration) : 0 }}
-            onChange={(e) => onSeek(Number(e.target.value))}
+            max={duration || 0}
+            step="any"
+            value={seek.local}
+            style={{ ['--frac' as string]: seekFrac }}
+            onPointerDown={seek.begin}
+            onChange={(e) => seek.move(Number(e.target.value))}
+            onPointerUp={seek.end}
+            onPointerCancel={seek.end}
             aria-label="Seek"
           />
           <span className={styles.time}>{fmtTime(duration)}</span>
@@ -114,9 +123,12 @@ export function KioskView({
             type="range"
             min={0}
             max={100}
-            value={status?.volume ?? 0}
-            style={{ ['--val' as string]: status?.volume ?? 0 }}
-            onChange={(e) => onVolume(Number(e.target.value))}
+            value={vol.local}
+            style={{ ['--val' as string]: vol.local }}
+            onPointerDown={vol.begin}
+            onChange={(e) => vol.move(Number(e.target.value))}
+            onPointerUp={vol.end}
+            onPointerCancel={vol.end}
             aria-label="Volume"
           />
         </div>

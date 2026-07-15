@@ -57,11 +57,51 @@
   flex-wrap: wrap;
 }
 
-.device {
-  font-family: var(--font-mono);
+.deviceField {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.deviceLabel {
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.deviceInput {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  padding: 0.45rem 0.7rem;
   color: var(--accent);
-  font-size: 0.95rem;
-  padding: 0.2rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  min-width: 16ch;
+}
+.deviceInput:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.addProfile {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  padding: 0.5rem 1.1rem;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--text);
+  transition: transform 0.4s var(--ease), background 0.4s var(--ease);
+}
+.addProfile:hover {
+  background: rgba(255, 255, 255, 0.09);
+  transform: translateY(-1px);
 }
 
 .modes {

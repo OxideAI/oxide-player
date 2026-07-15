@@ -323,6 +323,7 @@ async fn dsp_get(State(s): State<AppState>) -> AppResult<Json<Vec<DspProfile>>> 
 }
 
 async fn dsp_set(State(s): State<AppState>, Json(p): Json<DspProfile>) -> AppResult<StatusCode> {
+    p.validate().map_err(|e| AppError::BadRequest(e.to_string()))?;
     s.dsp()
         .apply_profile(p)
         .await
