@@ -225,4 +225,55 @@ mod tests {
         let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
         assert!(cfg.pipeline.is_empty(), "bit-perfect must not apply EQ");
     }
+
+    #[test]
+    fn every_preset_maps_to_valid_quality() {
+        for (preset, expected) in [
+            (ResamplePreset::Balanced, "Medium"),
+            (ResamplePreset::High, "High"),
+            (ResamplePreset::Extreme, "VeryHigh"),
+        ] {
+            let mut p = base_profile();
+            p.mode = DspMode::Resample;
+            p.target_rate = Some(96000);
+            p.preset = preset;
+            let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
+            match &cfg.pipeline[0] {
+                PipelineStep::Resampler { resampler } => {
+                    assert_eq!(resampler.quality, expected, "preset {preset:?}");
+                }
+                _ => panic!("expected resampler"),
+            }
+        }
+    }
+
+    #[test]
+    fn every_eq_band_type_renders() {
+        for band_type in [EqBandType::Peaking, EqBandType::LowShelf, EqBandType::HighShelf] {
+            let mut p = base_profile();
+            p.mode = DspMode::Resample;
+            p.target_rate = Some(48000);
+            p.eq_bands = vec![EqBand {
+                band_type,
+                freq: 500.0,
+                gain: -1.5,
+                q: 0.9,
+            }];
+            let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
+            // pipeline = [resampler, biquad ch0, biquad ch1]
+            assert!(matches!(cfg.pipeline[1], PipelineStep::Biquad { channel: 0, .. }));
+            assert!(matches!(cfg.pipeline[2], PipelineStep::Biquad { channel: 1, .. }));
+        }
+    }
+
+    #[test]
+    fn resample_without_target_is_noop_passthrough() {
+        let mut p = base_profile();
+        p.mode = DspMode::Resample;
+        p.target_rate = None;
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
+        assert_eq!(cfg.samplerate, 44100);
+        assert_eq!(cfg.capture_samplerate, Some(44100));
+        assert_eq!(cfg.pipeline.len(), 1);
+    }
 }
