@@ -1,0 +1,36 @@
+devices:
+  capture:
+    type: Raw
+    channels: 2
+    device: hw:Loopback,1
+    format: S32LE
+  playback:
+    type: Raw
+    channels: 2
+    device: default
+    format: S32LE
+samplerate: 44100
+capture_samplerate: 44100
+channels: 2
+mixers: {}
+filters: {}
+pipeline:
+- type: Resampler
+  resampler:
+    type: Soxr
+    srate: 44100
+    quality: Medium
+- type: Biquad
+  channel: 0
+  filter:
+    type: Peaking
+    freq: 1000.0
+    gain: 0.0
+    q: 1.0
+- type: Biquad
+  channel: 1
+  filter:
+    type: Peaking
+    freq: 1000.0
+    gain: 0.0
+    q: 1.0

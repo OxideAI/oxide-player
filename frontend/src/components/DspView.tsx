@@ -11,12 +11,18 @@ function clone(p: DspProfile): DspProfile {
   return { ...p, eq_bands: p.eq_bands.map((b) => ({ ...b })) }
 }
 
+function defaultProfile(device: string): DspProfile {
+  return { device, mode: 'bit_perfect', target_rate: null, preset: 'balanced', eq_bands: [] }
+}
+
 function ProfileEditor({
   profile,
   onSave,
+  onRemove,
 }: {
   profile: DspProfile
   onSave: (p: DspProfile) => Promise<unknown>
+  onRemove?: () => void
 }) {
   const [draft, setDraft] = useState<DspProfile>(() => clone(profile))
   const [saving, setSaving] = useState(false)
@@ -42,6 +48,10 @@ function ProfileEditor({
     setDraft((d) => ({ ...d, eq_bands: d.eq_bands.filter((_, j) => j !== i) }))
 
   const save = async () => {
+    if (!draft.device.trim()) {
+      setError('Device name is required.')
+      return
+    }
     setSaving(true)
     setError(null)
     try {
@@ -58,7 +68,15 @@ function ProfileEditor({
   return (
     <div className={styles.profile}>
       <div className={styles.head}>
-        <span className={styles.device}>{draft.device}</span>
+        <label className={styles.deviceField}>
+          <span className={styles.deviceLabel}>Device</span>
+          <input
+            className={styles.deviceInput}
+            value={draft.device}
+            placeholder="CamillaDSP playback device"
+            onChange={(e) => update({ device: e.target.value })}
+          />
+        </label>
         <div className={styles.modes}>
           {(['bit_perfect', 'resample'] as const).map((m) => (
             <button
@@ -70,6 +88,11 @@ function ProfileEditor({
             </button>
           ))}
         </div>
+        {onRemove && (
+          <button className={styles.remove} onClick={onRemove} aria-label="remove profile">
+            Remove
+          </button>
+        )}
       </div>
 
       <fieldset className={styles.fields} disabled={!resampling}>
@@ -173,7 +196,7 @@ function ProfileEditor({
 
       {error && <div className={styles.error}>{error}</div>}
       <button className={styles.save} onClick={save} disabled={saving}>
-        {saving ? 'Saving…' : 'Apply'}
+        {saving ? 'Applying…' : 'Apply'}
       </button>
     </div>
   )
@@ -188,7 +211,10 @@ export function DspView() {
     setLoading(true)
     setError(null)
     try {
-      setProfiles(await api.dsp())
+      const got = await api.dsp()
+      // Always surface at least one editable profile so the EQ is reachable
+      // even when no DSP profiles are configured server-side.
+      setProfiles(got.length ? got : [defaultProfile('default')])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -199,6 +225,22 @@ export function DspView() {
   useEffect(() => {
     load()
   }, [load])
+
+  const upsert = useCallback((p: DspProfile) => {
+    setProfiles((list) => {
+      const i = list.findIndex((x) => x.device === p.device)
+      if (i >= 0) return list.map((x, j) => (j === i ? p : x))
+      return [...list, p]
+    })
+  }, [])
+
+  const remove = useCallback((device: string) => {
+    setProfiles((list) => list.filter((x) => x.device !== device))
+  }, [])
+
+  const addProfile = useCallback(() => {
+    setProfiles((list) => [...list, defaultProfile(`device-${list.length + 1}`)])
+  }, [])
 
   if (loading) return <p className={styles.dim}>loading…</p>
   if (error) return <div className={styles.error}>{error}</div>
@@ -212,11 +254,25 @@ export function DspView() {
       <p className={styles.dim}>
         Bit-perfect bypasses the resampler for unchanged passthrough. Resample + DSP changes the
         output sample rate via a Soxr resampler. The parametric EQ below can be used in either mode
-        (R10: bit-perfect applies EQ without resampling).
+        (R10: bit-perfect applies EQ without resampling). Set the device to your CamillaDSP playback
+        device name.
       </p>
-      {profiles.map((p) => (
-        <ProfileEditor key={p.device} profile={p} onSave={api.setDsp} />
+
+      {profiles.map((p, i) => (
+        <ProfileEditor
+          key={i}
+          profile={p}
+          onSave={async (np) => {
+            await api.setDsp(np)
+            upsert(np)
+          }}
+          onRemove={profiles.length > 1 ? () => remove(p.device) : undefined}
+        />
       ))}
+
+      <button className={styles.addProfile} onClick={addProfile}>
+        + Add DSP profile
+      </button>
     </div>
   )
 }
