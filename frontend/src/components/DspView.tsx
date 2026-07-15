@@ -107,20 +107,19 @@ function ProfileEditor({
 
       <div className={styles.eqHead}>
         <span>Equalizer</span>
-        <button className={styles.add} onClick={addBand} disabled={!resampling}>
+        <button className={styles.add} onClick={addBand}>
           + Add band
         </button>
       </div>
 
       <div className={styles.bands}>
         {draft.eq_bands.length === 0 && (
-          <p className={styles.dim}>No EQ bands. Add one to shape the tone.</p>
+          <p className={styles.dim}>No EQ bands. Add one to shape the tone (works in both modes).</p>
         )}
         {draft.eq_bands.map((b, i) => (
           <div key={i} className={styles.band}>
             <select
               value={b.type}
-              disabled={!resampling}
               onChange={(e) => updateBand(i, { type: e.target.value as EqBandType })}
             >
               {BAND_TYPES.map((t) => (
@@ -137,7 +136,6 @@ function ProfileEditor({
                 max={24000}
                 step={1}
                 value={b.freq}
-                disabled={!resampling}
                 onChange={(e) => updateBand(i, { freq: Number(e.target.value) })}
               />
             </label>
@@ -149,7 +147,6 @@ function ProfileEditor({
                 max={20}
                 step={0.5}
                 value={b.gain}
-                disabled={!resampling}
                 onChange={(e) => updateBand(i, { gain: Number(e.target.value) })}
               />
             </label>
@@ -160,13 +157,11 @@ function ProfileEditor({
                 step={0.1}
                 min={0.1}
                 value={b.q}
-                disabled={!resampling}
                 onChange={(e) => updateBand(i, { q: Number(e.target.value) })}
               />
             </label>
             <button
               className={styles.remove}
-              disabled={!resampling}
               onClick={() => removeBand(i)}
               aria-label="remove band"
             >
@@ -215,8 +210,9 @@ export function DspView() {
         <h2 className={styles.h}>DSP profiles</h2>
       </div>
       <p className={styles.dim}>
-        Bit-perfect bypasses all processing. Resample + DSP applies a Soxr resampler and per-channel
-        parametric EQ (R10: DSP is stripped in bit-perfect mode).
+        Bit-perfect bypasses the resampler for unchanged passthrough. Resample + DSP changes the
+        output sample rate via a Soxr resampler. The parametric EQ below can be used in either mode
+        (R10: bit-perfect applies EQ without resampling).
       </p>
       {profiles.map((p) => (
         <ProfileEditor key={p.device} profile={p} onSave={api.setDsp} />

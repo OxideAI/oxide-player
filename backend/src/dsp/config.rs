@@ -87,8 +87,10 @@ fn quality_name(preset: ResamplePreset) -> &'static str {
 
 /// Render a CamillaDSP YAML config for the effective profile.
 ///
-/// `capture_rate` is the ALSA loopback sample rate MPD emits at (bit-perfect
-/// passthrough keeps this rate; resample mode targets `profile.target_rate`).
+/// `capture_rate` is the ALSA loopback sample rate MPD emits at. Bit-perfect
+/// mode keeps this rate with no resampler but still applies any EQ bands as a
+/// biquad-only pipeline; resample mode adds a Soxr resampler targeting
+/// `profile.target_rate` followed by the EQ biquads.
 pub fn render_camilladsp_config(
     profile: &DspProfile,
     capture_device: &str,
@@ -213,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn bit_perfect_strips_eq_from_effective() {
+    fn bit_perfect_keeps_eq_without_resampler() {
         let mut p = base_profile();
         p.mode = DspMode::BitPerfect;
         p.eq_bands = vec![EqBand {
@@ -223,7 +225,12 @@ mod tests {
             q: 1.0,
         }];
         let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
-        assert!(cfg.pipeline.is_empty(), "bit-perfect must not apply EQ");
+        // EQ applies as a biquad-only pipeline; no resampler, rate stays capture rate.
+        assert_eq!(cfg.pipeline.len(), 2);
+        assert!(matches!(cfg.pipeline[0], PipelineStep::Biquad { channel: 0, .. }));
+        assert!(matches!(cfg.pipeline[1], PipelineStep::Biquad { channel: 1, .. }));
+        assert_eq!(cfg.samplerate, 44100);
+        assert_eq!(cfg.capture_samplerate, None);
     }
 
     #[test]

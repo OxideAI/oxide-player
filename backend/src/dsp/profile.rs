@@ -109,7 +109,9 @@ impl DspProfile {
         Ok(())
     }
 
-    /// Normalize the profile so bit-perfect mode never applies DSP (R10).
+    /// Normalize the profile so bit-perfect mode never *resamples* (R10):
+    /// it drops the target rate / preset but keeps any EQ bands so a
+    /// parametric EQ can be applied without a sample-rate change.
     pub fn effective(&self) -> DspProfile {
         if self.mode == DspMode::BitPerfect {
             DspProfile {
@@ -117,7 +119,7 @@ impl DspProfile {
                 mode: DspMode::BitPerfect,
                 target_rate: None,
                 preset: ResamplePreset::default(),
-                eq_bands: Vec::new(),
+                eq_bands: self.eq_bands.clone(),
             }
         } else {
             self.clone()

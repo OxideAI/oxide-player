@@ -130,6 +130,7 @@ impl DspManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dsp::config::PipelineStep;
     use crate::dsp::profile::{DspMode, EqBand, EqBandType, ResamplePreset};
 
     fn base(device: &str) -> DspProfile {
@@ -176,7 +177,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_bit_perfect_strips_everything() {
+    async fn apply_bit_perfect_without_eq_is_passthrough() {
         let tmp = tempfile::tempdir().unwrap();
         let m = manager(tmp.path());
         let mut p = base("DAC");
@@ -189,7 +190,7 @@ mod tests {
             q: 0.7,
         }];
         m.apply_profile(p).await.unwrap();
-        // Now switch back to bit-perfect; stored full profile must restore DSP.
+        // Switch back to bit-perfect with no EQ -> clean passthrough.
         let mut bp = base("DAC");
         bp.mode = DspMode::BitPerfect;
         m.apply_profile(bp).await.unwrap();
@@ -200,6 +201,30 @@ mod tests {
         assert_eq!(parsed.samplerate, 44100);
         assert_eq!(parsed.capture_samplerate, None);
         println!("--- bitperfect config ---\n{yaml}");
+    }
+
+    #[tokio::test]
+    async fn apply_bit_perfect_with_eq_applies_biquads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        let mut p = base("DAC");
+        p.mode = DspMode::BitPerfect;
+        p.eq_bands = vec![EqBand {
+            band_type: EqBandType::HighShelf,
+            freq: 200.0,
+            gain: -2.0,
+            q: 0.7,
+        }];
+        m.apply_profile(p).await.unwrap();
+
+        let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
+        let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
+        // No resampler, but EQ biquads are applied per channel.
+        assert_eq!(parsed.pipeline.len(), 2);
+        assert!(matches!(parsed.pipeline[0], PipelineStep::Biquad { channel: 0, .. }));
+        assert_eq!(parsed.samplerate, 44100);
+        assert_eq!(parsed.capture_samplerate, None);
+        println!("--- bitperfect+eq config ---\n{yaml}");
     }
 
     #[tokio::test]
