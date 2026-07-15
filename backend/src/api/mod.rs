@@ -442,7 +442,8 @@ async fn playlist_add(
 ) -> AppResult<StatusCode> {
     require_playlist(&s, &name).await?;
     for t in into_tracks(b.tracks) {
-        s.mpd().add_to_playlist(&name, &t.uri).await?;
+        let mpd_uri = resolve_play_uri(&s, &t.uri).await;
+        s.mpd().add_to_playlist(&name, &mpd_uri).await?;
     }
     Ok(StatusCode::OK)
 }

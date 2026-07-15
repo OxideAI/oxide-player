@@ -91,7 +91,7 @@ impl Config {
         if self.mpd_host.trim().is_empty() {
             anyhow::bail!("mpd_host must not be empty");
         }
-        if self.mpd_port == 0 {
+        if !(1..=65535).contains(&self.mpd_port) {
             anyhow::bail!("mpd_port must be between 1 and 65535");
         }
         if self.listen.trim().is_empty() {
