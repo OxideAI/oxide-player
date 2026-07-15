@@ -1,4 +1,5 @@
 import type {
+  Config,
   DspProfile,
   OutputDevice,
   PlayerStatus,
@@ -150,5 +151,26 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pos }),
+    }).then((r) => json<unknown>(r)),
+
+  // —— Settings / config ——
+  getConfig: () => fetch('/api/config').then((r) => json<Config>(r)),
+  updateConfig: (cfg: Config) =>
+    fetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    }).then((r) => json<Config>(r)),
+  addLibraryDir: (path: string) =>
+    fetch('/api/config/library-dirs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    }).then((r) => json<{ scanned: number; duplicate?: boolean }>(r)),
+  removeLibraryDir: (path: string) =>
+    fetch('/api/config/library-dirs', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
     }).then((r) => json<unknown>(r)),
 }

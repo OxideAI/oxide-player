@@ -268,7 +268,28 @@ impl Mpd {
     /// Add `uri` to the queue, returning its queue song id. `uri` must match
     /// MPD's database exactly; keep MPD's index in sync via [`Self::rescan`]
     /// (done on library refresh) so scanner and MPD agree on filenames.
+    /// If MPD rejects the URI as unknown (ACK 50 / "No such song") we
+    /// rescan its index and retry once — the usual cause is a stale MPD db
+    /// (a newly added source isn't indexed yet), which shouldn't require a
+    /// manual rescan before the first play.
     async fn add_uri(&self, uri: &str) -> AppResult<u64> {
+        match self.try_add(uri).await {
+            Ok(id) => Ok(id),
+            Err(e) if Self::is_no_such_song(&e) => {
+                let _ = self.rescan().await;
+                // Give MPD a moment to finish the rescan before retrying.
+                tokio::time::sleep(Duration::from_millis(800)).await;
+                self.try_add(uri).await.map_err(|e| {
+                    AppError::Mpd(format!(
+                        "{e} (is this folder under MPD's music_directory?)"
+                    ))
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn try_add(&self, uri: &str) -> AppResult<u64> {
         use mpd_client::commands::definitions::Add;
         let client = self.client().await?;
         let id = client
@@ -276,6 +297,13 @@ impl Mpd {
             .await
             .map_err(|e| AppError::Mpd(format!("add: {e}")))?;
         Ok(id.0)
+    }
+
+    /// True when the MPD error means the requested URI isn't in MPD's
+    /// database (ACK 50, "No such song").
+    fn is_no_such_song(e: &AppError) -> bool {
+        let s = e.to_string().to_ascii_lowercase();
+        s.contains("no such song") || s.contains("[code 50]")
     }
 
     pub async fn play_uri(&self, uri: &str) -> AppResult<()> {

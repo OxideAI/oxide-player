@@ -80,3 +80,20 @@ export interface DspProfile {
   preset: ResamplePreset
   eq_bands: EqBand[]
 }
+
+export interface Config {
+  mpd_host: string
+  mpd_port: number
+  mpd_autostart: boolean
+  mpd_binary: string | null
+  mpd_config: string | null
+  listen: string
+  data_dir: string
+  library_dirs: string[]
+  static_dir: string
+  camilladsp_config_path: string
+  camilladsp_ws_url: string | null
+  camilladsp_capture_device: string | null
+  camilladsp_capture_rate: number | null
+  default_dsp_profiles: DspProfile[]
+}

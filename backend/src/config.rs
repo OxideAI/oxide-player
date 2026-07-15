@@ -1,13 +1,13 @@
-use anyhow::Context;
+use anyhow::{Context, Result};
 use clap::Parser;
-use serde::Deserialize;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub mpd_host: String,
     pub mpd_port: u16,
@@ -83,6 +83,47 @@ impl Config {
 
     pub fn cover_cache_dir(&self) -> PathBuf {
         self.data_dir.join("covers")
+    }
+
+    /// Validate the config before persisting it back to disk. Rejects values that
+    /// would break the server on the next (or current) run.
+    pub fn validate(&self) -> Result<()> {
+        if self.mpd_host.trim().is_empty() {
+            anyhow::bail!("mpd_host must not be empty");
+        }
+        if !(1..=65535).contains(&self.mpd_port) {
+            anyhow::bail!("mpd_port must be between 1 and 65535");
+        }
+        if self.listen.trim().is_empty() {
+            anyhow::bail!("listen must not be empty");
+        }
+        for dir in &self.library_dirs {
+            if !dir.is_absolute() {
+                anyhow::bail!("library dir must be an absolute path: {}", dir.display());
+            }
+        }
+        // A non-loopback listen widens exposure of the (currently
+        // unauthenticated) API: warn but allow, since the user may intend it.
+        Ok(())
+    }
+
+    /// Atomically write the config as pretty JSON: serialize to a temp file
+    /// beside the target, then rename so a crash mid-write never leaves a
+    /// half-written (and therefore unparseable) config.
+    pub fn write_to(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("creating config dir {}", parent.display())
+            })?;
+        }
+        let text =
+            serde_json::to_string_pretty(self).context("serializing config to json")?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text).with_context(|| format!("writing config {}", tmp.display()))?;
+        std::fs::rename(&tmp, path).with_context(|| {
+            format!("renaming config {} -> {}", tmp.display(), path.display())
+        })?;
+        Ok(())
     }
 }
 

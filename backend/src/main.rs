@@ -62,14 +62,14 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("MPD not started: {e}");
     }
 
-    let state = state::AppState::new(config, db, dsp, mpd);
+    let state = state::AppState::new(config, db, dsp, mpd, cli.config.clone());
     state.spawn_status_poller();
 
     // The frontend is served from this same origin, so no cross-origin access
     // is needed. A permissive layer would let any website the user visits drive
     // the (currently unauthenticated) API. Tighten this if you expose the server
     // and serve the UI from a different origin.
-    let app = api::router(state.clone()).layer(CorsLayer::new());
+    let app = api::router(state.clone()).await.layer(CorsLayer::new());
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
     tracing::info!("oxide-player listening on http://{}", cli.listen);

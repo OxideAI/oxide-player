@@ -134,3 +134,110 @@ impl DspManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsp::profile::{DspMode, EqBand, EqBandType, ResamplePreset};
+
+    fn base(device: &str) -> DspProfile {
+        DspProfile {
+            device: device.to_string(),
+            mode: DspMode::BitPerfect,
+            target_rate: None,
+            preset: ResamplePreset::default(),
+            eq_bands: vec![],
+        }
+    }
+
+    fn manager(tmp: &std::path::Path) -> DspManager {
+        DspManager::new(
+            tmp.join("config.yml"),
+            None, // no websocket -> exercises the write-only path
+            "hw:Loopback,1".to_string(),
+            44100,
+        )
+    }
+
+    #[tokio::test]
+    async fn apply_writes_resample_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        let mut p = base("DAC");
+        p.mode = DspMode::Resample;
+        p.target_rate = Some(96000);
+        p.preset = ResamplePreset::High;
+        p.eq_bands = vec![EqBand {
+            band_type: EqBandType::Peaking,
+            freq: 1000.0,
+            gain: 3.0,
+            q: 1.0,
+        }];
+        m.apply_profile(p.clone()).await.unwrap();
+
+        let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
+        let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.samplerate, 96000);
+        assert_eq!(parsed.capture_samplerate, Some(44100));
+        assert_eq!(parsed.pipeline.len(), 3); // resampler + 2 biquad channels
+        println!("--- resample config ---\n{yaml}");
+    }
+
+    #[tokio::test]
+    async fn apply_bit_perfect_strips_everything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        let mut p = base("DAC");
+        p.mode = DspMode::Resample;
+        p.target_rate = Some(96000);
+        p.eq_bands = vec![EqBand {
+            band_type: EqBandType::HighShelf,
+            freq: 200.0,
+            gain: -2.0,
+            q: 0.7,
+        }];
+        m.apply_profile(p).await.unwrap();
+        // Now switch back to bit-perfect; stored full profile must restore DSP.
+        let mut bp = base("DAC");
+        bp.mode = DspMode::BitPerfect;
+        m.apply_profile(bp).await.unwrap();
+
+        let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
+        let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert!(parsed.pipeline.is_empty());
+        assert_eq!(parsed.samplerate, 44100);
+        assert_eq!(parsed.capture_samplerate, None);
+        println!("--- bitperfect config ---\n{yaml}");
+    }
+
+    #[tokio::test]
+    async fn apply_rejects_invalid_device() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        for bad in ["", "bad\nname", "bad\0name"] {
+            let mut p = base(bad);
+            p.mode = DspMode::Resample;
+            p.target_rate = Some(48000);
+            let r = m.apply_profile(p).await;
+            assert!(r.is_err(), "expected rejection for device {bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_resample_without_target_rate_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        let mut p = base("DAC");
+        p.mode = DspMode::Resample;
+        p.target_rate = None; // user picks Resample + DSP but no rate
+        m.apply_profile(p).await.unwrap();
+
+        let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
+        let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
+        // samplerate falls back to capture_rate; resampler is a no-op passthrough
+        assert_eq!(parsed.samplerate, 44100);
+        assert_eq!(parsed.capture_samplerate, Some(44100));
+        assert_eq!(parsed.pipeline.len(), 1); // one no-op resampler, no EQ
+        println!("--- resample no-target config ---\n{yaml}");
+    }
+}
