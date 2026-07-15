@@ -2,7 +2,7 @@ use crate::error::{AppError, AppResult};
 use crate::types::Track;
 use rusqlite::OptionalExtension;
 use rusqlite::{params, Connection};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const TRACK_COLS: &str = "id, uri, path, title, artist, album, album_artist, genre, year, \
@@ -283,9 +283,9 @@ impl LibraryDb {
         Ok(track)
     }
 
-    /// Delete every track whose backing file no longer exists on disk
-    /// (e.g. the user deleted an album). Returns the number removed.
-    pub fn prune_missing(&self) -> AppResult<u64> {
+    /// Delete tracks whose backing file is no longer in the scanned set
+    /// (deleted or newly ignored via `.mpdignore`). Returns the number removed.
+    pub fn prune_missing(&self, seen: &std::collections::HashSet<PathBuf>) -> AppResult<u64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, path FROM tracks")
@@ -296,7 +296,7 @@ impl LibraryDb {
         let mut ids = Vec::new();
         for row in rows {
             let (id, path) = row.map_err(|e| AppError::Library(e.to_string()))?;
-            if !Path::new(&path).exists() {
+            if !seen.contains(Path::new(&path)) {
                 ids.push(id);
             }
         }
@@ -508,7 +508,6 @@ fn row_to_track(r: &rusqlite::Row) -> Track {
 #[cfg(test)]
 mod search_tests {
     use super::*;
-    use std::path::Path;
 
     fn fresh() -> LibraryDb {
         let db = LibraryDb::open(Path::new(":memory:")).unwrap();

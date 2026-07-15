@@ -4,7 +4,7 @@ use lofty::file::{AudioFile, TaggedFile, TaggedFileExt};
 use lofty::picture::MimeType;
 use lofty::tag::{Accessor, ItemKey};
 use lofty::read_from_path;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const AUDIO_EXTS: &[&str] = &[
@@ -36,13 +36,65 @@ fn is_cue(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn load_mpdignore(dir: &Path) -> Vec<String> {
+    let path = dir.join(".mpdignore");
+    match std::fs::read_to_string(&path) {
+        Ok(s) => s
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Simple glob match (`*` matches any sequence, `?` matches one char).
+fn matches_glob(name: &str, pattern: &str) -> bool {
+    let n = name.as_bytes();
+    let p = pattern.as_bytes();
+    let (mut ni, mut pi) = (0, 0);
+    let (mut star_ni, mut star_pi) = (None, None);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == n[ni]) {
+            ni += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star_ni = Some(ni);
+            star_pi = Some(pi);
+            pi += 1;
+        } else if let (Some(sn), Some(sp)) = (star_ni, star_pi) {
+            ni = sn + 1;
+            pi = sp + 1;
+            star_ni = Some(ni);
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+fn is_ignored(name: &str, patterns: &[String]) -> bool {
+    patterns.iter().any(|p| matches_glob(name, p))
+}
+
 fn walk(dir: &Path, files: &mut Vec<PathBuf>, cues: &mut Vec<PathBuf>) {
+    let patterns = load_mpdignore(dir);
+
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
     for entry in entries.flatten() {
         let p = entry.path();
+        let Some(name) = p.file_name().and_then(|n| n.to_str()).map(|n| n.to_string()) else {
+            continue;
+        };
+        if is_ignored(&name, &patterns) {
+            continue;
+        }
         // Use symlink_metadata so we never follow directory symlinks: a symlink
         // loop (or a symlink to elsewhere on disk) would otherwise cause
         // infinite recursion / traversal outside the library.
@@ -239,10 +291,12 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
         }
     }
 
+    let seen: HashSet<PathBuf> = files.iter().cloned().collect();
+
     // Parse CUE sheets; the audio files they reference are split into per-track
     // entries, so we skip ingesting them as whole-file tracks.
     let mut parsed_cues: Vec<(PathBuf, CueTrack)> = Vec::new();
-    let mut referenced: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut referenced: HashSet<PathBuf> = HashSet::new();
     for cue in &cues {
         if let Some(dir) = dirs.iter().find(|d| cue.starts_with(d)) {
             match parse_cue(cue, dir) {
@@ -304,9 +358,9 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
         }
     }
 
-    if let Ok(pruned) = db.prune_missing() {
+    if let Ok(pruned) = db.prune_missing(&seen) {
         if pruned > 0 {
-            tracing::info!("pruned {pruned} tracks whose files no longer exist");
+            tracing::info!("pruned {pruned} tracks no longer in the library");
         }
     }
 
@@ -498,5 +552,81 @@ mod tests {
     fn format_uppercases_extension() {
         assert_eq!(format_of(Path::new("a.flac")).as_deref(), Some("FLAC"));
         assert_eq!(format_of(Path::new("a.mp3")).as_deref(), Some("MP3"));
+    }
+
+    #[test]
+    fn matches_glob_exact() {
+        assert!(matches_glob(".git", ".git"));
+        assert!(!matches_glob(".gitignore", ".git"));
+    }
+
+    #[test]
+    fn matches_glob_star() {
+        assert!(matches_glob("foo.bak", "*.bak"));
+        assert!(matches_glob("Thumbs.db", "Thumbs.*"));
+        assert!(!matches_glob("notes.txt", "*.bak"));
+    }
+
+    #[test]
+    fn matches_glob_question() {
+        assert!(matches_glob("file1.txt", "file?.txt"));
+        assert!(!matches_glob("file12.txt", "file?.txt"));
+    }
+
+    #[test]
+    fn matches_glob_multi_star() {
+        assert!(matches_glob(".stfolder", ".st*"));
+        assert!(matches_glob(".stversions", ".st*"));
+        assert!(!matches_glob("folder", ".st*"));
+    }
+
+    #[test]
+    fn is_ignored_checks_against_patterns() {
+        let patterns = vec!["*.bak".to_string(), ".git".to_string()];
+        assert!(is_ignored("backup.bak", &patterns));
+        assert!(is_ignored(".git", &patterns));
+        assert!(!is_ignored("song.flac", &patterns));
+    }
+
+    #[test]
+    fn load_mpdignore_skips_comments_and_blanks() {
+        let dir = std::env::temp_dir().join("mpdignore_test");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(
+            dir.join(".mpdignore"),
+            b"*.bak\n# this is a comment\n\n.stfolder\n",
+        )
+        .unwrap();
+        let patterns = load_mpdignore(&dir);
+        assert_eq!(patterns, vec!["*.bak", ".stfolder"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_mpdignore_nonexistent_returns_empty() {
+        let dir = std::env::temp_dir().join("mpdignore_nonexistent");
+        let patterns = load_mpdignore(&dir);
+        assert!(patterns.is_empty());
+    }
+
+    #[test]
+    fn walk_skips_ignored_entries() {
+        let dir = std::env::temp_dir().join("mpdignore_walk_test");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join(".mpdignore"), b"*.bak\nignored_dir\n").unwrap();
+        std::fs::write(dir.join("track.flac"), b"").unwrap();
+        std::fs::write(dir.join("notes.bak"), b"").unwrap();
+        let _ = std::fs::create_dir_all(dir.join("ignored_dir"));
+        std::fs::write(dir.join("ignored_dir").join("hidden.flac"), b"").unwrap();
+        let _ = std::fs::create_dir_all(dir.join("other_dir"));
+        std::fs::write(dir.join("other_dir").join("deep.flac"), b"").unwrap();
+
+        let mut files = Vec::new();
+        let mut cues = Vec::new();
+        walk(&dir, &mut files, &mut cues);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|p| p.ends_with("track.flac")));
+        assert!(files.iter().any(|p| p.ends_with("deep.flac")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
