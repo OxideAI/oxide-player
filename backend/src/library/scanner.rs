@@ -1,6 +1,6 @@
 use crate::error::{AppError, AppResult};
 use crate::library::db::LibraryDb;
-use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::file::{AudioFile, TaggedFile, TaggedFileExt};
 use lofty::picture::MimeType;
 use lofty::tag::{Accessor, ItemKey};
 use lofty::read_from_path;
@@ -43,7 +43,17 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>, cues: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let p = entry.path();
-        if p.is_dir() {
+        // Use symlink_metadata so we never follow directory symlinks: a symlink
+        // loop (or a symlink to elsewhere on disk) would otherwise cause
+        // infinite recursion / traversal outside the library.
+        let meta = match std::fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.is_dir() {
+            if meta.file_type().is_symlink() {
+                continue;
+            }
             walk(&p, files, cues);
         } else if is_audio(&p) {
             files.push(p);
@@ -80,14 +90,6 @@ fn parse_cue(cue_path: &Path, library_dir: &Path) -> AppResult<Vec<CueTrack>> {
     let mut cur_start: Option<f64> = None;
     let mut raw: Vec<(i32, Option<String>, Option<String>, f64)> = Vec::new();
 
-    let strip_quotes = |s: &str| -> String {
-        let s = s.trim();
-        if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-            s[1..s.len() - 1].to_string()
-        } else {
-            s.to_string()
-        }
-    };
     let quoted_value = |line: &str| -> Option<String> {
         let i = line.find('"')?;
         let rest = &line[i + 1..];
@@ -139,7 +141,6 @@ fn parse_cue(cue_path: &Path, library_dir: &Path) -> AppResult<Vec<CueTrack>> {
             }
             _ => {}
         }
-        let _ = &strip_quotes;
     }
     if let (Some(no), Some(start)) = (cur_no, cur_start) {
         raw.push((no, cur_title, cur_performer, start));
@@ -269,7 +270,16 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
         if referenced.contains(Path::new(&uri)) {
             continue;
         }
-        if let Err(e) = ingest(&uri, &path, db, cover_dir) {
+        // Incremental scan: skip files whose mtime already matches the stored
+        // row, so a refresh only re-reads changed tracks (see #12 / track_mtime).
+        let mtime = file_mtime(&path);
+        if let Some(db_mt) = db.track_mtime(&uri, None).ok().flatten() {
+            if db_mt == mtime {
+                scanned += 1;
+                continue;
+            }
+        }
+        if let Err(e) = ingest(&uri, &path, db, cover_dir, mtime) {
             tracing::warn!("skip {}: {e}", path.display());
         } else {
             scanned += 1;
@@ -277,7 +287,17 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
     }
 
     for (dir, ct) in &parsed_cues {
-        if let Err(e) = ingest_cue(ct, dir, db, cover_dir) {
+        let uri = ct.audio_rel.to_string_lossy().replace('\\', "/");
+        let mtime = file_mtime(&dir.join(&ct.audio_rel));
+        // All CUE tracks of one file share `uri` (keyed by cue_index); compare
+        // against the per-track cue_index so only changed files are re-ingested.
+        if let Some(db_mt) = db.track_mtime(&uri, Some(ct.track_no)).ok().flatten() {
+            if db_mt == mtime {
+                scanned += 1;
+                continue;
+            }
+        }
+        if let Err(e) = ingest_cue(ct, dir, db, cover_dir, mtime) {
             tracing::warn!("skip cue track {}: {e}", ct.audio_rel.display());
         } else {
             scanned += 1;
@@ -293,7 +313,7 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
     Ok(scanned)
 }
 
-fn ingest(uri: &str, path: &Path, db: &LibraryDb, cover_dir: &Path) -> AppResult<()> {
+fn ingest(uri: &str, path: &Path, db: &LibraryDb, cover_dir: &Path, mtime: i64) -> AppResult<()> {
     let tagged = read_from_path(path).map_err(|e| AppError::Library(e.to_string()))?;
     let props = tagged.properties();
 
@@ -335,16 +355,23 @@ fn ingest(uri: &str, path: &Path, db: &LibraryDb, cover_dir: &Path) -> AppResult
         None,
         None,
         None,
+        Some(mtime),
     )?;
 
-    let has_cover = extract_cover(path, id, cover_dir);
+    let has_cover = extract_cover(Some(&tagged), path, id, cover_dir);
     db.set_cover(id, has_cover)?;
     Ok(())
 }
 
 /// Ingest a single track split from a CUE sheet. `audio_rel` is the relative
 /// path of the backing audio file; metadata and start/end come from the cue.
-fn ingest_cue(ct: &CueTrack, library_dir: &Path, db: &LibraryDb, cover_dir: &Path) -> AppResult<()> {
+fn ingest_cue(
+    ct: &CueTrack,
+    library_dir: &Path,
+    db: &LibraryDb,
+    cover_dir: &Path,
+    mtime: i64,
+) -> AppResult<()> {
     let audio_path = library_dir.join(&ct.audio_rel);
     let tagged = read_from_path(&audio_path).map_err(|e| AppError::Library(e.to_string()))?;
     let props = tagged.properties();
@@ -375,17 +402,30 @@ fn ingest_cue(ct: &CueTrack, library_dir: &Path, db: &LibraryDb, cover_dir: &Pat
         Some(ct.track_no),
         Some(ct.start),
         ct.end,
+        Some(mtime),
     )?;
 
-    let has_cover = extract_cover(&audio_path, id, cover_dir);
+    let has_cover = extract_cover(Some(&tagged), &audio_path, id, cover_dir);
     db.set_cover(id, has_cover)?;
     Ok(())
 }
 
+/// Last-modified time of `p` in unix seconds, or 0 if unreadable.
+fn file_mtime(p: &Path) -> i64 {
+    std::fs::metadata(p)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Extract a cover for `path` into the cover cache as `{id}.{ext}`.
 /// Local image files (`cover.*`, `folder.*`) take precedence over embedded art.
-/// Returns true if a cover was written.
-pub fn extract_cover(path: &Path, id: i64, cover_dir: &Path) -> bool {
+/// `tagged`, when provided, is the already-parsed audio file so embedded art is
+/// read from the first pass instead of re-reading the whole file. Returns true
+/// if a cover was written.
+pub fn extract_cover(tagged: Option<&TaggedFile>, path: &Path, id: i64, cover_dir: &Path) -> bool {
     if let Some(local) = find_local_cover(path.parent().unwrap_or(path)) {
         let ext = match local
             .extension()
@@ -402,7 +442,12 @@ pub fn extract_cover(path: &Path, id: i64, cover_dir: &Path) -> bool {
         }
     }
 
-    if let Ok(tagged) = read_from_path(path) {
+    let read_from_disk = tagged.is_none().then(|| read_from_path(path).ok());
+    let read = match tagged {
+        Some(t) => Some(t),
+        None => read_from_disk.as_ref().and_then(|o| o.as_ref()),
+    };
+    if let Some(tagged) = read {
         if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
             if let Some(pic) = tag.pictures().first() {
                 let ext = cover_ext(pic.mime_type().unwrap_or(&MimeType::Jpeg));
@@ -428,7 +473,7 @@ pub fn rescan_art(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
     let tracks = db.all_track_paths()?;
     let mut with_cover = 0u64;
     for (id, path) in tracks {
-        let has = extract_cover(Path::new(&path), id, cover_dir);
+        let has = extract_cover(None, Path::new(&path), id, cover_dir);
         db.set_cover(id, has)?;
         if has {
             with_cover += 1;

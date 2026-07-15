@@ -8,6 +8,12 @@ use std::sync::{Arc, Mutex};
 const TRACK_COLS: &str = "id, uri, path, title, artist, album, album_artist, genre, year, \
 track, duration, format, sample_rate, bit_depth, channels, has_cover, cue_index, \
 start_time, end_time, file_mtime";
+// Qualified form used when joining `tracks_fts` (both tables expose
+// title/artist/album and an unqualified reference would be ambiguous).
+const TRACK_COLS_Q: &str = "tracks.id, tracks.uri, tracks.path, tracks.title, tracks.artist, \
+tracks.album, tracks.album_artist, tracks.genre, tracks.year, tracks.track, tracks.duration, \
+tracks.format, tracks.sample_rate, tracks.bit_depth, tracks.channels, tracks.has_cover, \
+tracks.cue_index, tracks.start_time, tracks.end_time, tracks.file_mtime";
 
 #[derive(Clone)]
 pub struct LibraryDb {
@@ -26,7 +32,7 @@ impl LibraryDb {
     }
 
     pub fn migrate(&self) -> AppResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute_batch(
             "            CREATE TABLE IF NOT EXISTS tracks (
                 id INTEGER PRIMARY KEY,
@@ -62,6 +68,46 @@ impl LibraryDb {
                 ON tracks(uri) WHERE cue_index IS NULL;",
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
+        // FTS5 index over the searchable text columns. External-content table
+        // backed by `tracks`, kept in sync by triggers below, so every
+        // `insert_track`/`prune` automatically updates the index without a
+        // separate write path. Prefix queries ('beat*') use the index instead
+        // of the previous full-table `LIKE '%q%'` scan.
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
+                title, artist, album, album_artist,
+                content='tracks', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
+            );
+            CREATE TRIGGER IF NOT EXISTS tracks_ai AFTER INSERT ON tracks BEGIN
+                INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
+                VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+            END;
+            CREATE TRIGGER IF NOT EXISTS tracks_ad AFTER DELETE ON tracks BEGIN
+                INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
+                VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
+            END;
+            CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
+                INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist)
+                VALUES ('delete', old.id, old.title, old.artist, old.album, old.album_artist);
+                INSERT INTO tracks_fts(rowid, title, artist, album, album_artist)
+                VALUES (new.id, new.title, new.artist, new.album, new.album_artist);
+            END;",
+        )
+        .map_err(|e| AppError::Library(e.to_string()))?;
+        // Rebuild the FTS index when it's out of sync with `tracks` (e.g. an
+        // existing DB created before the index existed, or a recovery).
+        let fts_count: i64 = conn
+            .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
+            .unwrap_or(0);
+        let tracks_count: i64 = conn
+            .query_row("SELECT count(*) FROM tracks", [], |r| r.get(0))
+            .unwrap_or(0);
+        if fts_count != tracks_count {
+            conn.execute_batch(
+                "INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');",
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        }
         // Idempotent schema upgrades for CUE support (only on pre-existing tables).
         for col in ["cue_index", "start_time", "end_time", "file_mtime"] {
             let exists: i64 = conn
@@ -84,13 +130,6 @@ impl LibraryDb {
         Ok(())
     }
 
-    pub fn clear(&self) -> AppResult<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM tracks", [])
-            .map_err(|e| AppError::Library(e.to_string()))?;
-        Ok(())
-    }
-
     pub fn insert_track(
         &self,
         uri: &str,
@@ -110,23 +149,49 @@ impl LibraryDb {
         cue_index: Option<i32>,
         start_time: Option<f64>,
         end_time: Option<f64>,
+        file_mtime: Option<i64>,
     ) -> AppResult<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO tracks
-             (uri, path, title, artist, album, album_artist, genre, year, track, duration, format, sample_rate, bit_depth, channels, has_cover, cue_index, start_time, end_time)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,?15,?16,?17)",
+             (uri, path, title, artist, album, album_artist, genre, year, track, duration, format, sample_rate, bit_depth, channels, has_cover, cue_index, start_time, end_time, file_mtime)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,?15,?16,?17,?18)",
             params![
                 uri, path, title, artist, album, album_artist, genre, year, track, duration,
-                format, sample_rate, bit_depth, channels, cue_index, start_time, end_time
+                format, sample_rate, bit_depth, channels, cue_index, start_time, end_time,
+                file_mtime
             ],
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
         Ok(conn.last_insert_rowid())
     }
 
+    /// Return the stored `file_mtime` for the track identified by `(uri,
+    /// cue_index)`, used to skip re-ingesting files that haven't changed.
+    pub fn track_mtime(&self, uri: &str, cue_index: Option<i32>) -> AppResult<Option<i64>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mt: Option<i64> = if let Some(c) = cue_index {
+            conn.query_row(
+                "SELECT file_mtime FROM tracks WHERE uri = ? AND cue_index = ?",
+                params![uri, c],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Library(e.to_string()))?
+        } else {
+            conn.query_row(
+                "SELECT file_mtime FROM tracks WHERE uri = ? AND cue_index IS NULL",
+                [uri],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Library(e.to_string()))?
+        };
+        Ok(mt)
+    }
+
     pub fn set_cover(&self, id: i64, has_cover: bool) -> AppResult<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE tracks SET has_cover = ?1 WHERE id = ?2",
             params![has_cover as i32, id],
@@ -136,7 +201,7 @@ impl LibraryDb {
     }
 
     pub fn all_track_paths(&self) -> AppResult<Vec<(i64, String)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, path FROM tracks")
             .map_err(|e| AppError::Library(e.to_string()))?;
@@ -151,7 +216,7 @@ impl LibraryDb {
     }
 
     pub fn track_by_id(&self, id: i64) -> AppResult<Option<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let track = conn
             .query_row(
                 &format!("SELECT {TRACK_COLS} FROM tracks WHERE id = ?"),
@@ -168,7 +233,7 @@ impl LibraryDb {
     /// way to identify which CUE track MPD is playing when the file was added
     /// directly (MPD then reports the audio file, not the CUE track number).
     pub fn track_by_uri_and_elapsed(&self, uri: &str, elapsed: f64) -> AppResult<Option<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let track = conn
             .query_row(
                 &format!(
@@ -190,7 +255,7 @@ impl LibraryDb {
     /// `cue_index` is given (so a full-album file split into CUE tracks links
     /// to the specific track MPD is reporting).
     pub fn track_by_uri_cue(&self, uri: &str, cue_index: Option<i32>) -> AppResult<Option<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(c) = cue_index {
             let exact = conn
                 .query_row(
@@ -219,7 +284,7 @@ impl LibraryDb {
     }
 
     pub fn track_by_uri(&self, uri: &str) -> AppResult<Option<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let track = conn
             .query_row(
                 &format!("SELECT {TRACK_COLS} FROM tracks WHERE uri = ?"),
@@ -234,7 +299,7 @@ impl LibraryDb {
     /// Delete every track whose backing file no longer exists on disk
     /// (e.g. the user deleted an album). Returns the number removed.
     pub fn prune_missing(&self) -> AppResult<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, path FROM tracks")
             .map_err(|e| AppError::Library(e.to_string()))?;
@@ -248,8 +313,10 @@ impl LibraryDb {
                 ids.push(id);
             }
         }
-        for id in &ids {
-            conn.execute("DELETE FROM tracks WHERE id = ?", [*id])
+        if !ids.is_empty() {
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("DELETE FROM tracks WHERE id IN ({placeholders})");
+            conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))
                 .map_err(|e| AppError::Library(e.to_string()))?;
         }
         Ok(ids.len() as u64)
@@ -259,7 +326,7 @@ impl LibraryDb {
     /// them. Returns true when something was deleted. Used when MPD reports a
     /// missing file mid-playback so the dead entry leaves the library.
     pub fn delete_by_uri_if_missing(&self, uri: &str) -> AppResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let path: Option<String> = conn
             .query_row(
                 "SELECT path FROM tracks WHERE uri = ? LIMIT 1",
@@ -282,7 +349,7 @@ impl LibraryDb {
     /// `path` (as reported in MPD's error string). Removes the track(s) only
     /// when the backing file is gone. Returns true when something was deleted.
     pub fn delete_by_path_if_missing(&self, path: &str) -> AppResult<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let exists: Option<bool> = conn
             .query_row(
                 "SELECT path FROM tracks WHERE path = ? LIMIT 1",
@@ -309,29 +376,66 @@ impl LibraryDb {
         limit: Option<usize>,
     ) -> AppResult<Vec<Track>> {
         let mut sql = String::from(
-            "SELECT {TRACK_COLS_PLACEHOLDER} FROM tracks WHERE 1=1",
+            "SELECT {TRACK_COLS_PLACEHOLDER} FROM tracks",
         );
-        sql = sql.replace("{TRACK_COLS_PLACEHOLDER}", TRACK_COLS);
+        sql = sql.replace(
+            "{TRACK_COLS_PLACEHOLDER}",
+            if q.is_some() { TRACK_COLS_Q } else { TRACK_COLS },
+        );
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(q) = q {
-            sql.push_str(" AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)");
-            let like = format!("%{q}%");
-            args.push(Box::new(like.clone()));
-            args.push(Box::new(like.clone()));
-            args.push(Box::new(like));
+            // Prefix FTS query: each whitespace-separated token becomes a bare
+            // prefix term ('beat' -> 'beat*') so a partial word matches from
+            // its start. The term is deliberately NOT wrapped in double quotes:
+            // FTS5 treats a *bound* MATCH parameter as if already quoted, which
+            // would turn '"beat"*' into a phrase (no prefix match). Tokens are
+            // stripped of non-alphanumeric chars at the edges, so the result is
+            // safe to interpolate. Join brings `rank` (bm25 relevance) into
+            // scope for ordering, replacing the old `LIKE '%q%'` full scan.
+            let match_expr: String = q
+                .split_whitespace()
+                .map(|t| {
+                    let cleaned = t.trim_matches(|c: char| !c.is_alphanumeric());
+                    if cleaned.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{cleaned}*")
+                    }
+                })
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if match_expr.is_empty() {
+                // No searchable tokens (e.g. only punctuation) -> no matches.
+                return Ok(Vec::new());
+            }
+            sql.push_str(
+                " JOIN tracks_fts ON tracks_fts.rowid = tracks.id \
+                 WHERE tracks_fts MATCH ?",
+            );
+            args.push(Box::new(match_expr));
+        } else {
+            sql.push_str(" WHERE 1=1");
         }
         if let Some(a) = artist {
-            sql.push_str(" AND artist = ?");
+            sql.push_str(" AND tracks.artist = ?");
             args.push(Box::new(a.to_string()));
         }
         if let Some(a) = album {
-            sql.push_str(" AND album = ?");
+            sql.push_str(" AND tracks.album = ?");
             args.push(Box::new(a.to_string()));
         }
-        sql.push_str(" ORDER BY album, track, title LIMIT ?");
-        args.push(Box::new(limit.unwrap_or(500) as i64));
+        if q.is_some() {
+            sql.push_str(" ORDER BY tracks_fts.rank");
+        } else {
+            sql.push_str(" ORDER BY album, track, title");
+        }
+        if let Some(limit) = limit {
+            sql.push_str(" LIMIT ?");
+            args.push(Box::new(limit as i64));
+        }
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| AppError::Library(e.to_string()))?;
@@ -354,7 +458,7 @@ impl LibraryDb {
     }
 
     fn distinct_column(&self, col: &str) -> AppResult<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT DISTINCT {col} FROM tracks WHERE {col} IS NOT NULL ORDER BY {col}"
@@ -371,7 +475,7 @@ impl LibraryDb {
     }
 
     pub fn count(&self) -> AppResult<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let c: i64 = conn
             .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
             .map_err(|e| AppError::Library(e.to_string()))?;
@@ -400,15 +504,68 @@ fn row_to_track(r: &rusqlite::Row) -> Track {
         cue_index: r.get(16).ok(),
         start_time: r.get(17).ok(),
         end_time: r.get(18).ok(),
-        file_mtime: file_mtime_of(r.get::<_, String>(2).unwrap_or_default().as_str()),
+        file_mtime: r.get(19).ok(),
     }
 }
 
-/// Last-modified time of `p` in unix seconds, or `None` if unreadable.
-fn file_mtime_of(p: &str) -> Option<i64> {
-    std::fs::metadata(p)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn fresh() -> LibraryDb {
+        let db = LibraryDb::open(Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        db
+    }
+
+    fn put(db: &LibraryDb, path: &str, title: &str, artist: &str, album: &str) {
+        db.insert_track(
+            path, path, Some(title), Some(artist), Some(album), None, None, None,
+            Some(1), Some(180.0), Some("flac"), Some(44100), Some(16), Some(2),
+            None, None, None, Some(1),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn fts_prefix_search_ranks_and_no_midword() {
+        let db = fresh();
+        put(&db, "/a/1.flac", "Help", "The Beatles", "Help!");
+        put(&db, "/a/2.flac", "Yesterday", "The Beatles", "Help!");
+        put(&db, "/a/3.flac", "Blackbird", "The Beatles", "White Album");
+
+        let prefix = db.search(Some("beat"), None, None, None).unwrap();
+        assert_eq!(prefix.len(), 3, "all Beatles tracks match prefix 'beat*'");
+
+        // Mid-word substring from the old LIKE '%q%' must no longer match.
+        assert!(
+            db.search(Some("eatl"), None, None, None).unwrap().is_empty(),
+            "'eatl' is not a prefix of any token"
+        );
+
+        // Title prefix resolves to a single track.
+        let t = db.search(Some("yest"), None, None, None).unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].title.as_deref(), Some("Yesterday"));
+    }
+
+    #[test]
+    fn fts_index_stays_in_sync_after_more_inserts() {
+        let db = fresh();
+        put(&db, "/a/1.flac", "Help", "The Beatles", "Help!");
+        assert_eq!(db.search(Some("beat"), None, None, None).unwrap().len(), 1);
+        put(&db, "/a/2.flac", "Revolver", "The Beatles", "Revolver");
+        assert_eq!(db.search(Some("beat"), None, None, None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn fts_filter_by_artist_exact_still_works() {
+        let db = fresh();
+        put(&db, "/a/1.flac", "Help", "The Beatles", "Help!");
+        put(&db, "/a/2.flac", "Hotel California", "Eagles", "Hotel Cal");
+        let r = db.search(Some("hotel"), Some("Eagles"), None, None).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].artist.as_deref(), Some("Eagles"));
+    }
 }

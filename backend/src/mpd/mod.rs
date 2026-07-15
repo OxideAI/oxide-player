@@ -6,8 +6,11 @@ use mpd_client::tag::Tag;
 use mpd_client::Client;
 use mpd_protocol::command::Command;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct Mpd {
@@ -18,6 +21,7 @@ struct MpdInner {
     host: String,
     port: u16,
     conn: Mutex<Option<MpdConnection>>,
+    connect_lock: Mutex<()>,
     active_track: Mutex<Option<i64>>,
 }
 
@@ -40,23 +44,44 @@ impl Mpd {
                 host: host.to_string(),
                 port,
                 conn: Mutex::new(None),
+                connect_lock: Mutex::new(()),
                 active_track: Mutex::new(None),
             }),
         }
     }
 
+    /// Return a live MPD client, (re)connecting lazily if the cached
+    /// connection is missing or has dropped (e.g. after an MPD restart).
     async fn client(&self) -> AppResult<Client> {
-        let mut guard = self.inner.conn.lock().await;
-        if guard.is_none() {
-            let stream = TcpStream::connect((self.inner.host.as_str(), self.inner.port))
-                .await
-                .map_err(|e| AppError::Mpd(format!("connect {}:{}: {e}", self.inner.host, self.inner.port)))?;
-            let (client, _handle) = Client::connect(stream)
-                .await
-                .map_err(|e| AppError::Mpd(format!("mpd handshake: {e}")))?;
-            *guard = Some((client, _handle));
+        if let Some(client) = self.try_clone().await {
+            return Ok(client);
         }
+        // Serialize (re)connect attempts so concurrent callers don't each open
+        // a socket; another task may have already reconnected while we waited.
+        let _connect_guard = self.inner.connect_lock.lock().await;
+        if let Some(client) = self.try_clone().await {
+            return Ok(client);
+        }
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((self.inner.host.as_str(), self.inner.port)))
+            .await
+            .map_err(|_| AppError::Mpd(format!("connect {}:{} timed out", self.inner.host, self.inner.port)))?
+            .map_err(|e| AppError::Mpd(format!("connect {}:{}: {e}", self.inner.host, self.inner.port)))?;
+        let (client, _handle) = Client::connect(stream)
+            .await
+            .map_err(|e| AppError::Mpd(format!("mpd handshake: {e}")))?;
+        let mut guard = self.inner.conn.lock().await;
+        *guard = Some((client, _handle));
         Ok(guard.as_ref().unwrap().0.clone())
+    }
+
+    /// Clone the cached client if it exists and is still connected. The lock is
+    /// released before any network I/O so connecting never stalls other commands.
+    async fn try_clone(&self) -> Option<Client> {
+        let guard = self.inner.conn.lock().await;
+        match guard.as_ref() {
+            Some((c, _)) if !c.is_connection_closed() => Some(c.clone()),
+            _ => None,
+        }
     }
 
     pub async fn raw(&self, cmd: Command) -> AppResult<()> {
@@ -252,18 +277,6 @@ impl Mpd {
                 }
             })
             .collect())
-    }
-
-    /// Shuffle the entire play queue.
-    pub async fn shuffle(&self) -> AppResult<()> {
-        self.raw(Command::new("shuffle")).await
-    }
-
-    /// Add `uri` to the queue and start playing it from `start` seconds in.
-    /// Used for CUE-sheet tracks, whose backing file is a full album.
-    pub async fn play_uri_at(&self, uri: &str, start: f64) -> AppResult<()> {
-        self.play_uri(uri).await?;
-        self.seek(start).await
     }
 
     /// Add `uri` and play only the `[start, end)` portion of it, then let MPD
