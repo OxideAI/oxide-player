@@ -21,13 +21,14 @@ export function KioskView({
   onSeek,
   onVolume,
 }: Props) {
+  const loading = status === null
   const song = status?.current_song ?? null
   const cover = song?.has_cover ? api.coverUrl(song.id) : null
-  const title = song ? displayTitle(song) : 'Nothing playing'
+  const title = loading ? 'Loading…' : (song ? displayTitle(song) : 'Nothing playing')
   const duration = status?.duration ?? 0
   const playing = status?.state === 'playing'
 
-  const smoothElapsed = useSmoothElapsed(status, duration)
+  const { elapsed: smoothElapsed, reset: resetElapsed } = useSmoothElapsed(status, duration)
   const seek = useDragValue(smoothElapsed, onSeek)
   const vol = useDragValue(status?.volume ?? 0, onVolume)
 
@@ -78,8 +79,8 @@ export function KioskView({
             style={{ ['--frac' as string]: seekFrac }}
             onPointerDown={seek.begin}
             onChange={(e) => seek.move(Number(e.target.value))}
-            onPointerUp={seek.end}
-            onPointerCancel={seek.end}
+            onPointerUp={(e) => { resetElapsed(Number((e.target as HTMLInputElement).value)); seek.end() }}
+            onPointerCancel={(e) => { resetElapsed(Number((e.target as HTMLInputElement).value)); seek.end() }}
             aria-label="Seek"
           />
           <span className={styles.time}>{fmtTime(duration)}</span>

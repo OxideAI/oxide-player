@@ -9,10 +9,14 @@ const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi 
  * While playing it advances `elapsed` by wall-clock time since the last
  * server sample; each poll re-anchors it to the authoritative value.
  */
-export function useSmoothElapsed(status: PlayerStatus | null, duration: number): number {
+export function useSmoothElapsed(status: PlayerStatus | null, duration: number): { elapsed: number; reset: (v: number) => void } {
   const [elapsed, setElapsed] = useState(status?.elapsed ?? 0)
   const baseRef = useRef({ e: status?.elapsed ?? 0, t: performance.now() })
 
+  const reset = useCallback((v: number) => {
+    baseRef.current = { e: v, t: performance.now() }
+    setElapsed(v)
+  }, [])
   useEffect(() => {
     const e = status?.elapsed ?? 0
     baseRef.current = { e, t: performance.now() }
@@ -33,7 +37,7 @@ export function useSmoothElapsed(status: PlayerStatus | null, duration: number):
     return () => cancelAnimationFrame(raf)
   }, [playing, duration])
 
-  return elapsed
+  return { elapsed, reset }
 }
 
 /**
