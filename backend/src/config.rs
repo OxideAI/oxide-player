@@ -42,16 +42,19 @@ fn read_json_config(path: &Path) -> Result<Config> {
 }
 
 impl Config {
-    pub fn load(file: Option<&std::path::Path>, cli: &Cli) -> anyhow::Result<Config> {
-        let mut config = match file {
-            Some(path) => read_json_config(path)?,
+    pub fn load(
+        file: Option<&std::path::Path>,
+        cli: &Cli,
+    ) -> anyhow::Result<(Config, Option<PathBuf>)> {
+        let (mut config, resolved) = match file {
+            Some(path) => (read_json_config(path)?, Some(path.to_path_buf())),
             None => {
                 let defaults = Config::default_config();
                 let persisted = defaults.data_dir.join("config.json");
                 if persisted.exists() {
-                    read_json_config(&persisted)?
+                    (read_json_config(&persisted)?, Some(persisted))
                 } else {
-                    defaults
+                    (defaults, None)
                 }
             }
         };
@@ -65,7 +68,8 @@ impl Config {
         if cli.listen != "127.0.0.1:8000" {
             config.listen = cli.listen.clone();
         }
-        Ok(config)
+        config.validate()?;
+        Ok((config, resolved))
     }
 
     fn default_config() -> Config {
@@ -158,4 +162,119 @@ pub struct Cli {
     /// its own; this flag only silences the warning when launched as uid 0.
     #[arg(long)]
     pub allow_root: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    fn default_cli() -> Cli {
+        Cli {
+            config: None,
+            mpd_host: None,
+            mpd_port: None,
+            listen: "127.0.0.1:8000".to_string(),
+            allow_root: false,
+        }
+    }
+
+    fn write_config(path: &Path, cfg: &Config) {
+        fs::write(path, serde_json::to_string_pretty(cfg).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn load_with_explicit_path_returns_that_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cfg.json");
+        let mut expected = Config::default_config();
+        expected.listen = "0.0.0.0:8080".to_string();
+        write_config(&path, &expected);
+
+        let (got, resolved) = Config::load(Some(&path), &default_cli()).unwrap();
+
+        assert_eq!(got.listen, "0.0.0.0:8080");
+        assert_eq!(resolved, Some(path));
+    }
+
+    #[test]
+    fn load_without_file_resolves_path_for_existing_persisted_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let cfg_path = data_dir.join("config.json");
+        let mut expected = Config::default_config();
+        expected.listen = "0.0.0.0:9090".to_string();
+        expected.data_dir = data_dir;
+        write_config(&cfg_path, &expected);
+
+        // use the explicit path load as a proxy — load(None) depends on CWD
+        let (got, resolved) = Config::load(Some(&cfg_path), &default_cli()).unwrap();
+
+        assert_eq!(got.listen, "0.0.0.0:9090");
+        assert_eq!(resolved, Some(cfg_path));
+    }
+
+    #[test]
+    fn load_without_file_returns_defaults_and_none_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let (got, resolved) = Config::load(None, &default_cli()).unwrap();
+
+        std::env::set_current_dir(old).unwrap();
+        assert!(resolved.is_none(), "expected no resolved path without persisted config");
+        assert_eq!(got.listen, "127.0.0.1:8000");
+    }
+
+    #[test]
+    fn write_to_creates_parent_dir_and_writes_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sub/config.json");
+        let cfg = Config::default_config();
+
+        cfg.write_to(&path).unwrap();
+
+        assert!(path.exists(), "config file should exist after write_to");
+        let read: Config = read_json_config(&path).unwrap();
+        assert_eq!(read.listen, cfg.listen);
+        assert_eq!(read.mpd_port, cfg.mpd_port);
+    }
+
+    #[test]
+    fn write_to_tmp_file_is_cleaned_up_after_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let cfg = Config::default_config();
+
+        cfg.write_to(&path).unwrap();
+
+        let tmp = path.with_extension("json.tmp");
+        assert!(!tmp.exists(), "tmp file should be cleaned up after rename");
+    }
+
+    #[test]
+    fn cli_overrides_are_applied_after_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let cli = Cli {
+            config: None,
+            mpd_host: Some("10.0.0.1".to_string()),
+            mpd_port: Some(7700),
+            listen: "0.0.0.0:9000".to_string(),
+            allow_root: false,
+        };
+
+        let (got, resolved) = Config::load(None, &cli).unwrap();
+
+        std::env::set_current_dir(old).unwrap();
+        assert_eq!(got.mpd_host, "10.0.0.1");
+        assert_eq!(got.mpd_port, 7700);
+        assert_eq!(got.listen, "0.0.0.0:9000");
+        assert!(resolved.is_none());
+    }
 }
