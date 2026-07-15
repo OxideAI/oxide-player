@@ -3,10 +3,20 @@ use clap::Parser;
 use serde::Deserialize;
 use std::path::PathBuf;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub mpd_host: String,
     pub mpd_port: u16,
+    #[serde(default = "default_true")]
+    pub mpd_autostart: bool,
+    #[serde(default)]
+    pub mpd_binary: Option<String>,
+    #[serde(default)]
+    pub mpd_config: Option<PathBuf>,
     pub listen: String,
     pub data_dir: PathBuf,
     pub library_dirs: Vec<PathBuf>,
@@ -49,6 +59,9 @@ impl Config {
         Config {
             mpd_host: "127.0.0.1".to_string(),
             mpd_port: 6600,
+            mpd_autostart: true,
+            mpd_binary: None,
+            mpd_config: None,
             // Bind to localhost by default; override with --listen (or config)
             // only when you intend to expose the (currently unauthenticated) API
             // beyond this machine. See AGENTS.md / security notes.

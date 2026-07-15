@@ -9,12 +9,17 @@ use mpd_client::commands::SongPosition;
 use mpd_client::tag::Tag;
 use mpd_client::Client;
 use mpd_protocol::command::Command;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn is_localhost(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "::1" | "localhost" | "0.0.0.0")
+}
 
 #[derive(Clone)]
 pub struct Mpd {
@@ -24,6 +29,9 @@ pub struct Mpd {
 struct MpdInner {
     host: String,
     port: u16,
+    autostart: bool,
+    binary: Option<String>,
+    config_path: Option<PathBuf>,
     conn: Mutex<Option<MpdConnection>>,
     connect_lock: Mutex<()>,
     active_track: Mutex<Option<i64>>,
@@ -42,16 +50,99 @@ pub struct MpdStatus {
 }
 
 impl Mpd {
-    pub async fn connect(host: &str, port: u16) -> Self {
+    pub async fn connect(
+        host: &str,
+        port: u16,
+        autostart: bool,
+        binary: Option<String>,
+        config_path: Option<PathBuf>,
+    ) -> Self {
         Mpd {
             inner: Arc::new(MpdInner {
                 host: host.to_string(),
                 port,
+                autostart,
+                binary,
+                config_path,
                 conn: Mutex::new(None),
                 connect_lock: Mutex::new(()),
                 active_track: Mutex::new(None),
             }),
         }
+    }
+
+    /// Ensure MPD is reachable. If it is already up we return immediately.
+    /// Otherwise, when autostart is enabled and MPD runs on the local machine,
+    /// we launch the `mpd` daemon and retry the connection for a few seconds.
+    /// This keeps the app usable on boot without requiring MPD to be started
+    /// separately (the connection itself is lazy, so commands would otherwise
+    /// fail until MPD comes up).
+    pub async fn ensure_running(&self) -> AppResult<()> {
+        if self.client().await.is_ok() {
+            tracing::info!("MPD reachable at {}:{}", self.inner.host, self.inner.port);
+            return Ok(());
+        }
+
+        if !self.inner.autostart {
+            return Err(AppError::Mpd(format!(
+                "MPD not reachable at {}:{} and autostart is disabled",
+                self.inner.host, self.inner.port
+            )));
+        }
+
+        if !is_localhost(&self.inner.host) {
+            return Err(AppError::Mpd(format!(
+                "MPD not reachable at {}:{} (autostart only supported for local MPD)",
+                self.inner.host, self.inner.port
+            )));
+        }
+
+        tracing::warn!(
+            "MPD not reachable at {}:{}; attempting to start it",
+            self.inner.host,
+            self.inner.port
+        );
+        self.start_daemon().await?;
+
+        for attempt in 1..=20 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if self.client().await.is_ok() {
+                tracing::info!("MPD started at {}:{}", self.inner.host, self.inner.port);
+                return Ok(());
+            }
+            tracing::debug!("MPD not up yet, retry {attempt}/20");
+        }
+        Err(AppError::Mpd(format!(
+            "launched mpd but it did not become reachable at {}:{}",
+            self.inner.host, self.inner.port
+        )))
+    }
+
+    /// Spawn the `mpd` daemon. MPD daemonizes by default, so the child process
+    /// exits promptly after forking; we wait for that (or for the foreground run
+    /// to finish) and surface a clear error if it fails.
+    async fn start_daemon(&self) -> AppResult<()> {
+        let binary = self
+            .inner
+            .binary
+            .clone()
+            .unwrap_or_else(|| "mpd".to_string());
+        let mut cmd = tokio::process::Command::new(&binary);
+        if let Some(cfg) = &self.inner.config_path {
+            cmd.arg(cfg);
+        }
+        cmd.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let status = cmd
+            .status()
+            .await
+            .map_err(|e| AppError::Mpd(format!("failed to launch '{binary}': {e}")))?;
+        if !status.success() {
+            return Err(AppError::Mpd(format!(
+                "'{binary}' exited with {status}; check the MPD config"
+            )));
+        }
+        Ok(())
     }
 
     /// Return a live MPD client, (re)connecting lazily if the cached

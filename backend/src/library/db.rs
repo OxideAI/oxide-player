@@ -283,19 +283,6 @@ impl LibraryDb {
         Ok(track)
     }
 
-    pub fn track_by_uri(&self, uri: &str) -> AppResult<Option<Track>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let track = conn
-            .query_row(
-                &format!("SELECT {TRACK_COLS} FROM tracks WHERE uri = ?"),
-                [uri],
-                |r| Ok(row_to_track(r)),
-            )
-            .optional()
-            .map_err(|e| AppError::Library(e.to_string()))?;
-        Ok(track)
-    }
-
     /// Delete every track whose backing file no longer exists on disk
     /// (e.g. the user deleted an album). Returns the number removed.
     pub fn prune_missing(&self) -> AppResult<u64> {
@@ -472,14 +459,6 @@ impl LibraryDb {
             out.push(row.map_err(|e| AppError::Library(e.to_string()))?);
         }
         Ok(out)
-    }
-
-    pub fn count(&self) -> AppResult<u64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let c: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
-            .map_err(|e| AppError::Library(e.to_string()))?;
-        Ok(c as u64)
     }
 }
 

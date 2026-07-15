@@ -49,7 +49,18 @@ async fn main() -> anyhow::Result<()> {
         config.camilladsp_capture_rate.unwrap_or(DEFAULT_CAPTURE_RATE),
     );
 
-    let mpd = mpd::Mpd::connect(&config.mpd_host, config.mpd_port).await;
+    let mpd = mpd::Mpd::connect(
+        &config.mpd_host,
+        config.mpd_port,
+        config.mpd_autostart,
+        config.mpd_binary.clone(),
+        config.mpd_config.clone(),
+    )
+    .await;
+
+    if let Err(e) = mpd.ensure_running().await {
+        tracing::warn!("MPD not started: {e}");
+    }
 
     let state = state::AppState::new(config, db, dsp, mpd);
     state.spawn_status_poller();
