@@ -1,25 +1,39 @@
 .wrap {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  max-width: 640px;
+  gap: 1.2rem;
+  max-width: 680px;
 }
 
 .h {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .dim {
   color: var(--text-dim);
+  font-size: 0.92rem;
+}
+
+.eyebrow {
+  display: inline-block;
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
 }
 
 .error {
-  background: rgba(255, 107, 107, 0.15);
+  background: var(--danger-soft);
   color: var(--danger);
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--radius);
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--r-sm);
   font-size: 0.9rem;
+  border: 1px solid var(--danger);
 }
 
 .list {
@@ -28,43 +42,68 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.7rem;
 }
 
 .rowOn,
 .rowOff {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  padding: 1rem 1.1rem;
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-glow);
+  transition: border-color 0.5s var(--ease), transform 0.5s var(--ease);
+}
+.rowOn {
+  border-color: rgba(110, 231, 183, 0.3);
+}
+.rowOn:hover,
+.rowOff:hover {
+  transform: translateY(-2px);
 }
 
 .name {
   font-weight: 600;
+  font-size: 1rem;
 }
 
 .id {
-  color: var(--text-dim);
-  font-size: 0.8rem;
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.15rem;
 }
 
 .on,
 .off {
-  border-radius: var(--radius);
-  padding: 0.4rem 0.9rem;
-  border: 1px solid var(--border);
-  background: var(--bg-elev-2);
+  border-radius: var(--r-pill);
+  padding: 0.5rem 1.1rem;
+  border: 1px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: transform 0.4s var(--ease), background 0.4s var(--ease),
+    border-color 0.4s var(--ease), color 0.4s var(--ease);
 }
-
 .on {
-  color: var(--accent-2);
-  border-color: var(--accent-2);
+  color: var(--accent);
+  border-color: rgba(110, 231, 183, 0.4);
+  background: var(--accent-soft);
 }
-
+.on:active,
+.off:active {
+  transform: scale(0.96);
+}
 .off {
   color: var(--text-dim);
+}
+.off:hover {
+  border-color: var(--hairline-strong);
+  color: var(--text);
 }

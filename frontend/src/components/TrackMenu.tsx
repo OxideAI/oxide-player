@@ -14,6 +14,24 @@ interface Props {
   onError?: (msg: string) => void
 }
 
+function Dots() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden>
+      <circle cx="6" cy="12" r="1.7" />
+      <circle cx="12" cy="12" r="1.7" />
+      <circle cx="18" cy="12" r="1.7" />
+    </svg>
+  )
+}
+
+function MI({ d }: { d: string }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d={d} />
+    </svg>
+  )
+}
+
 export function TrackMenu({ tracks, label, onPlayNext, onClearAndPlay, onAdded, onError }: Props) {
   const [open, setOpen] = useState(false)
   const [showPlaylists, setShowPlaylists] = useState(false)
@@ -70,7 +88,7 @@ export function TrackMenu({ tracks, label, onPlayNext, onClearAndPlay, onAdded, 
           setOpen((v) => !v)
         }}
       >
-        ⋮
+        <Dots />
       </button>
       {open && (
         <div className={styles.trackMenuPop} onClick={(e) => e.stopPropagation()}>
@@ -86,7 +104,8 @@ export function TrackMenu({ tracks, label, onPlayNext, onClearAndPlay, onAdded, 
                 )
             }}
           >
-            ▶ Play next
+            <MI d="M5 5v14l11-7-11-7zM18 5v14" />
+            Play next
           </button>
           <button
             className={styles.trackMenuItem}
@@ -100,14 +119,17 @@ export function TrackMenu({ tracks, label, onPlayNext, onClearAndPlay, onAdded, 
                 )
             }}
           >
-            ⟳ Clear and play
+            <MI d="M5 5v14l11-7-11-7zM19 5a2 2 0 1 0 0 0" />
+            Clear and play
           </button>
           <button className={styles.trackMenuItem} onClick={() => void openPlaylists()}>
-            ＋ Add to playlist…
+            <MI d="M12 5v14M5 12h14" />
+            Add to playlist…
           </button>
           {single && (
             <button className={styles.trackMenuItem} onClick={() => setInfoTrack(single)}>
-              ⓘ File info
+              <MI d="M12 8v.01M11 11h1v5h1" />
+              File info
             </button>
           )}
         </div>

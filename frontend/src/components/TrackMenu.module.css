@@ -5,77 +5,123 @@
 }
 
 .trackMenuBtn {
-  border: none;
-  background: transparent;
+  border: 1px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-dim);
-  font-size: 1.1rem;
-  line-height: 1;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
   cursor: pointer;
-  padding: 0.15rem 0.4rem;
-  border-radius: 6px;
+  box-shadow: var(--inset-hi);
+  transition: transform 0.4s var(--ease), background 0.4s var(--ease),
+    color 0.4s var(--ease), border-color 0.4s var(--ease);
 }
-
 .trackMenuBtn:hover {
-  background: var(--bg-elev);
+  background: rgba(255, 255, 255, 0.09);
   color: var(--text);
+  transform: scale(1.05);
+}
+.trackMenuBtn:active {
+  transform: scale(0.92);
+}
+.trackMenuBtn :global(svg) {
+  transition: transform 0.4s var(--ease);
+}
+.trackMenuBtn:hover :global(svg) {
+  transform: rotate(90deg);
 }
 
 .trackMenuPop {
   position: absolute;
   right: 0;
-  top: 1.6rem;
+  top: calc(100% + 8px);
   z-index: 30;
-  min-width: 12rem;
-  background: var(--bg-elev-2);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  padding: 0.35rem;
+  min-width: 13rem;
+  background: rgba(12, 14, 18, 0.72);
+  backdrop-filter: blur(30px) saturate(150%);
+  -webkit-backdrop-filter: blur(30px) saturate(150%);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--inset-hi), 0 30px 70px -28px rgba(0, 0, 0, 0.9);
+  padding: 0.4rem;
   display: flex;
   flex-direction: column;
+  transform-origin: top right;
+  animation: oxPop 0.4s var(--ease) both;
 }
 
 .trackMenuItem {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
   width: 100%;
   text-align: left;
   border: none;
   background: transparent;
   color: var(--text);
-  padding: 0.5rem 0.6rem;
-  border-radius: 7px;
+  padding: 0.55rem 0.6rem;
+  border-radius: var(--r-sm);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
+  transition: background 0.35s var(--ease), color 0.35s var(--ease),
+    transform 0.35s var(--ease);
 }
-
 .trackMenuItem:hover {
-  background: var(--accent);
-  color: #fff;
+  background: var(--accent-soft);
+  color: var(--accent);
+  transform: translateX(2px);
+}
+.trackMenuItem :global(svg) {
+  flex: none;
+  opacity: 0.8;
 }
 
 .trackMenuModal {
   position: fixed;
   inset: 0;
-  z-index: 50;
-  background: rgba(0, 0, 0, 0.55);
+  z-index: 70;
+  background: rgba(4, 5, 7, 0.6);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
+  padding: 1.2rem;
+  animation: oxScrim 0.5s var(--ease) both;
+}
+@keyframes oxScrim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
-.trackMenuModalBox {
-  background: var(--bg-elev-2);
-  border-radius: 14px;
-  padding: 1.1rem 1.2rem;
-  min-width: 16rem;
-  max-width: 22rem;
+.trackMenuModalBox,
+.fileInfoBox {
+  background: rgba(12, 14, 18, 0.78);
+  backdrop-filter: blur(40px) saturate(150%);
+  -webkit-backdrop-filter: blur(40px) saturate(150%);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--inset-hi), 0 50px 110px -40px rgba(0, 0, 0, 0.95);
+  padding: 1.5rem 1.6rem;
+  min-width: 18rem;
+  max-width: 24rem;
   width: 100%;
+  max-height: 84vh;
+  overflow: auto;
+  animation: oxPop 0.5s var(--ease) both;
 }
 
 .trackMenuModalTitle {
   font-weight: 600;
-  margin-bottom: 0.6rem;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.8rem;
 }
 
 .trackMenuPlaylistList {
@@ -84,6 +130,9 @@
   padding: 0;
   max-height: 50vh;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .trackMenuEmpty {
@@ -93,54 +142,60 @@
 }
 
 .trackMenuClose {
-  margin-top: 0.8rem;
+  margin-top: 1rem;
   width: 100%;
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
-  background: transparent;
+  border: 1px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text);
-  padding: 0.45rem;
-  border-radius: 8px;
+  padding: 0.6rem;
+  border-radius: var(--r-pill);
   cursor: pointer;
+  font-weight: 500;
+  transition: background 0.4s var(--ease), border-color 0.4s var(--ease);
+}
+.trackMenuClose:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: var(--hairline-strong);
 }
 
-/* File info modal */
+/* —— File info modal —— */
 .fileInfoBox {
-  background: var(--bg-elev-2);
-  border-radius: 14px;
-  padding: 1.2rem 1.3rem;
-  min-width: 18rem;
-  max-width: 26rem;
-  width: 100%;
-  max-height: 80vh;
-  overflow: auto;
+  max-width: 27rem;
 }
 
 .fileInfoHead {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.6rem;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
 }
 
 .fileInfoTitle {
   font-weight: 600;
   font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fileInfoSection {
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  margin: 0.9rem 0 0.3rem;
+  letter-spacing: 0.16em;
+  font-size: 0.64rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 1.1rem 0 0.45rem;
 }
 
 .fileInfoRow {
   display: grid;
   grid-template-columns: 7.5rem 1fr;
   gap: 0.5rem;
-  padding: 0.18rem 0;
-  font-size: 0.88rem;
+  padding: 0.22rem 0;
+  font-size: 0.86rem;
   word-break: break-word;
 }
 

@@ -3,6 +3,7 @@ import type { Track } from '../types'
 import { api } from '../api'
 import { fmtTime, displayTitle } from '../util'
 import { TrackMenu } from './TrackMenu'
+import { Reveal } from './Reveal'
 import styles from './LibraryView.module.css'
 
 interface Props {
@@ -62,14 +63,8 @@ export function LibraryView({
     if (toastTimer.current !== undefined) window.clearTimeout(toastTimer.current)
   }, [])
 
-  // Highlight from the backend's actual now-playing state so the row is
-  // correct even when playback started elsewhere (other view, kiosk, etc.).
-  // Match on id, not uri: every CUE track in a file shares the same uri, so
-  // uri-only matching would light up the whole album.
   const nowId = nowPlayingId ?? (playingUri ? tracks.find((t) => t.uri === playingUri)?.id ?? null : null)
 
-  // Once the backend confirms playback (covers clicks made elsewhere too),
-  // drop the local click feedback so it can't linger in another folder.
   useEffect(() => {
     if (nowPlayingUri) setPlayingUri(null)
   }, [nowPlayingUri])
@@ -151,91 +146,108 @@ export function LibraryView({
     }
   }
 
+  const count =
+    loading
+      ? 'loading…'
+      : current
+        ? `${current.tracks.length} tracks`
+        : `${filteredFolders.length} / ${folders.length} albums`
+
   return (
     <div className={styles.wrap}>
       {toast && <div className={styles.toast}>{toast}</div>}
+
       <div className={styles.toolbar}>
         {current && (
-          <button className={styles.refresh} onClick={() => setOpenFolder(null)}>
-            ← Folders
+          <button className={styles.ghost} onClick={() => setOpenFolder(null)}>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 6l-6 6 6 6" />
+            </svg>
+            Folders
           </button>
         )}
-        <input
-          className={styles.search}
-          placeholder={current ? 'Search this folder…' : 'Search albums, artists…'}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <button className={styles.refresh} onClick={onRefresh}>
-          ↻ Refresh library
+        <div className={styles.searchShell}>
+          <svg className={styles.searchIcon} viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="M20 20l-3.6-3.6" />
+          </svg>
+          <input
+            className={styles.search}
+            placeholder={current ? 'Search this folder…' : 'Search albums, artists…'}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <button className={styles.pill} onClick={onRefresh}>
+          Refresh
         </button>
-        <button className={styles.refresh} onClick={rescanArt}>
-          🖼 Rescan art
+        <button className={styles.pill} onClick={rescanArt}>
+          Rescan art
         </button>
-        <span className={styles.count}>
-          {loading
-            ? 'loading…'
-            : current
-              ? `${current.tracks.length} tracks`
-              : `${filteredFolders.length} / ${folders.length} albums`}
-        </span>
+        <span className={styles.count}>{count}</span>
       </div>
 
       {error && <div className={styles.error}>{error}</div>}
 
       {!loading && !error && tracks.length === 0 && (
         <div className={styles.empty}>
+          <div className={styles.emptyMark}>♪</div>
           <p>The library is empty.</p>
-          <button className={styles.refresh} onClick={onRefresh}>
-            ↻ Scan music folder
+          <button className={styles.pill} onClick={onRefresh}>
+            Scan music folder
           </button>
         </div>
       )}
 
       {!loading && !error && tracks.length > 0 && !current && (
         <div className={styles.grid}>
-          {filteredFolders.map((f) => (
-            <button key={f.key} className={styles.tile} onClick={() => setOpenFolder(f.key)}>
-              <div className={styles.tileArt}>
-                {f.coverId !== null ? (
-                  <img src={api.coverUrl(f.coverId)} alt="" loading="lazy" />
-                ) : (
-                  <span className={styles.tileArtPh}>♪</span>
-                )}
-              </div>
-              <div className={styles.tileName} title={f.name}>
-                {f.name}
-              </div>
-              <div className={styles.tileArtist} title={f.artist ?? ''}>
-                {f.artist ?? '—'}
-              </div>
-            </button>
+          {filteredFolders.map((f, i) => (
+            <Reveal key={f.key} delay={Math.min(i * 35, 350)}>
+              <button className={styles.tile} onClick={() => setOpenFolder(f.key)}>
+                <span className={styles.tileShell}>
+                  <span className={styles.tileCore}>
+                    {f.coverId !== null ? (
+                      <img src={api.coverUrl(f.coverId)} alt="" loading="lazy" />
+                    ) : (
+                      <span className={styles.tilePh}>♪</span>
+                    )}
+                  </span>
+                </span>
+                <span className={styles.tileName} title={f.name}>
+                  {f.name}
+                </span>
+                <span className={styles.tileArtist} title={f.artist ?? ''}>
+                  {f.artist ?? '—'}
+                </span>
+              </button>
+            </Reveal>
           ))}
         </div>
       )}
 
       {!loading && !error && current && (
-        <>
+        <div className={styles.album}>
           <div className={styles.albumHead}>
-            <div className={styles.albumArt}>
-              {current.coverId !== null ? (
-                <img src={api.coverUrl(current.coverId)} alt="" />
-              ) : (
-                <span className={styles.tileArtPh}>♪</span>
-              )}
-            </div>
+            <span className={styles.albumShell}>
+              <span className={styles.albumCore}>
+                {current.coverId !== null ? (
+                  <img src={api.coverUrl(current.coverId)} alt="" />
+                ) : (
+                  <span className={styles.tilePh}>♪</span>
+                )}
+              </span>
+            </span>
             <div className={styles.albumInfo}>
+              <span className={styles.eyebrow}>Album</span>
               <div className={styles.albumTitle}>{current.name}</div>
               <div className={styles.albumArtist}>{current.artist ?? '—'}</div>
               <div className={styles.albumMeta}>{current.tracks.length} tracks</div>
             </div>
-            <TrackMenu
-              tracks={current.tracks}
-              label="Album actions"
-              onAdded={notify}
-              onError={setError}
-            />
+            <div className={styles.albumActions}>
+              <TrackMenu tracks={current.tracks} label="Album actions" onAdded={notify} onError={setError} />
+            </div>
           </div>
+
           <ul className={styles.list}>
             {current.tracks
               .filter((t) => {
@@ -255,14 +267,27 @@ export function LibraryView({
                   }
                   onClick={() => play(t)}
                 >
+                  <span className={styles.tPos}>
+                    {nowId === t.id ? (
+                      <span className={styles.rowEq} aria-hidden>
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                    ) : (
+                      (t.track ?? '') || '·'
+                    )}
+                  </span>
                   <span className={styles.tTitle}>{displayTitle(t)}</span>
                   <span className={styles.tArtist}>{t.artist ?? '—'}</span>
                   <span className={styles.tTime}>{fmtTime(t.duration)}</span>
-                  <TrackMenu tracks={[t]} onAdded={notify} onError={setError} />
+                  <span className={styles.rowMenu}>
+                    <TrackMenu tracks={[t]} onAdded={notify} onError={setError} />
+                  </span>
                 </li>
               ))}
           </ul>
-        </>
+        </div>
       )}
     </div>
   )

@@ -11,11 +11,13 @@ interface Props {
 
 export function QueueView({ queue, onJump, onRemove, onClose }: Props) {
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} role="dialog" aria-label="Play queue">
       <div className={styles.head}>
-        <span className={styles.title}>Queue · {queue.entries.length}</span>
+        <span className={styles.eyebrow}>Queue · {queue.entries.length}</span>
         <button className={styles.close} onClick={onClose} aria-label="Close queue">
-          ✕
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+            <path d="M6 6l12 12M18 6 6 18" />
+          </svg>
         </button>
       </div>
       <ul className={styles.list}>
@@ -31,6 +33,13 @@ export function QueueView({ queue, onJump, onRemove, onClose }: Props) {
               onClick={() => onJump(t.pos)}
             >
               <span className={styles.pos}>{t.pos + 1}</span>
+              {active && (
+                <span className={styles.live} aria-hidden>
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              )}
               <span className={styles.meta}>
                 <span className={styles.tTitle}>{displayTitle(t)}</span>
                 <span className={styles.tArtist}>{t.artist ?? t.album ?? '—'}</span>
@@ -44,7 +53,9 @@ export function QueueView({ queue, onJump, onRemove, onClose }: Props) {
                   onRemove(t.pos)
                 }}
               >
-                ✕
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
               </button>
             </li>
           )

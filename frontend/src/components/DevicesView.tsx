@@ -41,7 +41,10 @@ export function DevicesView() {
 
   return (
     <div className={styles.wrap}>
-      <h2 className={styles.h}>Output devices</h2>
+      <div>
+        <span className={styles.eyebrow}>System</span>
+        <h2 className={styles.h}>Output devices</h2>
+      </div>
       {error && <div className={styles.error}>{error}</div>}
       {loading && <p className={styles.dim}>loading…</p>}
       {!loading && !error && devices.length === 0 && (

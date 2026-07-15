@@ -1,17 +1,57 @@
 :root {
   color-scheme: dark;
-  --bg: #0b0d10;
-  --bg-elev: #14181d;
-  --bg-elev-2: #1c2127;
-  --border: #2a3138;
-  --text: #e7ecf0;
-  --text-dim: #9aa6b0;
-  --text-faint: #6b7680;
-  --accent: #4cc2ff;
-  --accent-2: #7ee0a8;
-  --danger: #ff6b6b;
-  --radius: 10px;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  /* —— Ethereal Glass palette — OLED black + dual-tone orbs —— */
+  --bg: #050507;
+  --bg-solid: #0a0b0e;
+  --bg-elev: rgba(255, 255, 255, 0.04);
+  --bg-elev-2: rgba(255, 255, 255, 0.07);
+  --bg-elev-3: rgba(255, 255, 255, 0.11);
+
+  --hairline: rgba(255, 255, 255, 0.08);
+  --hairline-strong: rgba(255, 255, 255, 0.15);
+
+  --text: #f3f5f8;
+  --text-dim: #99a2ad;
+  --text-faint: #5d666f;
+
+  /* emerald + indigo dual accent for the mesh */
+  --accent: #6ee7b7;
+  --accent-press: #45d6a0;
+  --accent-2: #8b9cff;
+  --accent-soft: rgba(110, 231, 183, 0.16);
+  --danger: #fb7185;
+  --danger-soft: rgba(251, 113, 133, 0.16);
+
+  /* —— Typography —— */
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+
+  /* —— Geometry —— */
+  --r-sm: 12px;
+  --r-md: 18px;
+  --r-lg: 28px;
+  --r-xl: 36px;
+  --r-pill: 999px;
+
+  /* —— Motion: spring-like mass, never linear —— */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* —— Depth —— */
+  --inset-hi: inset 0 1px 1px rgba(255, 255, 255, 0.14),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+  --glow: 0 30px 80px -28px rgba(0, 0, 0, 0.85);
+  --glow-accent: 0 14px 40px -14px rgba(110, 231, 183, 0.45);
+
+  --nav-h: 64px;
+  --dock-h: 96px;
+
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 * {
@@ -28,6 +68,42 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
+  overflow: hidden;
+}
+
+/* fixed radial mesh — two slow-drifting orbs behind everything */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -20vmax;
+  z-index: -2;
+  background:
+    radial-gradient(38vmax 38vmax at 18% 12%, rgba(110, 231, 183, 0.14), transparent 60%),
+    radial-gradient(42vmax 42vmax at 84% 78%, rgba(139, 156, 255, 0.16), transparent 62%),
+    radial-gradient(30vmax 30vmax at 60% 30%, rgba(255, 255, 255, 0.035), transparent 60%);
+  filter: blur(10px);
+  animation: meshDrift 26s var(--ease-soft) infinite alternate;
+}
+
+/* fixed film-grain — single GPU layer, never attached to scroll */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@keyframes meshDrift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(2vmax, -1.5vmax, 0) scale(1.06);
+  }
 }
 
 button {
@@ -37,11 +113,45 @@ button {
 }
 
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: inherit;
 }
 
 a {
   color: var(--accent);
+  text-decoration: none;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* thin, ghosted scrollbars to keep the glass clean */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 99px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
