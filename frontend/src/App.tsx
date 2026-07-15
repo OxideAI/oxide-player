@@ -21,8 +21,12 @@ export function App() {
   const [status, setStatus] = useState<PlayerStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>(() => {
-    const saved = localStorage.getItem('oxide:tab')
-    return saved === 'library' || saved === 'playlists' || saved === 'settings' ? saved : 'library'
+    try {
+      const saved = localStorage.getItem('oxide:tab')
+      return TABS.some((t) => t.id === saved) ? (saved as Tab) : 'library'
+    } catch {
+      return 'library'
+    }
   })
   const [refreshToken, setRefreshToken] = useState(0)
   const [navOpen, setNavOpen] = useState(false)

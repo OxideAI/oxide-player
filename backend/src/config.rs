@@ -35,21 +35,21 @@ pub struct Config {
     pub default_dsp_profiles: Vec<crate::dsp::profile::DspProfile>,
 }
 
+fn read_json_config(path: &Path) -> Result<Config> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading config {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| "parsing config json")
+}
+
 impl Config {
     pub fn load(file: Option<&std::path::Path>, cli: &Cli) -> anyhow::Result<Config> {
         let mut config = match file {
-            Some(path) => {
-                let text = std::fs::read_to_string(path)
-                    .with_context(|| format!("reading config {}", path.display()))?;
-                serde_json::from_str(&text).with_context(|| "parsing config json")?
-            }
+            Some(path) => read_json_config(path)?,
             None => {
                 let defaults = Config::default_config();
                 let persisted = defaults.data_dir.join("config.json");
                 if persisted.exists() {
-                    let text = std::fs::read_to_string(&persisted)
-                        .with_context(|| format!("reading config {}", persisted.display()))?;
-                    serde_json::from_str(&text).with_context(|| "parsing config json")?
+                    read_json_config(&persisted)?
                 } else {
                     defaults
                 }
