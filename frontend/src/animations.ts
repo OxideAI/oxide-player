@@ -51,12 +51,13 @@ const io: IntersectionObserver | null =
       )
     : null
 
-export function observeReveal(el: HTMLElement | null, delay = 0) {
-  if (!el) return
+export function observeReveal(el: HTMLElement | null, delay = 0): () => void {
+  if (!el) return () => {}
   if (delay) el.style.transitionDelay = `${delay}ms`
   if (!io) {
     el.classList.add('is-in')
-    return
+    return () => {}
   }
   io.observe(el)
+  return () => io.unobserve(el)
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PlayerStatus } from './types'
 import { api } from './api'
 import { NowPlaying } from './components/NowPlaying'
@@ -26,6 +26,11 @@ export function App() {
   const [refreshToken, setRefreshToken] = useState(0)
   const [navOpen, setNavOpen] = useState(false)
   const [kiosk] = useState(() => window.location.pathname === '/kiosk')
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (overlayRef.current) overlayRef.current.inert = !navOpen
+  }, [navOpen])
 
   const loadStatus = useCallback(async () => {
     try {
@@ -170,7 +175,14 @@ export function App() {
 
       <div className={`${styles.scrim} ${navOpen ? styles.scrimOn : ''}`} onClick={() => setNavOpen(false)} />
 
-      <div className={`${styles.overlay} ${navOpen ? styles.overlayOn : ''}`} aria-hidden={!navOpen}>
+      <div
+        ref={overlayRef}
+        className={`${styles.overlay} ${navOpen ? styles.overlayOn : ''}`}
+        aria-hidden={!navOpen}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setNavOpen(false)
+        }}
+      >
         <div className={styles.overlayInner}>
           {TABS.map((t, i) => (
             <Reveal
