@@ -101,8 +101,8 @@ Minimum fields:
 ## Usage
 
 - **Library:** browse albums/tracks, search, refresh the scan or re-scan cover art.
-- **Queue:** tap the ☰ button in the player bar to open the queue; tap a track to jump to
-  it, tap ✕ to remove it. The shuffle 🔀 button toggles MPD random mode.
+- **Queue:** tap the **view queue** button in the player bar to open the queue; tap a track
+  to jump to it, tap ✕ to remove it. The shuffle 🔀 button toggles MPD random mode.
 - **Settings / DSP:** edit the CamillaDSP profile and toggle output devices.
 - **Kiosk:** open `/kiosk` (or provision the optional systemd kiosk service).
 
