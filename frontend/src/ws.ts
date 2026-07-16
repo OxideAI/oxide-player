@@ -58,9 +58,9 @@ export function usePlayerStatus(): PlayerState {
           return
         }
         if (event.type === 'status') {
-          setState((s) => ({ ...s, status: event.Status }))
+          setState((s) => ({ ...s, status: event }))
         } else if (event.type === 'queue') {
-          setState((s) => ({ ...s, queue: event.Queue }))
+          setState((s) => ({ ...s, queue: event }))
         }
       }
 
