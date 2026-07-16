@@ -71,6 +71,10 @@ export interface PlayerStatus {
   random: boolean
 }
 
+export type StatusEvent =
+  | { type: 'status'; Status: PlayerStatus }
+  | { type: 'queue'; Queue: QueueResponse }
+
 export type DspMode = 'bit_perfect' | 'resample'
 export type ResamplePreset = 'balanced' | 'high' | 'extreme'
 export type EqBandType = 'peaking' | 'low_shelf' | 'high_shelf'

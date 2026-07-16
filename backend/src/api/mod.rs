@@ -2,7 +2,7 @@ use crate::dsp::profile::DspProfile;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::types::{PlaybackState, Track};
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{Path, Query, Request, State, ws::WebSocketUpgrade};
 use axum::handler::HandlerWithoutStateExt;
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -45,6 +45,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/playback/play-next", post(play_next))
         .route("/api/playback/clear-play", post(clear_play))
         .route("/api/queue", get(queue))
+        .route("/api/ws", get(ws))
         .route("/api/playback/shuffle", post(shuffle_queue))
         .route("/api/playback/jump", post(jump))
         .route("/api/playback/remove", post(remove))
@@ -79,6 +80,75 @@ pub async fn router(state: AppState) -> Router {
 
 async fn status(State(s): State<AppState>) -> AppResult<Json<crate::types::PlayerStatus>> {
     Ok(Json(s.status_snapshot().await))
+}
+
+/// Stream player status and queue changes over a WebSocket. On connect the
+/// client receives the current snapshot (one `Status` + one `Queue` event) so it
+/// is in sync immediately, then every subsequent change is forwarded as a JSON
+/// `StatusEvent`. Lagging clients (slower than the 32-slot backlog) drop old
+/// messages and resync on their next reconnect, which is acceptable: push
+/// updates are best-effort and the snapshot on connect is authoritative.
+async fn ws(
+    ws: WebSocketUpgrade,
+    State(s): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| async move {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::sync::broadcast::error::RecvError;
+
+        let (mut writer, _reader) = socket.split();
+        let mut rx = s.subscribe_events();
+
+        // Seed the client with the current state before draining the stream.
+        let snapshot_status = s.status_snapshot().await;
+        let snapshot_queue = s.queue_snapshot().await;
+        for event in [
+            crate::types::StatusEvent::Status(snapshot_status),
+            crate::types::StatusEvent::Queue(snapshot_queue),
+        ] {
+            match serde_json::to_string(&event) {
+                Ok(text) => {
+                    if writer
+                        .send(axum::extract::ws::Message::Text(text.into()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("ws snapshot serialize failed: {e}");
+                    return;
+                }
+            }
+        }
+
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let text = match serde_json::to_string(&event) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::warn!("ws event serialize failed: {e}");
+                            continue;
+                        }
+                    };
+                    if writer
+                        .send(axum::extract::ws::Message::Text(text.into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(n)) => {
+                    tracing::debug!("ws client lagged, dropped {n} messages");
+                    continue;
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    })
 }
 
 #[derive(Deserialize)]
@@ -527,6 +597,7 @@ async fn play_next(State(s): State<AppState>, Json(b): Json<serde_json::Value>) 
     for t in tracks.iter().rev() {
         enqueue(&s, t).await?;
     }
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -549,6 +620,7 @@ async fn clear_play(State(s): State<AppState>, Json(b): Json<serde_json::Value>)
     for t in tracks[1..].iter().rev() {
         enqueue(&s, t).await?;
     }
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -608,6 +680,7 @@ async fn playlist_play(
     s.mpd().play_playlist(&name).await?;
     // Refresh the cached status so the UI reflects the new queue immediately.
     let _ = s.refresh_status().await;
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -660,21 +733,9 @@ async fn playlist_delete(
     Ok(StatusCode::OK)
 }
 
-/// Position of the current song within `entries`, or `None` when nothing is
-/// playing. Uses the cached current song id from the 1s status poller instead
-/// of a second MPD round-trip. `QueueEntry.id` and `current_id` are both MPD
-/// SongIds (not DB track ids), so the comparison is sound.
-async fn current_pos(s: &AppState, entries: &[crate::types::QueueEntry]) -> Option<u32> {
-    match s.status_snapshot().await.current_id {
-        Some(id) => entries.iter().position(|e| e.id == id).map(|p| p as u32),
-        None => None,
-    }
-}
-
 async fn queue(State(s): State<AppState>) -> AppResult<Json<crate::types::QueueResponse>> {
-    let entries = s.mpd().queue().await?;
-    let current_pos = current_pos(&s, &entries).await;
-    Ok(Json(crate::types::QueueResponse { entries, current: current_pos }))
+    let resp = s.queue_snapshot_and_broadcast().await;
+    Ok(Json(resp))
 }
 
 #[derive(Deserialize)]
@@ -684,6 +745,7 @@ struct ShuffleBody {
 
 async fn shuffle_queue(State(s): State<AppState>, Json(b): Json<ShuffleBody>) -> AppResult<StatusCode> {
     s.mpd().random(b.on).await?;
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -694,6 +756,7 @@ struct JumpBody {
 
 async fn jump(State(s): State<AppState>, Json(b): Json<JumpBody>) -> AppResult<StatusCode> {
     s.mpd().play_position(b.pos).await?;
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -704,6 +767,7 @@ struct RemoveBody {
 
 async fn remove(State(s): State<AppState>, Json(b): Json<RemoveBody>) -> AppResult<StatusCode> {
     s.mpd().delete_position(b.pos).await?;
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -711,7 +775,7 @@ async fn clear_queue(State(s): State<AppState>) -> AppResult<StatusCode> {
     let entries = s.mpd().queue().await?;
     // Skip the currently playing/paused song so playback is uninterrupted.
     // When nothing is current, every entry is removed.
-    let current_pos = current_pos(&s, &entries).await;
+    let current_pos = s.current_pos(&entries).await;
     // Delete from the highest position down so earlier indices stay valid.
     for pos in (0..entries.len() as u32).rev() {
         if Some(pos) == current_pos {
@@ -719,5 +783,6 @@ async fn clear_queue(State(s): State<AppState>) -> AppResult<StatusCode> {
         }
         s.mpd().delete_position(pos).await?;
     }
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }

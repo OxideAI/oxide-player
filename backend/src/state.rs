@@ -2,10 +2,10 @@ use crate::config::Config;
 use crate::dsp::DspManager;
 use crate::library::LibraryDb;
 use crate::mpd::{Mpd, MpdStatus};
-use crate::types::{PlaybackState, PlayerStatus};
+use crate::types::{PlaybackState, PlayerStatus, QueueResponse, StatusEvent};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,6 +19,10 @@ struct Inner {
     pub dsp: DspManager,
     pub mpd: Mpd,
     pub status: RwLock<PlayerStatus>,
+    /// Push channel carrying player-status and queue changes to WebSocket
+    /// clients. A late-joining client receives the current snapshot on connect
+    /// (see `api::ws`), so dropped/old messages are harmless.
+    pub event_tx: broadcast::Sender<StatusEvent>,
     /// Serializes library scans so concurrent scan/refresh requests can't stack
     /// blocking-pool tasks and starve the runtime.
     pub scan_lock: tokio::sync::Mutex<()>,
@@ -33,6 +37,10 @@ impl AppState {
         config_path: Option<PathBuf>,
     ) -> Self {
         let profiles = config.default_dsp_profiles.clone();
+        // Capacity covers a small backlog so a momentarily-slow WS client
+        // doesn't block the sender; lagging receivers resync on their next
+        // reconnect rather than replaying every missed frame.
+        let (event_tx, _) = broadcast::channel(32);
         let state = AppState {
             inner: Arc::new(Inner {
                 config: RwLock::new(config),
@@ -41,6 +49,7 @@ impl AppState {
                 dsp,
                 mpd,
                 status: RwLock::new(PlayerStatus::stopped()),
+                event_tx,
                 scan_lock: tokio::sync::Mutex::new(()),
             }),
         };
@@ -92,6 +101,46 @@ impl AppState {
 
     pub async fn status_snapshot(&self) -> PlayerStatus {
         self.inner.status.read().await.clone()
+    }
+
+    /// Subscribe a WebSocket client to status/queue events. The caller must send
+    /// the current snapshot itself (see `api::ws`) before draining this
+    /// receiver so the client starts in sync.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<StatusEvent> {
+        self.inner.event_tx.subscribe()
+    }
+
+    /// Current queue snapshot (entries + highlighted position).
+    pub async fn queue_snapshot(&self) -> QueueResponse {
+        match self.inner.mpd.queue().await {
+            Ok(entries) => {
+                let current = self.current_pos(&entries).await;
+                QueueResponse { entries, current }
+            }
+            Err(_) => QueueResponse {
+                entries: Vec::new(),
+                current: None,
+            },
+        }
+    }
+
+    /// Snapshot the queue and push it to WS clients. Used by `GET /api/queue`
+    /// and the queue-mutating endpoints so connected clients update instantly
+    /// regardless of whether the change came from this UI or MPD directly.
+    pub async fn queue_snapshot_and_broadcast(&self) -> QueueResponse {
+        let snapshot = self.queue_snapshot().await;
+        let _ = self.inner.event_tx.send(StatusEvent::Queue(snapshot.clone()));
+        snapshot
+    }
+
+    /// Broadcast the current queue to WS clients without returning it. Called by
+    /// mutation endpoints (remove, jump, shuffle, …) so the UI updates the very
+    /// next frame instead of waiting for the 1s poller to notice.
+    pub async fn broadcast_queue_now(&self) {
+        let _ = self
+            .inner
+            .event_tx
+            .send(StatusEvent::Queue(self.queue_snapshot().await));
     }
 
     /// Acquire the scan serialization guard (held across a scan/refresh).
@@ -177,6 +226,19 @@ impl AppState {
             Ok(o) => o,
             Err(_) => Vec::new(),
         };
+        // Push the new status to WS clients.
+        let _ = self.inner.event_tx.send(StatusEvent::Status(status.clone()));
+    }
+
+    /// Position of the current song within `entries`, or `None` when nothing is
+    /// playing. Uses the cached current song id from the status snapshot instead
+    /// of a second MPD round-trip. `QueueEntry.id` and `current_id` are both MPD
+    /// SongIds (not DB track ids), so the comparison is sound.
+    pub async fn current_pos(&self, entries: &[crate::types::QueueEntry]) -> Option<u32> {
+        match self.status_snapshot().await.current_id {
+            Some(id) => entries.iter().position(|e| e.id == id).map(|p| p as u32),
+            None => None,
+        }
     }
 
     /// Resolve the now-playing track from the library. Runs synchronous SQLite
@@ -446,6 +508,39 @@ mod tests {
         assert_eq!(song.album.as_deref(), Some("Cesaria Evora &"));
         assert!(song.has_cover);
         assert_eq!(song.cover_key.as_deref(), Some("al_coverkey"));
+        });
+    }
+
+    /// Regression for #3: a freshly subscribed broadcast receiver must receive
+    /// a `Status` event after `refresh_status` writes a new snapshot. This is
+    /// the mechanism the `/api/ws` handler relies on to push live updates.
+    #[test]
+    fn refresh_status_broadcasts_status_event() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (state, _db) = test_state();
+            let mut rx = state.subscribe_events();
+
+            // `refresh_status` will fail to reach MPD (no server) and mark the
+            // status stopped — but it must still broadcast that change.
+            state.refresh_status().await;
+
+            // The receiver should get at least one Status event.
+            let mut got_status = false;
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+            while tokio::time::Instant::now() < deadline {
+                match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                    Ok(Ok(crate::types::StatusEvent::Status(_))) => {
+                        got_status = true;
+                        break;
+                    }
+                    Ok(Ok(_)) => continue,
+                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                    Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+                    Err(_) => continue,
+                }
+            }
+            assert!(got_status, "refresh_status must broadcast a Status event");
         });
     }
 }

@@ -1,4 +1,4 @@
-import type { PlayerStatus } from '../types'
+import type { PlayerStatus, QueueResponse } from '../types'
 import { api } from '../api'
 import { fmtTime, displayTitle, audioQuality } from '../util'
 import { useDragValue, useSmoothElapsed } from './playerHooks'
@@ -6,6 +6,7 @@ import styles from './KioskView.module.css'
 
 interface Props {
   status: PlayerStatus | null
+  queue: QueueResponse | null
   onTogglePlay: () => void
   onNext: () => void
   onPrev: () => void
