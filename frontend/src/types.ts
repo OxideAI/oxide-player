@@ -71,6 +71,13 @@ export interface PlayerStatus {
   random: boolean
 }
 
+// Mirrors the backend's `StatusEvent` (serde internally-tagged enum). The
+// variant struct is flattened into the object next to `type` — there is no
+// `Status`/`Queue` wrapper key.
+export type StatusEvent =
+  | ({ type: 'status' } & PlayerStatus)
+  | ({ type: 'queue' } & QueueResponse)
+
 export type DspMode = 'bit_perfect' | 'resample'
 export type ResamplePreset = 'balanced' | 'high' | 'extreme'
 export type EqBandType = 'peaking' | 'low_shelf' | 'high_shelf'

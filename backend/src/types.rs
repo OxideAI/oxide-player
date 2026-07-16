@@ -50,7 +50,7 @@ pub struct Track {
 }
 
 /// A single entry in the play queue.
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct QueueEntry {
     pub pos: u32,
     pub id: u64,
@@ -62,7 +62,7 @@ pub struct QueueEntry {
 }
 
 /// The play queue plus the position of the currently playing entry.
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct QueueResponse {
     pub entries: Vec<QueueEntry>,
     pub current: Option<u32>,
@@ -104,6 +104,17 @@ pub struct PlayerStatus {
     pub outputs: Vec<OutputDevice>,
     pub error: Option<String>,
     pub random: bool,
+}
+
+/// A message pushed to connected WebSocket clients. Carries the full state the
+/// UI needs so a single stream replaces the `/api/status` + `/api/queue` polls.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StatusEvent {
+    /// Sent on connect and whenever the player status changes.
+    Status(PlayerStatus),
+    /// Sent on connect and whenever the queue content or playing position changes.
+    Queue(QueueResponse),
 }
 
 impl PlayerStatus {
