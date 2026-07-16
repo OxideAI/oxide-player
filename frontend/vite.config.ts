@@ -63,8 +63,13 @@ export default defineConfig({
     }),
   ],
   server: {
+    // Bind all interfaces so devices on the LAN (e.g. a phone) can reach the
+    // dev server, not just localhost on this machine.
+    host: '0.0.0.0',
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
+      // `ws: true` lets the /api/ws upgrade pass through to the backend;
+      // without it the WebSocket connection fails on the client.
+      '/api': { target: 'http://127.0.0.1:8000', ws: true },
     },
   },
   build: {
