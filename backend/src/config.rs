@@ -17,6 +17,15 @@ pub struct Config {
     pub mpd_binary: Option<String>,
     #[serde(default)]
     pub mpd_config: Option<PathBuf>,
+    /// Absolute path to MPD's `music_directory`. The library DB stores
+    /// absolute file paths, but MPD addresses tracks by URIs *relative* to its
+    /// music directory (e.g. `MyMusic/Artist/Album.flac`). When this is set we
+    /// convert the absolute path to that relative URI; for CUE tracks we append
+    /// `.cue/trackNNNN` so the individual split track is played. When unset, the
+    /// absolute path is passed through (works only if MPD's music directory
+    /// matches the OS path layout).
+    #[serde(default)]
+    pub mpd_music_directory: Option<PathBuf>,
     pub listen: String,
     pub data_dir: PathBuf,
     pub library_dirs: Vec<PathBuf>,
@@ -80,6 +89,7 @@ impl Config {
             mpd_autostart: true,
             mpd_binary: None,
             mpd_config: None,
+            mpd_music_directory: None,
             // Bind to localhost by default; override with --listen (or config)
             // only when you intend to expose the (currently unauthenticated) API
             // beyond this machine. See AGENTS.md / security notes.

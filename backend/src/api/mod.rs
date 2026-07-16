@@ -242,11 +242,17 @@ struct PlayBody {
 async fn play(State(s): State<AppState>, Json(b): Json<PlayBody>) -> AppResult<StatusCode> {
     match b.uri {
         Some(uri) => {
-            let mpd_uri = resolve_play_uri(&s, &uri).await;
-            match (b.start, b.end) {
-                (Some(start), end) => s.mpd().play_uri_range(&mpd_uri, start, end).await?,
-                (None, Some(end)) => s.mpd().play_uri_range(&mpd_uri, 0.0, Some(end)).await?,
-                (None, None) => s.mpd().play_uri(&mpd_uri).await?,
+            let (mpd_uri, is_cue) = resolve_play_uri(&s, &uri, b.track_id).await;
+            // CUE splits are addressed directly; applying the per-track
+            // start/end offset would seek into the wrong position.
+            if is_cue {
+                s.mpd().play_uri(&mpd_uri).await?;
+            } else {
+                match (b.start, b.end) {
+                    (Some(start), end) => s.mpd().play_uri_range(&mpd_uri, start, end).await?,
+                    (None, Some(end)) => s.mpd().play_uri_range(&mpd_uri, 0.0, Some(end)).await?,
+                    (None, None) => s.mpd().play_uri(&mpd_uri).await?,
+                }
             }
             s.mpd().set_active_track(b.track_id).await;
         }
@@ -394,23 +400,85 @@ fn into_tracks(b: serde_json::Value) -> Vec<TrackRef> {
     }
 }
 
-/// Resolve a track `uri` to an absolute filesystem path MPD can `add`, falling
-/// back to the raw `uri` when no path is stored (e.g. CUE tracks, or tracks not
-/// in the DB). MPD's `music_directory` may differ from where files actually
-/// live, so feeding it an absolute path sidesteps that mismatch.
-async fn resolve_play_uri(s: &AppState, uri: &str) -> String {
-    match s.db().path_for_uri(uri) {
-        Ok(Some(p)) => p,
-        _ => uri.to_string(),
-    }
+/// Resolve a track to the URI MPD can actually `add`.
+///
+/// MPD addresses tracks by a path *relative to its `music_directory`* (e.g.
+/// `MyMusic/Artist/Album.flac`), not by absolute OS paths. We convert the
+/// library DB's absolute `path` accordingly when `mpd_music_directory` is
+/// configured. For CUE-split tracks MPD exposes each split as
+/// `<file>.cue/trackNNNN`, so we return that and signal that no start/end
+/// offset should be applied (the split already isolates the track).
+async fn resolve_play_uri(s: &AppState, uri: &str, track_id: Option<i64>) -> (String, bool) {
+    let cfg = s.config().await;
+    let music_dir = cfg.mpd_music_directory.as_deref();
+
+    // Prefer the DB row for this exact track so we get its `path` and, for CUE,
+    // its `cue_index`.
+    let track = track_id.and_then(|id| s.db().track_by_id(id).ok().flatten());
+    let (path, cue_index) = match &track {
+        Some(t) => (Some(t.path.clone()), t.cue_index),
+        None => (s.db().path_for_uri(uri).ok().flatten(), None),
+    };
+
+    let abs = match path {
+        Some(p) => p,
+        None => return (uri.to_string(), false),
+    };
+
+    let rel = match music_dir {
+        Some(dir) => match std::path::Path::new(&abs).strip_prefix(dir) {
+            Ok(rel) => rel.to_string_lossy().to_string(),
+            Err(_) => {
+                tracing::warn!(
+                    "mpd_music_directory ({}) is not a prefix of track path ({}); \
+                     passing the absolute path through, MPD add may fail",
+                    dir.display(),
+                    abs
+                );
+                abs.clone()
+            }
+        },
+        None => abs.clone(),
+    };
+
+    let result = if let Some(cue) = cue_index {
+        // MPD represents each CUE split as `<file>.cue/trackNNNN`, where `<file>`
+        // is the *audio file's stem* (extension dropped), not the full path.
+        // e.g. `Album.flac` -> `Album.cue/track0001`.
+        match std::path::Path::new(&rel).file_stem() {
+            Some(stem) => {
+                let stem = stem.to_string_lossy().to_string();
+                let parent = std::path::Path::new(&rel)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let cue_uri = if parent.is_empty() {
+                    format!("{stem}.cue/track{cue:04}")
+                } else {
+                    format!("{parent}/{stem}.cue/track{cue:04}")
+                };
+                (cue_uri, true)
+            }
+            // No usable stem (e.g. a path that is all extension) — fall back to
+            // the plain relative URI rather than building a malformed CUE URI.
+            None => (rel, false),
+        }
+    } else {
+        (rel, false)
+    };
+    result
 }
 
 /// Insert `t` immediately after the currently playing song and record it as the
 /// active (highlighted) track. Uses the DB track id from the request; never the
 /// MPD song id, which is a different namespace (see AGENTS.md).
 async fn enqueue(s: &AppState, t: &TrackRef) -> AppResult<()> {
-    let mpd_uri = resolve_play_uri(s, &t.uri).await;
-    s.mpd().play_next(&mpd_uri, t.start.unwrap_or(0.0), t.end).await?;
+    let (mpd_uri, is_cue) = resolve_play_uri(s, &t.uri, t.track_id).await;
+    if is_cue {
+        s.mpd().play_next(&mpd_uri, 0.0, None).await?;
+    } else {
+        s.mpd().play_next(&mpd_uri, t.start.unwrap_or(0.0), t.end).await?;
+    }
     s.mpd().set_active_track(t.track_id).await;
     Ok(())
 }
@@ -438,8 +506,12 @@ async fn clear_play(State(s): State<AppState>, Json(b): Json<serde_json::Value>)
     // First track becomes the new queue; play it. Remaining ones are appended in
     // order after it (reverse-inserted for the same ordering reason as above).
     let first = &tracks[0];
-    let mpd_uri = resolve_play_uri(&s, &first.uri).await;
-    s.mpd().play_uri_range(&mpd_uri, first.start.unwrap_or(0.0), first.end).await?;
+    let (mpd_uri, is_cue) = resolve_play_uri(&s, &first.uri, first.track_id).await;
+    if is_cue {
+        s.mpd().play_uri(&mpd_uri).await?;
+    } else {
+        s.mpd().play_uri_range(&mpd_uri, first.start.unwrap_or(0.0), first.end).await?;
+    }
     s.mpd().set_active_track(first.track_id).await;
     for t in tracks[1..].iter().rev() {
         enqueue(&s, t).await?;
@@ -459,7 +531,7 @@ async fn playlist_add(
 ) -> AppResult<StatusCode> {
     require_playlist(&s, &name).await?;
     for t in into_tracks(b.tracks) {
-        let mpd_uri = resolve_play_uri(&s, &t.uri).await;
+        let (mpd_uri, _) = resolve_play_uri(&s, &t.uri, t.track_id).await;
         s.mpd().add_to_playlist(&name, &mpd_uri).await?;
     }
     Ok(StatusCode::OK)
