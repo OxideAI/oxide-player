@@ -17,17 +17,38 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'settings', label: 'Settings' },
 ]
 
+interface Route {
+  tab: Tab
+  album: string | null
+}
+
+function parsePath(): Route {
+  const raw = window.location.pathname.replace(/^\/+/, '')
+  const parts = raw.split('/').filter(Boolean)
+  const head = parts[0] as Tab | undefined
+  if (head && TABS.some((t) => t.id === head)) {
+    if (head === 'library' && parts[1]) {
+      try {
+        return { tab: head, album: decodeURIComponent(parts[1]) }
+      } catch {
+        return { tab: head, album: parts[1] }
+      }
+    }
+    return { tab: head, album: null }
+  }
+  return { tab: 'library', album: null }
+}
+
+function buildPath(route: Route): string {
+  if (route.tab === 'library' && route.album) return `/library/${encodeURIComponent(route.album)}`
+  return `/${route.tab}`
+}
+
 export function App() {
   const [status, setStatus] = useState<PlayerStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>(() => {
-    try {
-      const saved = localStorage.getItem('oxide:tab')
-      return TABS.some((t) => t.id === saved) ? (saved as Tab) : 'library'
-    } catch {
-      return 'library'
-    }
-  })
+  const [route, setRoute] = useState<Route>(() => parsePath())
+  const tab = route.tab
   const [refreshToken, setRefreshToken] = useState(0)
   const [navOpen, setNavOpen] = useState(false)
   const [kiosk] = useState(() => window.location.pathname === '/kiosk')
@@ -36,6 +57,12 @@ export function App() {
   useEffect(() => {
     if (overlayRef.current) overlayRef.current.inert = !navOpen
   }, [navOpen])
+
+  useEffect(() => {
+    const onPop = () => setRoute(parsePath())
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
 
   const loadStatus = useCallback(async () => {
     try {
@@ -142,8 +169,11 @@ export function App() {
   }
 
   const go = (t: Tab) => {
-    setTab(t)
-    localStorage.setItem('oxide:tab', t)
+    setRoute((r) => {
+      const next = { tab: t, album: t === 'library' ? r.album : null }
+      window.history.pushState(null, '', buildPath(next))
+      return next
+    })
     setNavOpen(false)
   }
 
@@ -223,6 +253,14 @@ export function App() {
             nowPlayingUri={status?.current_song?.uri ?? null}
             nowPlayingId={status?.current_song?.id ?? null}
             isPlaying={status?.state === 'playing'}
+            album={route.album}
+            onAlbumChange={(album) => {
+              setRoute((r) => {
+                const next = { tab: r.tab, album }
+                window.history.pushState(null, '', buildPath(next))
+                return next
+              })
+            }}
           />
         )}
         {tab === 'playlists' && <PlaylistsView />}

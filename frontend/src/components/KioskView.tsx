@@ -36,11 +36,19 @@ export function KioskView({
 
   return (
     <div className={styles.kiosk}>
-      <a className={styles.exit} href="/" title="Back to library" aria-label="Back to library">
+      <button
+        className={styles.exit}
+        onClick={() => {
+          if (window.history.length > 1) window.history.back()
+          else window.location.pathname = window.location.pathname.replace(/\/kiosk$/, '') || '/'
+        }}
+        title="Back"
+        aria-label="Back"
+      >
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
           <path d="M6 6l12 12M18 6 6 18" />
         </svg>
-      </a>
+      </button>
 
       <div className={styles.stage}>
         <div className={styles.art} style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
