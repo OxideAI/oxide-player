@@ -43,6 +43,10 @@ pub struct Track {
     pub end_time: Option<f64>,
     /// Last-modified time of the underlying file (unix seconds), if readable.
     pub file_mtime: Option<i64>,
+    /// Absolute library source folder that produced this track (one of the
+    /// configured `library_dirs`). Lets us drop every track of a removed source
+    /// and surface which source(s) an album came from (issue #46).
+    pub source: Option<String>,
 }
 
 /// A single entry in the play queue.

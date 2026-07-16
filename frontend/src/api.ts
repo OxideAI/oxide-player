@@ -1,4 +1,5 @@
 import type {
+  AlbumSources,
   Config,
   DspProfile,
   OutputDevice,
@@ -26,6 +27,8 @@ export const api = {
     return fetch(`/api/library${qs}`).then((r) => json<Track[]>(r))
   },
   albums: () => fetch('/api/library/albums').then((r) => json<string[]>(r)),
+  albumSources: () =>
+    fetch('/api/library/albums/sources').then((r) => json<AlbumSources[]>(r)),
   artists: () => fetch('/api/library/artists').then((r) => json<string[]>(r)),
   coverUrl: (key: string | number) => `/api/cover/${key}`,
   // Prefer the album-level cover key; fall back to the track id for rows not

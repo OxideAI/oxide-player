@@ -29,7 +29,13 @@ export interface Track extends TrackRef {
   start_time: number | null
   end_time: number | null
   file_mtime: number | null
+  source: string | null
 }
+
+/// An album paired with the library source folder(s) that produced it. A single
+/// album can list more than one source when parent/child sources are both
+/// configured (issue #46).
+export type AlbumSources = [string, string[]]
 
 export interface QueueItem {
   pos: number
