@@ -1,7 +1,7 @@
 use crate::dsp::profile::DspProfile;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
-use crate::types::Track;
+use crate::types::{PlaybackState, Track};
 use axum::extract::{Path, Query, Request, State};
 use axum::handler::HandlerWithoutStateExt;
 use axum::http::{header, StatusCode};
@@ -274,12 +274,27 @@ async fn stop(State(s): State<AppState>) -> AppResult<StatusCode> {
 }
 
 async fn next(State(s): State<AppState>) -> AppResult<StatusCode> {
-    s.mpd().next().await?;
+    if s.mpd().status().await?.state == PlaybackState::Stopped {
+        let pos = s.mpd().queue_position().await?;
+        let len = s.mpd().queue().await?.len() as u32;
+        s.mpd().play_position(pos.saturating_add(1).min(len.saturating_sub(1))).await?;
+    } else {
+        s.mpd().next().await?;
+    }
     Ok(StatusCode::OK)
 }
 
 async fn prev(State(s): State<AppState>) -> AppResult<StatusCode> {
-    s.mpd().previous().await?;
+    if s.mpd().status().await?.state == PlaybackState::Stopped {
+        let pos = s.mpd().queue_position().await?;
+        if pos == 0 {
+            s.mpd().play_position(0).await?;
+        } else {
+            s.mpd().play_position(pos - 1).await?;
+        }
+    } else {
+        s.mpd().previous().await?;
+    }
     Ok(StatusCode::OK)
 }
 
