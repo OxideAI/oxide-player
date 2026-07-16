@@ -260,6 +260,36 @@ impl LibraryDb {
         Ok(out)
     }
 
+    /// MPD addresses a CUE-split track as `<dir>/<stem>.cue/trackNNNN` (see
+    /// `resolve_play_uri` in api/mod.rs). The library DB instead keys CUE
+    /// tracks by the backing *audio file* URI (`<dir>/<stem>.<ext>`) with a
+    /// `cue_index`. After a restart MPD resumes at that `.cue/trackNNNN` URI,
+    /// which the normal URI lookups can't match, so resolve it here: peel the
+    /// `.cue/trackNNNN` suffix to recover the audio-file stem, then match the
+    /// track whose URI is that stem plus any extension and whose cue_index
+    /// equals the track number.
+    pub fn track_by_cue_address(&self, cue_uri: &str) -> AppResult<Option<Track>> {
+        let (stem, cue_index) = match parse_cue_address(cue_uri) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let pattern = format!("{stem}.%");
+        let track = conn
+            .query_row(
+                &format!(
+                    "SELECT {TRACK_COLS} FROM tracks \
+                     WHERE uri LIKE ? AND cue_index = ? \
+                     ORDER BY cue_index IS NOT NULL, id LIMIT 1"
+                ),
+                params![pattern, cue_index],
+                |r| Ok(row_to_track(r)),
+            )
+            .optional()
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        Ok(track)
+    }
+
     pub fn track_by_id(&self, id: i64) -> AppResult<Option<Track>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let track = conn
@@ -540,6 +570,20 @@ impl LibraryDb {
     }
 }
 
+/// Parse MPD's CUE address `<dir>/<stem>.cue/trackNNNN` into the audio-file
+/// stem (`<dir>/<stem>`) and the 1-based track number. Returns `None` for any
+/// URI that isn't a CUE address.
+fn parse_cue_address(cue_uri: &str) -> Option<(String, i32)> {
+    let marker = ".cue/track";
+    let idx = cue_uri.find(marker)?;
+    let stem = &cue_uri[..idx];
+    let num = cue_uri[idx + marker.len()..].parse::<i32>().ok()?;
+    if num <= 0 {
+        return None;
+    }
+    Some((stem.to_string(), num))
+}
+
 fn row_to_track(r: &rusqlite::Row) -> Track {
     Track {
         id: r.get(0).unwrap_or(0),
@@ -720,5 +764,47 @@ mod search_tests {
         put_cue(&db, "Album.flac", 1, 10.0, Some(100.0), 180.0);
         // 5s is before the first split's window.
         assert!(db.track_by_uri_and_elapsed("Album.flac", 5.0).unwrap().is_none());
+    }
+
+    #[test]
+    fn track_by_cue_address_resolves_split_after_restart() {
+        let db = fresh();
+        let id1 = db
+            .insert_track(
+                "Music/Album.flac", "Music/Album.flac", Some("Cue Track"), Some("Artist"),
+                Some("Album"), None, None, None, Some(1), Some(180.0), Some("flac"),
+                Some(44100), Some(16), Some(2), None, Some(1), Some(0.0), Some(100.0), Some(1),
+            )
+            .unwrap();
+        let id2 = db
+            .insert_track(
+                "Music/Album.flac", "Music/Album.flac", Some("Cue Track"), Some("Artist"),
+                Some("Album"), None, None, None, Some(2), Some(180.0), Some("flac"),
+                Some(44100), Some(16), Some(2), None, Some(2), Some(100.0), Some(180.0), Some(1),
+            )
+            .unwrap();
+        db.set_cover(id1, true, Some("al_coverkey")).unwrap();
+        db.set_cover(id2, true, Some("al_coverkey")).unwrap();
+
+        // After a restart MPD resumes at the CUE address URI, not the audio
+        // file URI. The resolver must map it back to the split track.
+        let t = db
+            .track_by_cue_address("Music/Album.cue/track0002")
+            .unwrap();
+        let t = t.expect("CUE address should resolve to a split track");
+        assert_eq!(t.cue_index, Some(2));
+        assert_eq!(t.title.as_deref(), Some("Cue Track"));
+        assert!(t.has_cover, "resolved split keeps its cover metadata");
+        assert_eq!(t.cover_key.as_deref(), Some("al_coverkey"));
+    }
+
+    #[test]
+    fn track_by_cue_address_none_for_plain_uri() {
+        let db = fresh();
+        put_cue(&db, "Album.flac", 1, 0.0, Some(100.0), 180.0);
+        // A plain (non-CUE) audio file URI must not be misread as a CUE address.
+        assert!(db.track_by_cue_address("Album.flac").unwrap().is_none());
+        // An out-of-range / malformed track number yields nothing.
+        assert!(db.track_by_cue_address("Album.cue/track0000").unwrap().is_none());
     }
 }

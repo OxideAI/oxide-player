@@ -198,6 +198,15 @@ impl AppState {
             if by_elapsed.is_some() {
                 return by_elapsed;
             }
+            // After a restart MPD resumes at the CUE address URI
+            // (`<stem>.cue/trackNNNN`), which doesn't match the library DB's
+            // audio-file URI. Map it back to the CUE split by its track number.
+            let by_cue_address = uri_for_blocking
+                .as_ref()
+                .and_then(|u| db.track_by_cue_address(u).ok().flatten());
+            if by_cue_address.is_some() {
+                return by_cue_address;
+            }
             let by_active = active.and_then(|id| {
                 uri_for_blocking.as_ref().and_then(|u| {
                     db.track_by_id(id)
@@ -279,5 +288,92 @@ fn missing_path_from_error(err: &str) -> Option<String> {
         None
     } else {
         Some(path.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::dsp::DspManager;
+    use crate::mpd::{Mpd, MpdStatus};
+    use std::path::Path;
+
+    fn test_state() -> (AppState, LibraryDb) {
+        let db = LibraryDb::open(Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let cfg = Config::default_config();
+        let dsp = DspManager::new(
+            std::env::temp_dir().join("oxide_test_dsp.yaml"),
+            None,
+            "".to_string(),
+            44100,
+            false,
+            None,
+        );
+        let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
+        (AppState::new(cfg, db.clone(), dsp, mpd, None), db)
+    }
+
+    /// Regression: after a restart MPD resumes at the CUE address URI
+    /// (`<stem>.cue/trackNNNN`), which differs from the library DB's audio-file
+    /// URI. The now-playing resolver must map it back to the split track so the
+    /// UI shows the real title/cover and highlights the album row — not a
+    /// fallback "track0005" entry with id 0 and no cover.
+    #[test]
+    fn resolve_current_song_maps_cue_address_after_restart() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+        let (state, db) = test_state();
+
+        // CUE split keyed by the *audio file* URI, with cover metadata.
+        let id = db
+            .insert_track(
+                "Music/Album.flac",
+                "Music/Album.flac",
+                Some("Real Title"),
+                Some("Artist"),
+                Some("Album"),
+                None,
+                None,
+                None,
+                Some(2),
+                Some(80.0),
+                Some("flac"),
+                Some(44100),
+                Some(16),
+                Some(2),
+                None,
+                Some(2),
+                Some(100.0),
+                Some(180.0),
+                Some(1),
+            )
+            .unwrap();
+        db.set_cover(id, true, Some("al_coverkey")).unwrap();
+
+        // Simulate a fresh start: MPD reports the CUE address URI and the
+        // in-memory active_track cache is empty (user hasn't clicked play).
+        let ms = MpdStatus {
+            state: PlaybackState::Playing,
+            volume: 80,
+            elapsed: 120.0,
+            duration: 180.0,
+            error: None,
+            current_uri: Some("Music/Album.cue/track0002".to_string()),
+            current_track: None,
+            current_id: Some(42),
+            random: false,
+        };
+
+        let song = state.resolve_current_song(&ms).await;
+        let song = song.expect("CUE address should resolve to a track");
+
+        assert_eq!(song.id, id, "must resolve to the DB split track, not id 0");
+        assert_eq!(song.title.as_deref(), Some("Real Title"));
+        assert!(song.has_cover, "cover metadata must survive resolution");
+        assert_eq!(song.cover_key.as_deref(), Some("al_coverkey"));
+        assert_eq!(song.cue_start, Some(100.0));
+        });
     }
 }
