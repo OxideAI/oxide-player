@@ -390,10 +390,13 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
 
     let mut scanned = 0u64;
     for path in files {
-        let uri = dirs
-            .iter()
-            .find(|d| path.starts_with(d))
-            .and_then(|d| path.strip_prefix(d).ok())
+        let source = match dirs.iter().find(|d| path.starts_with(d)) {
+            Some(d) => d,
+            None => continue,
+        };
+        let uri = path
+            .strip_prefix(source)
+            .ok()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|| path.to_string_lossy().to_string());
         if referenced.contains(Path::new(&uri)) {
@@ -408,7 +411,7 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
                 continue;
             }
         }
-        if let Err(e) = ingest(&uri, &path, db, cover_dir, mtime) {
+        if let Err(e) = ingest(&uri, &path, source, db, cover_dir, mtime) {
             tracing::warn!("skip {}: {e}", path.display());
         } else {
             scanned += 1;
@@ -448,7 +451,7 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
         }
     }
 
-    if let Ok(pruned) = db.prune_missing(&seen) {
+    if let Ok(pruned) = db.prune_missing(&seen, dirs) {
         if pruned > 0 {
             tracing::info!("pruned {pruned} tracks no longer in the library");
         }
@@ -465,7 +468,7 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
     Ok(scanned)
 }
 
-fn ingest(uri: &str, path: &Path, db: &LibraryDb, cover_dir: &Path, mtime: i64) -> AppResult<()> {
+fn ingest(uri: &str, path: &Path, source: &Path, db: &LibraryDb, cover_dir: &Path, mtime: i64) -> AppResult<()> {
     let tagged = read_from_path(path).map_err(|e| AppError::Library(e.to_string()))?;
     let props = tagged.properties();
 
@@ -509,6 +512,7 @@ fn ingest(uri: &str, path: &Path, db: &LibraryDb, cover_dir: &Path, mtime: i64) 
         None,
         None,
         Some(mtime),
+        source.to_str(),
     )?;
 
     let cover_key = album_key(album_artist.as_deref(), album.as_deref(), id);
@@ -558,6 +562,7 @@ fn ingest_cue(
         Some(ct.start),
         ct.end,
         Some(mtime),
+        library_dir.to_str(),
     )?;
 
     let cover_key = album_key(ct.album_artist.as_deref(), ct.album.as_deref(), id);

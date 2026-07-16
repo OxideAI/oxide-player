@@ -2,18 +2,20 @@ use crate::error::{AppError, AppResult};
 use crate::types::Track;
 use rusqlite::OptionalExtension;
 use rusqlite::{params, Connection};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const TRACK_COLS: &str = "id, uri, path, title, artist, album, album_artist, genre, year, \
 track, duration, format, sample_rate, bit_depth, channels, has_cover, cover_key, cue_index, \
-start_time, end_time, file_mtime";
+start_time, end_time, file_mtime, source";
 // Qualified form used when joining `tracks_fts` (both tables expose
 // title/artist/album and an unqualified reference would be ambiguous).
 const TRACK_COLS_Q: &str = "tracks.id, tracks.uri, tracks.path, tracks.title, tracks.artist, \
 tracks.album, tracks.album_artist, tracks.genre, tracks.year, tracks.track, tracks.duration, \
 tracks.format, tracks.sample_rate, tracks.bit_depth, tracks.channels, tracks.has_cover, \
-tracks.cover_key, tracks.cue_index, tracks.start_time, tracks.end_time, tracks.file_mtime";
+tracks.cover_key, tracks.cue_index, tracks.start_time, tracks.end_time, tracks.file_mtime, \
+tracks.source";
 
 #[derive(Clone)]
 pub struct LibraryDb {
@@ -56,6 +58,7 @@ impl LibraryDb {
                 start_time REAL,
                 end_time REAL,
                 file_mtime INTEGER,
+                source TEXT,
                 UNIQUE(uri, cue_index)
             );
             CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
@@ -116,6 +119,7 @@ impl LibraryDb {
             ("end_time", "REAL"),
             ("file_mtime", "INTEGER"),
             ("cover_key", "TEXT"),
+            ("source", "TEXT"),
         ] {
             let exists: i64 = conn
                 .query_row(
@@ -155,16 +159,17 @@ impl LibraryDb {
         start_time: Option<f64>,
         end_time: Option<f64>,
         file_mtime: Option<i64>,
+        source: Option<&str>,
     ) -> AppResult<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO tracks
-             (uri, path, title, artist, album, album_artist, genre, year, track, duration, format, sample_rate, bit_depth, channels, has_cover, cover_key, cue_index, start_time, end_time, file_mtime)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,?15,?16,?17,?18,?19)",
+             (uri, path, title, artist, album, album_artist, genre, year, track, duration, format, sample_rate, bit_depth, channels, has_cover, cover_key, cue_index, start_time, end_time, file_mtime, source)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,?15,?16,?17,?18,?19,?20)",
             params![
                 uri, path, title, artist, album, album_artist, genre, year, track, duration,
                 format, sample_rate, bit_depth, channels, cover_key, cue_index, start_time,
-                end_time, file_mtime
+                end_time, file_mtime, source
             ],
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
@@ -398,18 +403,41 @@ impl LibraryDb {
         Ok(n as u64)
     }
 
-    pub fn prune_missing(&self, seen: &std::collections::HashSet<PathBuf>) -> AppResult<u64> {
+    /// Delete tracks whose backing file is no longer in the scanned set
+    /// (deleted, newly ignored via `.mpdignore`, or belonging to a library
+    /// source that has since been removed). Returns the number removed.
+    pub fn prune_missing(
+        &self,
+        seen: &std::collections::HashSet<PathBuf>,
+        sources: &[std::path::PathBuf],
+    ) -> AppResult<u64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT id, path FROM tracks")
+            .prepare("SELECT id, path, source FROM tracks")
             .map_err(|e| AppError::Library(e.to_string()))?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
             .map_err(|e| AppError::Library(e.to_string()))?;
+        // Drop tracks whose source folder is no longer among the active
+        // library sources (e.g. the source was removed in settings).
+        let active: HashSet<&str> = sources
+            .iter()
+            .filter_map(|p| p.to_str())
+            .collect();
         let mut ids = Vec::new();
         for row in rows {
-            let (id, path) = row.map_err(|e| AppError::Library(e.to_string()))?;
-            if !seen.contains(Path::new(&path)) {
+            let (id, path, source) = row.map_err(|e| AppError::Library(e.to_string()))?;
+            let source_gone = match &source {
+                Some(s) => !active.contains(s.as_str()),
+                None => false,
+            };
+            if source_gone || !seen.contains(Path::new(&path)) {
                 ids.push(id);
             }
         }
@@ -420,6 +448,18 @@ impl LibraryDb {
                 .map_err(|e| AppError::Library(e.to_string()))?;
         }
         Ok(ids.len() as u64)
+    }
+
+    /// Delete every track produced by the given library source folder (absolute
+    /// path). Used when a source is removed from settings so its albums leave
+    /// the library (issue #46). Returns the number removed.
+    pub fn delete_by_source(&self, source: &Path) -> AppResult<u64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let s = source.to_string_lossy().to_string();
+        let n = conn
+            .execute("DELETE FROM tracks WHERE source = ?", [s])
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        Ok(n as u64)
     }
 
     /// Return the stored absolute filesystem `path` for the whole-file track
@@ -571,6 +611,36 @@ impl LibraryDb {
         self.distinct_column("album")
     }
 
+    /// Return each album paired with the distinct library source folders that
+    /// contributed tracks to it. A single album can span more than one source
+    /// when parent/child library sources are both configured (issue #46).
+    pub fn albums_with_sources(&self) -> AppResult<Vec<(String, Vec<String>)>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT album, source FROM tracks \
+                 WHERE album IS NOT NULL AND source IS NOT NULL \
+                 GROUP BY album, source ORDER BY album, source",
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
+        for row in rows {
+            let (album, source) = row.map_err(|e| AppError::Library(e.to_string()))?;
+            match out.last_mut() {
+                Some((last_album, sources)) if *last_album == album => {
+                    if !sources.contains(&source) {
+                        sources.push(source);
+                    }
+                }
+                _ => out.push((album, vec![source])),
+            }
+        }
+        Ok(out)
+    }
+
     pub fn list_artists(&self) -> AppResult<Vec<String>> {
         self.distinct_column("artist")
     }
@@ -630,6 +700,7 @@ fn row_to_track(r: &rusqlite::Row) -> Track {
         start_time: r.get(18).ok(),
         end_time: r.get(19).ok(),
         file_mtime: r.get(20).ok(),
+        source: r.get(21).ok(),
     }
 }
 
@@ -647,7 +718,7 @@ mod search_tests {
         db.insert_track(
             path, path, Some(title), Some(artist), Some(album), None, None, None,
             Some(1), Some(180.0), Some("flac"), Some(44100), Some(16), Some(2),
-            None, None, None, None, Some(1),
+            None, None, None, None, Some(1), None,
         )
         .unwrap();
     }
@@ -706,7 +777,7 @@ mod search_tests {
         db.insert_track(
             uri, uri, Some("Cue Track"), Some("Artist"), Some("Album"), None, None, None,
             Some(cue_index), Some(duration), Some("flac"), Some(44100), Some(16), Some(2),
-            None, Some(cue_index), Some(start), end, Some(1),
+            None, Some(cue_index), Some(start), end, Some(1), None,
         )
         .unwrap();
     }
@@ -718,7 +789,7 @@ mod search_tests {
         db.insert_track(
             "Album.flac", "Album.flac", Some("Whole"), Some("Artist"), Some("Album"),
             None, None, None, Some(0), Some(180.0), Some("flac"), Some(44100), Some(16),
-            Some(2), None, None, None, None, Some(1),
+            Some(2), None, None, None, None, Some(1), None,
         )
         .unwrap();
         put_cue(&db, "Album.flac", 1, 0.0, Some(100.0), 180.0);
@@ -747,7 +818,7 @@ mod search_tests {
         db.insert_track(
             "Solo.flac", "Solo.flac", Some("Solo"), Some("Artist"), Some("Album"),
             None, None, None, Some(0), Some(180.0), Some("flac"), Some(44100), Some(16),
-            Some(2), None, None, None, None, Some(1),
+            Some(2), None, None, None, None, Some(1), None,
         )
         .unwrap();
         let removed = db.delete_non_cue("Solo.flac").unwrap();
@@ -796,14 +867,14 @@ mod search_tests {
             .insert_track(
                 "Music/Album.flac", "Music/Album.flac", Some("Cue Track"), Some("Artist"),
                 Some("Album"), None, None, None, Some(1), Some(180.0), Some("flac"),
-                Some(44100), Some(16), Some(2), None, Some(1), Some(0.0), Some(100.0), Some(1),
+                Some(44100), Some(16), Some(2), None, Some(1), Some(0.0), Some(100.0), Some(1), None,
             )
             .unwrap();
         let id2 = db
             .insert_track(
                 "Music/Album.flac", "Music/Album.flac", Some("Cue Track"), Some("Artist"),
                 Some("Album"), None, None, None, Some(2), Some(180.0), Some("flac"),
-                Some(44100), Some(16), Some(2), None, Some(2), Some(100.0), Some(180.0), Some(1),
+                Some(44100), Some(16), Some(2), None, Some(2), Some(100.0), Some(180.0), Some(1), None,
             )
             .unwrap();
         db.set_cover(id1, true, Some("al_coverkey")).unwrap();
@@ -862,5 +933,77 @@ mod search_tests {
         let db = fresh();
         put(&db, "/a/1.flac", "Help", "The Beatles", "Help!");
         assert!(db.track_by_uri_suffix("Totally/Different/Path.flac").unwrap().is_none());
+    }
+
+    /// Insert a track tagged with the library `source` that produced it.
+    fn put_src(db: &LibraryDb, path: &str, title: &str, artist: &str, album: &str, source: &str) {
+        db.insert_track(
+            path, path, Some(title), Some(artist), Some(album), None, None, None,
+            Some(1), Some(180.0), Some("flac"), Some(44100), Some(16), Some(2),
+            None, None, None, None, Some(1), Some(source),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn delete_by_source_removes_only_that_sources_tracks() {
+        // Issue #46: removing a library source must drop its albums, not others.
+        let db = fresh();
+        put_src(&db, "/music/A/1.flac", "A1", "Artist", "AlbumA", "/music/A");
+        put_src(&db, "/music/B/1.flac", "B1", "Artist", "AlbumB", "/music/B");
+
+        let removed = db.delete_by_source(Path::new("/music/A")).unwrap();
+        assert_eq!(removed, 1, "only the A-source track is removed");
+
+        // B's track survives and is still searchable.
+        let remaining = db.search(Some("Artist"), None, None, None).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].album.as_deref(), Some("AlbumB"));
+        assert_eq!(remaining[0].source.as_deref(), Some("/music/B"));
+    }
+
+    #[test]
+    fn prune_missing_drops_tracks_of_removed_source() {
+        // Issue #46: a scan over the remaining sources must prune tracks whose
+        // source folder is no longer configured (even if their files still
+        // exist on disk).
+        let db = fresh();
+        put_src(&db, "/music/A/1.flac", "A1", "Artist", "AlbumA", "/music/A");
+        put_src(&db, "/music/B/1.flac", "B1", "Artist", "AlbumB", "/music/B");
+
+        // Only /music/B is still configured; /music/A has been removed.
+        let seen: HashSet<PathBuf> =
+            [PathBuf::from("/music/B/1.flac")].into_iter().collect();
+        let sources = vec![PathBuf::from("/music/B")];
+        let pruned = db.prune_missing(&seen, &sources).unwrap();
+        assert_eq!(pruned, 1, "A-source track pruned by source, not by file");
+
+        let remaining = db.search(None, None, None, None).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].source.as_deref(), Some("/music/B"));
+    }
+
+    #[test]
+    fn albums_with_sources_groups_by_album() {
+        // Issue #46: an album can list more than one contributing source.
+        let db = fresh();
+        put_src(&db, "/music/A/1.flac", "A1", "Artist", "Shared", "/music/A");
+        put_src(&db, "/music/B/1.flac", "B1", "Artist", "Shared", "/music/B");
+        put_src(&db, "/music/A/2.flac", "A2", "Artist", "Solo", "/music/A");
+
+        let albums = db.albums_with_sources().unwrap();
+        let shared = albums
+            .iter()
+            .find(|(a, _)| a == "Shared")
+            .expect("Shared album present");
+        assert_eq!(shared.1.len(), 2, "Shared album spans two sources");
+        assert!(shared.1.contains(&"/music/A".to_string()));
+        assert!(shared.1.contains(&"/music/B".to_string()));
+
+        let solo = albums
+            .iter()
+            .find(|(a, _)| a == "Solo")
+            .expect("Solo album present");
+        assert_eq!(solo.1, vec!["/music/A".to_string()]);
     }
 }

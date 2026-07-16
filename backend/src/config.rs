@@ -137,6 +137,40 @@ impl Config {
         Ok(())
     }
 
+    /// Add a library source folder, deduplicating against the existing set.
+    ///
+    /// - If `path` is already present or is nested inside an existing source,
+    ///   nothing changes and `None` is returned (the add is a no-op / duplicate).
+    /// - If `path` is a parent of one or more existing sources, those child
+    ///   sources are subsumed and removed; they are returned so the caller can
+    ///   drop their tracks. `path` is then appended.
+    ///
+    /// This prevents scanning the same files twice when a parent folder is added
+    /// after a child, or a child after a parent (issue #46).
+    pub fn add_library_dir(
+        &mut self,
+        path: PathBuf,
+    ) -> Option<Vec<PathBuf>> {
+        if self
+            .library_dirs
+            .iter()
+            .any(|d| d == &path || path.starts_with(d))
+        {
+            return None;
+        }
+        let subsumed: Vec<PathBuf> = self
+            .library_dirs
+            .iter()
+            .filter(|d| d.starts_with(&path))
+            .cloned()
+            .collect();
+        if !subsumed.is_empty() {
+            self.library_dirs.retain(|d| !d.starts_with(&path));
+        }
+        self.library_dirs.push(path);
+        Some(subsumed)
+    }
+
     /// Atomically write the config as pretty JSON: serialize to a temp file
     /// beside the target, then rename so a crash mid-write never leaves a
     /// half-written (and therefore unparseable) config.
@@ -286,5 +320,50 @@ mod tests {
         assert_eq!(got.mpd_port, 7700);
         assert_eq!(got.listen, "0.0.0.0:9000");
         assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn add_library_dir_rejects_child_of_existing() {
+        // Issue #46: adding a child folder when its parent is already a source
+        // must be a no-op (the parent already covers it).
+        let mut cfg = Config::default_config();
+        cfg.library_dirs = vec![std::path::PathBuf::from("/music")];
+        let res = cfg.add_library_dir(std::path::PathBuf::from("/music/jazz"));
+        assert!(res.is_none(), "child of existing source must be rejected");
+        assert_eq!(cfg.library_dirs, vec![std::path::PathBuf::from("/music")]);
+    }
+
+    #[test]
+    fn add_library_dir_rejects_exact_duplicate() {
+        let mut cfg = Config::default_config();
+        cfg.library_dirs = vec![std::path::PathBuf::from("/music")];
+        assert!(cfg.add_library_dir(std::path::PathBuf::from("/music")).is_none());
+    }
+
+    #[test]
+    fn add_library_dir_subsumes_existing_children() {
+        // Issue #46: adding a parent folder must drop the now-redundant child
+        // sources and report them so their tracks can be removed.
+        let mut cfg = Config::default_config();
+        cfg.library_dirs = vec![
+            std::path::PathBuf::from("/music/jazz"),
+            std::path::PathBuf::from("/music/rock"),
+        ];
+        let subsumed = cfg
+            .add_library_dir(std::path::PathBuf::from("/music"))
+            .expect("parent add should succeed");
+        assert_eq!(subsumed.len(), 2);
+        assert_eq!(cfg.library_dirs, vec![std::path::PathBuf::from("/music")]);
+    }
+
+    #[test]
+    fn add_library_dir_appends_unrelated() {
+        let mut cfg = Config::default_config();
+        cfg.library_dirs = vec![std::path::PathBuf::from("/music")];
+        let subsumed = cfg
+            .add_library_dir(std::path::PathBuf::from("/other"))
+            .expect("unrelated add should succeed");
+        assert!(subsumed.is_empty());
+        assert_eq!(cfg.library_dirs.len(), 2);
     }
 }

@@ -29,6 +29,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/status", get(status))
         .route("/api/library", get(library_list))
         .route("/api/library/albums", get(library_albums))
+        .route("/api/library/albums/sources", get(library_albums_sources))
         .route("/api/library/artists", get(library_artists))
         .route("/api/cover/{key}", get(cover))
         .route("/api/library/scan", post(library_scan))
@@ -96,6 +97,15 @@ async fn library_list(
 
 async fn library_albums(State(s): State<AppState>) -> AppResult<Json<Vec<String>>> {
     Ok(Json(s.db().list_albums()?))
+}
+
+/// Albums paired with the library source folder(s) that produced them. An album
+/// can list more than one source when parent/child sources are both configured
+/// (issue #46).
+async fn library_albums_sources(
+    State(s): State<AppState>,
+) -> AppResult<Json<Vec<(String, Vec<String>)>>> {
+    Ok(Json(s.db().albums_with_sources()?))
 }
 
 async fn library_artists(State(s): State<AppState>) -> AppResult<Json<Vec<String>>> {
@@ -179,9 +189,14 @@ struct DirBody {
     path: String,
 }
 
-/// Add a music library source folder. Must be an absolute path; duplicates are
-/// ignored. Persists and immediately rescans so the new source is picked up
-/// without a restart.
+/// Add a music library source folder. Must be an absolute path. Persists and
+/// immediately rescans so the new source is picked up without a restart.
+///
+/// Dedupe: a folder already covered by an existing source is rejected — if
+/// `path` is inside an already-added dir (or already added), nothing changes
+/// (`duplicate`). If `path` is a parent of one or more existing sources, those
+/// child sources are dropped (they are now subsumed by `path`) before `path` is
+/// added, so we never scan the same files twice (issue #46).
 async fn config_add_dir(
     State(s): State<AppState>,
     Json(b): Json<DirBody>,
@@ -193,17 +208,29 @@ async fn config_add_dir(
         ));
     }
     let mut cfg = s.config().await;
-    if cfg.library_dirs.iter().any(|d| d == &path) {
+    // Dedupes against existing sources (rejects child-of-existing and exact
+    // duplicates; drops child sources when `path` is their parent).
+    let subsumed = cfg.add_library_dir(path);
+    if subsumed.is_none() {
         return Ok(Json(serde_json::json!({ "scanned": 0, "duplicate": true })));
     }
-    cfg.library_dirs.push(path);
+    let subsumed = subsumed.unwrap();
+    let mut removed_tracks = 0u64;
+    if !subsumed.is_empty() {
+        let db = s.db().clone();
+        for d in &subsumed {
+            removed_tracks += db.delete_by_source(d).map_err(|e| AppError::Library(e.to_string()))?;
+        }
+    }
     s.set_config(cfg).await
         .map_err(|e| AppError::Library(e.to_string()))?;
     let count = run_scan(&s, true).await?;
-    Ok(Json(serde_json::json!({ "scanned": count })))
+    Ok(Json(serde_json::json!({ "scanned": count, "removed": removed_tracks })))
 }
 
-/// Remove a music library source folder by absolute path.
+/// Remove a music library source folder by absolute path. Drops every track
+/// that came from that source so its albums leave the library (issue #46), then
+/// keeps MPD's index in sync.
 async fn config_remove_dir(
     State(s): State<AppState>,
     Json(b): Json<DirBody>,
@@ -217,6 +244,11 @@ async fn config_remove_dir(
     }
     s.set_config(cfg).await
         .map_err(|e| AppError::Library(e.to_string()))?;
+    // Remove tracks produced by this source and resync MPD's index.
+    let db = s.db().clone();
+    let removed = db.delete_by_source(&path).map_err(|e| AppError::Library(e.to_string()))?;
+    tracing::info!("removed {} tracks from deleted source {}", removed, path.display());
+    let _ = s.mpd().rescan().await;
     Ok(StatusCode::OK)
 }
 

@@ -354,6 +354,7 @@ mod tests {
                 Some(100.0),
                 Some(180.0),
                 Some(1),
+                None,
             )
             .unwrap();
         db.set_cover(id, true, Some("al_coverkey")).unwrap();
@@ -415,6 +416,7 @@ mod tests {
                 None,
                 None,
                 Some(1),
+                None,
             )
             .unwrap();
         db.set_cover(id, true, Some("al_coverkey")).unwrap();
