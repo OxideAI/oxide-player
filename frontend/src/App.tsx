@@ -234,7 +234,6 @@ export function App() {
         {tab === 'library' && (
           <LibraryView
             refreshToken={refreshToken}
-            onPlay={api.play}
             onRefresh={refreshLibrary}
             onRescanArt={rescanArt}
             nowPlayingUri={status?.current_song?.uri ?? null}

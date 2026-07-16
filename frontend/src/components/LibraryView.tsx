@@ -8,7 +8,6 @@ import styles from './LibraryView.module.css'
 
 interface Props {
   refreshToken: number
-  onPlay: (uri: string, start?: number, end?: number, trackId?: number) => Promise<unknown>
   onRefresh: () => Promise<void>
   onRescanArt: () => Promise<void>
   nowPlayingUri: string | null
@@ -40,7 +39,6 @@ function trackOrder(a: Track, b: Track): number {
 
 export function LibraryView({
   refreshToken,
-  onPlay,
   onRefresh,
   onRescanArt,
   nowPlayingUri,
@@ -140,7 +138,9 @@ export function LibraryView({
   const play = async (t: Track) => {
     setPlayingUri(t.uri)
     try {
-      await onPlay(t.uri, t.start_time ?? undefined, t.end_time ?? undefined, t.id)
+      await api.clearAndPlay([
+        { uri: t.uri, start: t.start_time ?? undefined, end: t.end_time ?? undefined, track_id: t.id },
+      ])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
