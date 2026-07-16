@@ -192,9 +192,6 @@ impl AppState {
             let by_elapsed = uri_for_blocking
                 .as_ref()
                 .and_then(|u| db.track_by_uri_and_elapsed(u, elapsed).ok().flatten());
-            // If a CUE track matches the current playback position, always
-            // prefer it: the active/by_id row is the full-file (non-CUE) entry
-            // whose elapsed/duration reflect the whole album, not this track.
             if by_elapsed.is_some() {
                 return by_elapsed;
             }
@@ -220,7 +217,16 @@ impl AppState {
                     .ok()
                     .flatten()
             });
-            by_active.or(by_uri)
+            // MPD reports URIs relative to its `music_directory`, while the DB
+            // stores them relative to the scanned library dir — the two differ
+            // by a leading segment (e.g. MPD `MyMusic/Artist/Album.flac` vs DB
+            // `Artist/Album.flac`). Match by suffix so a restart (where the
+            // in-memory active-track cache is empty) still resolves the track
+            // and its title/cover.
+            let by_suffix = uri_for_blocking
+                .as_ref()
+                .and_then(|u| db.track_by_uri_suffix(u).ok().flatten());
+            by_active.or(by_uri).or(by_suffix)
         })
         .await
         .ok()
@@ -374,6 +380,70 @@ mod tests {
         assert!(song.has_cover, "cover metadata must survive resolution");
         assert_eq!(song.cover_key.as_deref(), Some("al_coverkey"));
         assert_eq!(song.cue_start, Some(100.0));
+        });
+    }
+
+    /// Regression: MPD reports URIs relative to its `music_directory`, while the
+    /// DB stores them relative to the scanned library dir. After a restart the
+    /// in-memory active-track cache is empty, so the resolver must match the
+    /// MPD URI against the DB URI by suffix (e.g. MPD `MyMusic/A/09.flac` vs DB
+    /// `A/09.flac`) and recover title/artist/album/cover — not a fallback.
+    #[test]
+    fn resolve_current_song_matches_mpd_uri_by_suffix_after_restart() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+        let (state, db) = test_state();
+
+        let id = db
+            .insert_track(
+                "Cesaria Evora/09 - Historia De Un Amor.m4a",
+                "/music/Cesaria Evora/09 - Historia De Un Amor.m4a",
+                Some("Historia De Un Amor"),
+                Some("Cesaria Evora"),
+                Some("Cesaria Evora &"),
+                None,
+                None,
+                None,
+                Some(9),
+                Some(237.0),
+                Some("m4a"),
+                Some(44100),
+                Some(16),
+                Some(2),
+                None,
+                None,
+                None,
+                None,
+                Some(1),
+            )
+            .unwrap();
+        db.set_cover(id, true, Some("al_coverkey")).unwrap();
+
+        // Simulate a restart: MPD reports the URI prefixed with the
+        // music_directory segment (`MyMusic/...`) and active_track is empty.
+        let ms = MpdStatus {
+            state: PlaybackState::Playing,
+            volume: 49,
+            elapsed: 10.0,
+            duration: 237.0,
+            error: None,
+            current_uri: Some(
+                "MyMusic/Cesaria Evora/09 - Historia De Un Amor.m4a".to_string(),
+            ),
+            current_track: Some(9),
+            current_id: Some(19),
+            random: false,
+        };
+
+        let song = state.resolve_current_song(&ms).await;
+        let song = song.expect("MPD URI suffix should resolve to a track");
+
+        assert_eq!(song.id, id);
+        assert_eq!(song.title.as_deref(), Some("Historia De Un Amor"));
+        assert_eq!(song.artist.as_deref(), Some("Cesaria Evora"));
+        assert_eq!(song.album.as_deref(), Some("Cesaria Evora &"));
+        assert!(song.has_cover);
+        assert_eq!(song.cover_key.as_deref(), Some("al_coverkey"));
         });
     }
 }

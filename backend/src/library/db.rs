@@ -358,6 +358,29 @@ impl LibraryDb {
         Ok(track)
     }
 
+    /// Look up a track whose stored `uri` is a suffix of `mpd_uri`. MPD reports
+    /// URIs relative to its `music_directory`, while the DB stores them relative
+    /// to the scanned library dir — the two differ by a leading path segment
+    /// (e.g. MPD `MyMusic/Artist/Album.flac` vs DB `Artist/Album.flac`). A pure
+    /// prefix strip can't always compute that segment, so match by suffix: the
+    /// DB uri is the tail of the MPD uri for the same file.
+    pub fn track_by_uri_suffix(&self, mpd_uri: &str) -> AppResult<Option<Track>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let track = conn
+            .query_row(
+                &format!(
+                    "SELECT {TRACK_COLS} FROM tracks \
+                     WHERE ? LIKE '%/' || uri OR ? = uri \
+                     ORDER BY length(uri) DESC LIMIT 1"
+                ),
+                params![mpd_uri, mpd_uri],
+                |r| Ok(row_to_track(r)),
+            )
+            .optional()
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        Ok(track)
+    }
+
     /// Delete tracks whose backing file is no longer in the scanned set
     /// (deleted or newly ignored via `.mpdignore`). Returns the number removed.
     /// Delete the non-CUE (whole-file) row for `uri`, if one exists while CUE
@@ -806,5 +829,38 @@ mod search_tests {
         assert!(db.track_by_cue_address("Album.flac").unwrap().is_none());
         // An out-of-range / malformed track number yields nothing.
         assert!(db.track_by_cue_address("Album.cue/track0000").unwrap().is_none());
+    }
+
+    #[test]
+    fn track_by_uri_suffix_matches_mpd_prefixed_uri() {
+        let db = fresh();
+        put(
+            &db,
+            "Cesaria Evora/09 - Historia De Un Amor.m4a",
+            "Historia De Un Amor",
+            "Cesaria Evora",
+            "Cesaria Evora &",
+        );
+        let id = db
+            .track_by_uri_cue("Cesaria Evora/09 - Historia De Un Amor.m4a", None)
+            .unwrap()
+            .unwrap()
+            .id;
+        db.set_cover(id, true, Some("al_coverkey")).unwrap();
+        // MPD reports the URI relative to its music_directory, so it carries an
+        // extra leading segment the DB doesn't store. Suffix match must land.
+        let t = db
+            .track_by_uri_suffix("MyMusic/Cesaria Evora/09 - Historia De Un Amor.m4a")
+            .unwrap();
+        let t = t.expect("suffix match should resolve the track");
+        assert_eq!(t.title.as_deref(), Some("Historia De Un Amor"));
+        assert!(t.has_cover);
+    }
+
+    #[test]
+    fn track_by_uri_suffix_none_when_no_overlap() {
+        let db = fresh();
+        put(&db, "/a/1.flac", "Help", "The Beatles", "Help!");
+        assert!(db.track_by_uri_suffix("Totally/Different/Path.flac").unwrap().is_none());
     }
 }
