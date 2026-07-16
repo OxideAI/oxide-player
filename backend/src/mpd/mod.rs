@@ -57,6 +57,18 @@ impl Mpd {
         binary: Option<String>,
         config_path: Option<PathBuf>,
     ) -> Self {
+        Self::with_connection(host, port, autostart, binary, config_path)
+    }
+
+    /// Build an `Mpd` without performing any async work (used by tests, where
+    /// the surrounding test runtime makes nested `block_on` calls impossible).
+    pub(crate) fn with_connection(
+        host: &str,
+        port: u16,
+        autostart: bool,
+        binary: Option<String>,
+        config_path: Option<PathBuf>,
+    ) -> Self {
         Mpd {
             inner: Arc::new(MpdInner {
                 host: host.to_string(),

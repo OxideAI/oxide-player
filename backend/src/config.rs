@@ -81,7 +81,7 @@ impl Config {
         Ok((config, resolved))
     }
 
-    fn default_config() -> Config {
+    pub(crate) fn default_config() -> Config {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Config {
             mpd_host: "127.0.0.1".to_string(),
