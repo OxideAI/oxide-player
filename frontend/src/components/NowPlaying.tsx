@@ -106,6 +106,12 @@ export function NowPlaying({
     await loadQueue()
   }
 
+  const onClearQueue = async () => {
+    await api.clearQueue()
+    onReloadStatus()
+    await loadQueue()
+  }
+
   return (
     <footer className={styles.bar}>
       <div className={styles.meta}>
@@ -185,6 +191,7 @@ export function NowPlaying({
             queue={queue}
             onJump={onJump}
             onRemove={onRemove}
+            onClear={onClearQueue}
             onClose={() => setQueueOpen(false)}
           />
         )}

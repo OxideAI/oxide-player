@@ -6,19 +6,27 @@ interface Props {
   queue: QueueResponse
   onJump: (pos: number) => void
   onRemove: (pos: number) => void
+  onClear: () => void
   onClose: () => void
 }
 
-export function QueueView({ queue, onJump, onRemove, onClose }: Props) {
+export function QueueView({ queue, onJump, onRemove, onClear, onClose }: Props) {
   return (
     <div className={styles.panel} role="dialog" aria-label="Play queue">
       <div className={styles.head}>
         <span className={styles.eyebrow}>Queue · {queue.entries.length}</span>
-        <button className={styles.close} onClick={onClose} aria-label="Close queue">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
-            <path d="M6 6l12 12M18 6 6 18" />
-          </svg>
-        </button>
+        <div className={styles.headActions}>
+          {queue.entries.length > 0 && (
+            <button className={styles.clear} onClick={onClear} aria-label="Clear queue">
+              Clear
+            </button>
+          )}
+          <button className={styles.close} onClick={onClose} aria-label="Close queue">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </div>
       </div>
       <ul className={styles.list}>
         {queue.entries.length === 0 && (
