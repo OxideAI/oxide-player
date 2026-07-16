@@ -44,11 +44,15 @@ export const api = {
       json<{ with_cover: number }>(r),
     ),
 
-  play: (uri: string, start?: number, end?: number, trackId?: number) =>
+  play: (uri?: string, start?: number, end?: number, trackId?: number) =>
     fetch('/api/playback/play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uri, start, end, track_id: trackId }),
+      body: JSON.stringify(
+        uri === undefined
+          ? {}
+          : { uri, start, end, track_id: trackId },
+      ),
     }).then((r) => json<unknown>(r)),
   pause: (pause: boolean) =>
     fetch('/api/playback/pause', {

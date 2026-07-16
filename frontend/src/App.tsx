@@ -79,6 +79,7 @@ export function App() {
     try {
       if (status.state === 'playing') await api.pause(true)
       else if (status.state === 'paused') await api.pause(false)
+      else await api.play()
       await loadStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))

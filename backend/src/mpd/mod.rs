@@ -445,6 +445,19 @@ impl Mpd {
         self.raw(Command::new("play").argument(pos)).await
     }
 
+    /// 0-based position of the current queue entry. When stopped (no active
+    /// song) this falls back to the first entry (0).
+    pub async fn queue_position(&self) -> AppResult<u32> {
+        let client = self.client().await?;
+        let pos = client
+            .command(CurrentSong)
+            .await
+            .map_err(|e| AppError::Mpd(format!("currentsong: {e}")))?
+            .map(|s| s.position.0 as u32)
+            .unwrap_or(0);
+        Ok(pos)
+    }
+
     /// Remove a single entry from the play queue by its position (0-based).
     pub async fn delete_position(&self, pos: u32) -> AppResult<()> {
         self.raw(Command::new("delete").argument(pos)).await
