@@ -34,6 +34,10 @@ pub struct Track {
     pub bit_depth: Option<u32>,
     pub channels: Option<u32>,
     pub has_cover: bool,
+    /// Album-level cover key (hash of album identity). Tracks in the same album
+    /// share one cover file named `{cover_key}.{ext}`, so the cover is read from
+    /// disk once per album instead of once per track.
+    pub cover_key: Option<String>,
     pub cue_index: Option<i32>,
     pub start_time: Option<f64>,
     pub end_time: Option<f64>,
@@ -68,6 +72,7 @@ pub struct TrackRef {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub has_cover: bool,
+    pub cover_key: Option<String>,
     pub format: Option<String>,
     pub sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,

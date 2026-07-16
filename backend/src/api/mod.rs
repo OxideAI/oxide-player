@@ -30,7 +30,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/library", get(library_list))
         .route("/api/library/albums", get(library_albums))
         .route("/api/library/artists", get(library_artists))
-        .route("/api/cover/{id}", get(cover))
+        .route("/api/cover/{key}", get(cover))
         .route("/api/library/scan", post(library_scan))
         .route("/api/library/refresh", post(library_refresh))
         .route("/api/library/rescan-art", post(library_rescan_art))
@@ -101,12 +101,12 @@ async fn library_artists(State(s): State<AppState>) -> AppResult<Json<Vec<String
     Ok(Json(s.db().list_artists()?))
 }
 
-async fn cover(State(s): State<AppState>, Path(id): Path<i64>) -> AppResult<Response> {
+async fn cover(State(s): State<AppState>, Path(key): Path<String>) -> AppResult<Response> {
     let dir = s.config().await.cover_cache_dir();
-    for ext in ["jpg", "png", "bin"] {
-        let p = dir.join(format!("{id}.{ext}"));
+    for ext in crate::library::scanner::COVER_EXTS {
+        let p = dir.join(format!("{key}.{ext}"));
         if let Ok(bytes) = tokio::fs::read(&p).await {
-            let ct = match ext {
+            let ct = match *ext {
                 "jpg" => "image/jpeg",
                 "png" => "image/png",
                 _ => "application/octet-stream",
@@ -114,7 +114,7 @@ async fn cover(State(s): State<AppState>, Path(id): Path<i64>) -> AppResult<Resp
             return Ok(([(header::CONTENT_TYPE, ct)], bytes).into_response());
         }
     }
-    Err(AppError::NotFound(format!("cover {id}")))
+    Err(AppError::NotFound(format!("cover {key}")))
 }
 
 /// Scan the configured library directories into the DB. `incremental` chooses
@@ -220,6 +220,7 @@ async fn config_remove_dir(
 }
 
 async fn library_rescan_art(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    let _guard = s.scan_guard().await;
     let db = s.db().clone();
     let cover_dir = s.config().await.cover_cache_dir();
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;

@@ -27,7 +27,11 @@ export const api = {
   },
   albums: () => fetch('/api/library/albums').then((r) => json<string[]>(r)),
   artists: () => fetch('/api/library/artists').then((r) => json<string[]>(r)),
-  coverUrl: (id: number) => `/api/cover/${id}`,
+  coverUrl: (key: string | number) => `/api/cover/${key}`,
+  // Prefer the album-level cover key; fall back to the track id for rows not
+  // yet migrated to album-keyed covers.
+  coverFor: (hasCover: boolean, coverKey: string | null, id: number) =>
+    hasCover ? `/api/cover/${coverKey ?? id}` : null,
 
   scan: () =>
     fetch('/api/library/scan', { method: 'POST' }).then((r) => json<{ scanned: number }>(r)),

@@ -111,8 +111,12 @@ export function NowPlaying({
       <div className={styles.meta}>
         <a className={styles.coverShell} href="/kiosk" title="Open kiosk mode">
           <span className={styles.coverCore}>
-            {song?.has_cover ? (
-              <img className={styles.cover} src={api.coverUrl(song.id)} alt="" />
+            {api.coverFor(!!song?.has_cover, song?.cover_key ?? null, song?.id ?? 0) ? (
+              <img
+                className={styles.cover}
+                src={api.coverFor(!!song?.has_cover, song?.cover_key ?? null, song?.id ?? 0)!}
+                alt=""
+              />
             ) : (
               <span className={styles.coverPlaceholder}>
                 <span className={styles.eq} aria-hidden>
@@ -122,7 +126,9 @@ export function NowPlaying({
                 </span>
               </span>
             )}
-            {playing && song?.has_cover && <span className={styles.coverGlow} aria-hidden />}
+            {api.coverFor(!!song?.has_cover, song?.cover_key ?? null, song?.id ?? 0) && playing && (
+              <span className={styles.coverGlow} aria-hidden />
+            )}
           </span>
         </a>
         <div className={styles.text}>

@@ -23,7 +23,7 @@ export function KioskView({
 }: Props) {
   const loading = status === null
   const song = status?.current_song ?? null
-  const cover = song?.has_cover ? api.coverUrl(song.id) : null
+  const cover = song?.has_cover ? api.coverUrl(song.cover_key ?? song.id) : null
   const title = loading ? 'Loading…' : (song ? displayTitle(song) : 'Nothing playing')
   const duration = status?.duration ?? 0
   const playing = status?.state === 'playing'

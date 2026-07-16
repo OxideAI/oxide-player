@@ -20,7 +20,7 @@ interface Folder {
   key: string
   name: string
   artist: string | null
-  coverId: number | null
+  coverKey: string | null
   tracks: Track[]
 }
 
@@ -102,13 +102,13 @@ export function LibraryView({
           key,
           name: t.album || key.split('/').pop() || key || 'Unknown',
           artist: t.artist ?? null,
-          coverId: null,
+          coverKey: null,
           tracks: [],
         }
         map.set(key, f)
       }
       f.tracks.push(t)
-      if (f.coverId === null && t.has_cover) f.coverId = t.id
+      if (f.coverKey === null && t.has_cover && t.cover_key) f.coverKey = t.cover_key
     }
     const arr = [...map.values()]
     arr.forEach((f) => f.tracks.sort(trackOrder))
@@ -218,8 +218,8 @@ export function LibraryView({
               <button className={styles.tile} onClick={() => setOpenFolder(f.key)}>
                 <span className={styles.tileShell}>
                   <span className={styles.tileCore}>
-                    {f.coverId !== null ? (
-                      <img src={api.coverUrl(f.coverId)} alt="" loading="lazy" />
+                    {f.coverKey !== null ? (
+                      <img src={api.coverUrl(f.coverKey)} alt="" loading="lazy" />
                     ) : (
                       <span className={styles.tilePh}>♪</span>
                     )}
@@ -242,8 +242,8 @@ export function LibraryView({
           <div className={styles.albumHead}>
             <span className={styles.albumShell}>
               <span className={styles.albumCore}>
-                {current.coverId !== null ? (
-                  <img src={api.coverUrl(current.coverId)} alt="" />
+                {current.coverKey !== null ? (
+                  <img src={api.coverUrl(current.coverKey)} alt="" />
                 ) : (
                   <span className={styles.tilePh}>♪</span>
                 )}

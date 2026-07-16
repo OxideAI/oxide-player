@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const TRACK_COLS: &str = "id, uri, path, title, artist, album, album_artist, genre, year, \
-track, duration, format, sample_rate, bit_depth, channels, has_cover, cue_index, \
+track, duration, format, sample_rate, bit_depth, channels, has_cover, cover_key, cue_index, \
 start_time, end_time, file_mtime";
 // Qualified form used when joining `tracks_fts` (both tables expose
 // title/artist/album and an unqualified reference would be ambiguous).
 const TRACK_COLS_Q: &str = "tracks.id, tracks.uri, tracks.path, tracks.title, tracks.artist, \
 tracks.album, tracks.album_artist, tracks.genre, tracks.year, tracks.track, tracks.duration, \
 tracks.format, tracks.sample_rate, tracks.bit_depth, tracks.channels, tracks.has_cover, \
-tracks.cue_index, tracks.start_time, tracks.end_time, tracks.file_mtime";
+tracks.cover_key, tracks.cue_index, tracks.start_time, tracks.end_time, tracks.file_mtime";
 
 #[derive(Clone)]
 pub struct LibraryDb {
@@ -51,6 +51,7 @@ impl LibraryDb {
                 bit_depth INTEGER,
                 channels INTEGER,
                 has_cover INTEGER NOT NULL DEFAULT 0,
+                cover_key TEXT,
                 cue_index INTEGER,
                 start_time REAL,
                 end_time REAL,
@@ -108,8 +109,14 @@ impl LibraryDb {
             )
             .map_err(|e| AppError::Library(e.to_string()))?;
         }
-        // Idempotent schema upgrades for CUE support (only on pre-existing tables).
-        for col in ["cue_index", "start_time", "end_time", "file_mtime"] {
+        // Idempotent schema upgrades (only on pre-existing tables).
+        for (col, col_ty) in [
+            ("cue_index", "INTEGER"),
+            ("start_time", "REAL"),
+            ("end_time", "REAL"),
+            ("file_mtime", "INTEGER"),
+            ("cover_key", "TEXT"),
+        ] {
             let exists: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = ?",
@@ -119,10 +126,7 @@ impl LibraryDb {
                 .map_err(|e| AppError::Library(e.to_string()))?;
             if exists == 0 {
                 let _ = conn.execute(
-                    &format!("ALTER TABLE tracks ADD COLUMN {col} {col_ty}", col_ty = match col {
-                        "cue_index" => "INTEGER",
-                        _ => "REAL",
-                    }),
+                    &format!("ALTER TABLE tracks ADD COLUMN {col} {col_ty}"),
                     [],
                 );
             }
@@ -146,6 +150,7 @@ impl LibraryDb {
         sample_rate: Option<u32>,
         bit_depth: Option<u32>,
         channels: Option<u32>,
+        cover_key: Option<&str>,
         cue_index: Option<i32>,
         start_time: Option<f64>,
         end_time: Option<f64>,
@@ -154,12 +159,12 @@ impl LibraryDb {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO tracks
-             (uri, path, title, artist, album, album_artist, genre, year, track, duration, format, sample_rate, bit_depth, channels, has_cover, cue_index, start_time, end_time, file_mtime)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,?15,?16,?17,?18)",
+             (uri, path, title, artist, album, album_artist, genre, year, track, duration, format, sample_rate, bit_depth, channels, has_cover, cover_key, cue_index, start_time, end_time, file_mtime)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,?15,?16,?17,?18,?19)",
             params![
                 uri, path, title, artist, album, album_artist, genre, year, track, duration,
-                format, sample_rate, bit_depth, channels, cue_index, start_time, end_time,
-                file_mtime
+                format, sample_rate, bit_depth, channels, cover_key, cue_index, start_time,
+                end_time, file_mtime
             ],
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
@@ -190,23 +195,63 @@ impl LibraryDb {
         Ok(mt)
     }
 
-    pub fn set_cover(&self, id: i64, has_cover: bool) -> AppResult<()> {
+    pub fn set_cover(&self, id: i64, has_cover: bool, cover_key: Option<&str>) -> AppResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
-            "UPDATE tracks SET has_cover = ?1 WHERE id = ?2",
-            params![has_cover as i32, id],
+            "UPDATE tracks SET has_cover = ?1, cover_key = ?2 WHERE id = ?3",
+            params![has_cover as i32, cover_key, id],
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
         Ok(())
     }
 
-    pub fn all_track_paths(&self) -> AppResult<Vec<(i64, String)>> {
+    /// Return every track with the fields needed to (re)derive album-keyed
+    /// covers: id, path, album, album_artist, and any stored `cover_key`.
+    pub fn all_tracks_for_art(
+        &self,
+    ) -> AppResult<Vec<(i64, String, Option<String>, Option<String>, Option<String>)>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT id, path FROM tracks")
+            .prepare("SELECT id, path, album, album_artist, cover_key FROM tracks")
             .map_err(|e| AppError::Library(e.to_string()))?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AppError::Library(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
+    /// Return rows that predate the album-keyed cover system (no `cover_key`
+    /// yet) so a one-time backfill can derive the key and relocate their cover
+    /// file without re-reading every audio file. Each entry carries the id,
+    /// path, album and album_artist needed to compute the key.
+    pub fn tracks_missing_cover_key(
+        &self,
+    ) -> AppResult<Vec<(i64, String, Option<String>, Option<String>)>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare("SELECT id, path, album, album_artist FROM tracks WHERE cover_key IS NULL")
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            })
             .map_err(|e| AppError::Library(e.to_string()))?;
         let mut out = Vec::new();
         for row in rows {
@@ -498,10 +543,11 @@ fn row_to_track(r: &rusqlite::Row) -> Track {
         bit_depth: r.get(13).ok(),
         channels: r.get(14).ok(),
         has_cover: r.get::<_, i32>(15).unwrap_or(0) != 0,
-        cue_index: r.get(16).ok(),
-        start_time: r.get(17).ok(),
-        end_time: r.get(18).ok(),
-        file_mtime: r.get(19).ok(),
+        cover_key: r.get(16).ok(),
+        cue_index: r.get(17).ok(),
+        start_time: r.get(18).ok(),
+        end_time: r.get(19).ok(),
+        file_mtime: r.get(20).ok(),
     }
 }
 
@@ -519,7 +565,7 @@ mod search_tests {
         db.insert_track(
             path, path, Some(title), Some(artist), Some(album), None, None, None,
             Some(1), Some(180.0), Some("flac"), Some(44100), Some(16), Some(2),
-            None, None, None, Some(1),
+            None, None, None, None, Some(1),
         )
         .unwrap();
     }

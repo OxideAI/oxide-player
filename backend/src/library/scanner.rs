@@ -12,6 +12,10 @@ const AUDIO_EXTS: &[&str] = &[
     "opus", "mpc", "alac",
 ];
 
+/// Cover image extensions stored in the cover cache. Must stay in sync with the
+/// write side (`extract_cover` via `cover_ext`) and the read side (`cover` route).
+pub const COVER_EXTS: &[&str] = &["jpg", "png", "bin"];
+
 fn is_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -430,6 +434,14 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
         }
     }
 
+    // Migrate any pre-existing rows (scanned before covers were album-keyed) so
+    // their cover files and `cover_key` match the new scheme.
+    if let Ok(n) = backfill_covers(db, cover_dir) {
+        if n > 0 {
+            tracing::info!("backfilled cover keys for {n} tracks");
+        }
+    }
+
     Ok(scanned)
 }
 
@@ -475,11 +487,13 @@ fn ingest(uri: &str, path: &Path, db: &LibraryDb, cover_dir: &Path, mtime: i64) 
         None,
         None,
         None,
+        None,
         Some(mtime),
     )?;
 
-    let has_cover = extract_cover(Some(&tagged), path, id, cover_dir);
-    db.set_cover(id, has_cover)?;
+    let cover_key = album_key(album_artist.as_deref(), album.as_deref(), id);
+    let has_cover = extract_cover(Some(&tagged), path, &cover_key, cover_dir);
+    db.set_cover(id, has_cover, Some(&cover_key))?;
     Ok(())
 }
 
@@ -519,14 +533,16 @@ fn ingest_cue(
         props.sample_rate(),
         props.bit_depth().map(u32::from),
         props.channels().map(u32::from),
+        None,
         Some(ct.track_no),
         Some(ct.start),
         ct.end,
         Some(mtime),
     )?;
 
-    let has_cover = extract_cover(Some(&tagged), &audio_path, id, cover_dir);
-    db.set_cover(id, has_cover)?;
+    let cover_key = album_key(ct.album_artist.as_deref(), ct.album.as_deref(), id);
+    let has_cover = extract_cover(Some(&tagged), &audio_path, &cover_key, cover_dir);
+    db.set_cover(id, has_cover, Some(&cover_key))?;
     Ok(())
 }
 
@@ -540,12 +556,46 @@ fn file_mtime(p: &Path) -> i64 {
         .unwrap_or(0)
 }
 
-/// Extract a cover for `path` into the cover cache as `{id}.{ext}`.
+/// A stable key identifying an album, used to group cover art so a single
+/// image is stored per album instead of per track. Falls back to the track's
+/// own id when album metadata is missing (the cover is then effectively
+/// per-track, same as before).
+fn album_key(album_artist: Option<&str>, album: Option<&str>, fallback: i64) -> String {
+    match (album_artist, album) {
+        (Some(aa), Some(al)) if !aa.is_empty() && !al.is_empty() => {
+            format!("al_{}", simple_hash(&format!("{aa}\u{1f}{al}")))
+        }
+        (None, Some(al)) if !al.is_empty() => {
+            format!("al_{}", simple_hash(&format!("\u{1f}{al}")))
+        }
+        _ => fallback.to_string(),
+    }
+}
+
+/// Cheap non-cryptographic hash (FNV-1a) turned into a hex string. Used only to
+/// build short, filesystem-safe cover keys, not for security.
+fn simple_hash(s: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Extract a cover for `path` into the cover cache as `{cover_key}.{ext}`.
 /// Local image files (`cover.*`, `folder.*`) take precedence over embedded art.
 /// `tagged`, when provided, is the already-parsed audio file so embedded art is
-/// read from the first pass instead of re-reading the whole file. Returns true
-/// if a cover was written.
-pub fn extract_cover(tagged: Option<&TaggedFile>, path: &Path, id: i64, cover_dir: &Path) -> bool {
+/// read from the first pass instead of re-reading the whole file. `cover_key`
+/// names the destination file; every track in an album resolves to the same key
+/// so the image is written (and later served) once. Returns true if a cover was
+/// written.
+pub fn extract_cover(
+    tagged: Option<&TaggedFile>,
+    path: &Path,
+    cover_key: &str,
+    cover_dir: &Path,
+) -> bool {
     if let Some(local) = find_local_cover(path.parent().unwrap_or(path)) {
         let ext = match local
             .extension()
@@ -556,7 +606,7 @@ pub fn extract_cover(tagged: Option<&TaggedFile>, path: &Path, id: i64, cover_di
             Some("png") => "png",
             _ => "jpg",
         };
-        let cover_path = cover_dir.join(format!("{id}.{ext}"));
+        let cover_path = cover_dir.join(format!("{cover_key}.{ext}"));
         if std::fs::copy(&local, &cover_path).is_ok() {
             return true;
         }
@@ -571,7 +621,7 @@ pub fn extract_cover(tagged: Option<&TaggedFile>, path: &Path, id: i64, cover_di
         if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
             if let Some(pic) = tag.pictures().first() {
                 let ext = cover_ext(pic.mime_type().unwrap_or(&MimeType::Jpeg));
-                let cover_path = cover_dir.join(format!("{id}.{ext}"));
+                let cover_path = cover_dir.join(format!("{cover_key}.{ext}"));
                 if std::fs::write(&cover_path, pic.data()).is_ok() {
                     return true;
                 }
@@ -583,23 +633,88 @@ pub fn extract_cover(tagged: Option<&TaggedFile>, path: &Path, id: i64, cover_di
 }
 
 /// Re-derive covers for every track already in the database, without touching
-/// metadata. Clears the cover cache first so removed/renamed local art is dropped.
+/// metadata. Clears the cover cache first so removed/renamed local art is
+/// dropped. Covers are keyed by album, so a multi-track album writes and reads
+/// a single image (issue #31).
 pub fn rescan_art(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
     if let Ok(entries) = std::fs::read_dir(cover_dir) {
         for entry in entries.flatten() {
             let _ = std::fs::remove_file(entry.path());
         }
     }
-    let tracks = db.all_track_paths()?;
+    let tracks = db.all_tracks_for_art()?;
+    // One extraction per unique album key; every track in the album reuses it.
+    // The key is always recomputed from album metadata so a prior per-id key
+    // (or a stale one) is never reused.
+    let mut extracted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut with_cover = 0u64;
-    for (id, path) in tracks {
-        let has = extract_cover(None, Path::new(&path), id, cover_dir);
-        db.set_cover(id, has)?;
+    for (id, path, album, album_artist, _cover_key) in tracks {
+        let key = album_key(album_artist.as_deref(), album.as_deref(), id);
+        let has = if extracted.contains(&key) {
+            find_existing_cover(cover_dir, &key)
+        } else {
+            extracted.insert(key.clone());
+            extract_cover(None, Path::new(&path), &key, cover_dir)
+        };
+        db.set_cover(id, has, Some(&key))?;
         if has {
             with_cover += 1;
         }
     }
     Ok(with_cover)
+}
+
+/// One-time migration for libraries scanned before covers were keyed by album.
+/// For every track still missing a `cover_key`, derive it from album metadata
+/// and relocate its existing `{id}.{ext}` cover file to `{cover_key}.{ext}`.
+/// The first track of each album wins (all share the same image), so audio is
+/// never re-read. Returns the number of tracks backfilled.
+pub fn backfill_covers(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
+    let rows = db.tracks_missing_cover_key()?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let mut backfilled = 0u64;
+    for (id, path, album, album_artist) in rows {
+        let key = album_key(album_artist.as_deref(), album.as_deref(), id);
+        // Reuse an already-relocated album cover, or move this track's old
+        // per-id cover file over (and drop the now-redundant copies).
+        let has = if find_existing_cover(cover_dir, &key) {
+            true
+        } else {
+            let mut relocated = false;
+            for ext in COVER_EXTS {
+                let src = cover_dir.join(format!("{id}.{ext}"));
+                if src.exists() {
+                    let dst = cover_dir.join(format!("{key}.{ext}"));
+                    if std::fs::copy(&src, &dst).is_ok() {
+                        relocated = true;
+                        let _ = std::fs::remove_file(&src);
+                        break;
+                    }
+                }
+            }
+            if relocated {
+                true
+            } else {
+                // No pre-extracted cover on disk — regenerate from the file.
+                extract_cover(None, Path::new(&path), &key, cover_dir)
+            }
+        };
+        db.set_cover(id, has, Some(&key))?;
+        backfilled += 1;
+    }
+    Ok(backfilled)
+}
+
+/// Return `true` if a cover file for `key` already exists in `cover_dir`.
+fn find_existing_cover(cover_dir: &Path, key: &str) -> bool {
+    for ext in COVER_EXTS {
+        if cover_dir.join(format!("{key}.{ext}")).exists() {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -750,5 +865,20 @@ mod tests {
         assert!(files.iter().any(|p| p.ends_with("track.flac")));
         assert!(files.iter().any(|p| p.ends_with("deep.flac")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn album_key_groups_tracks_of_same_album() {
+        // Two tracks from the same album resolve to one shared cover key, so the
+        // cover image is written once per album (issue #31).
+        let a = album_key(Some("Artist"), Some("Album"), 1);
+        let b = album_key(Some("Artist"), Some("Album"), 2);
+        assert_eq!(a, b);
+        assert!(a.starts_with("al_"));
+
+        // Missing album metadata falls back to the track id (per-track cover).
+        let solo = album_key(None, None, 7);
+        assert_eq!(solo, "7");
+        assert_ne!(solo, a);
     }
 }
