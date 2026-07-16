@@ -247,3 +247,14 @@
     padding: calc(var(--nav-h) + 1.4rem) 1rem calc(var(--dock-h) + 1.4rem);
   }
 }
+
+@keyframes oxPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bannerDot {
+    animation: none !important;
+  }
+}
