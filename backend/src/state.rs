@@ -147,8 +147,15 @@ impl AppState {
                 let current_song = self.resolve_current_song(&ms).await;
                 status.state = ms.state;
                 status.volume = ms.volume;
-                status.elapsed = ms.elapsed;
-                status.duration = ms.duration;
+                status.elapsed = current_song
+                    .as_ref()
+                    .and_then(|s| s.cue_start)
+                    .map(|start| (ms.elapsed - start).max(0.0))
+                    .unwrap_or(ms.elapsed);
+                status.duration = current_song
+                    .as_ref()
+                    .and_then(|s| s.duration)
+                    .unwrap_or(ms.duration);
                 status.error = ms.error;
                 status.random = ms.random;
                 status.current_id = ms.current_id;
@@ -182,6 +189,15 @@ impl AppState {
         let current_track = ms.current_track;
         let uri_for_blocking = uri.clone();
         let track = tokio::task::spawn_blocking(move || {
+            let by_elapsed = uri_for_blocking
+                .as_ref()
+                .and_then(|u| db.track_by_uri_and_elapsed(u, elapsed).ok().flatten());
+            // If a CUE track matches the current playback position, always
+            // prefer it: the active/by_id row is the full-file (non-CUE) entry
+            // whose elapsed/duration reflect the whole album, not this track.
+            if by_elapsed.is_some() {
+                return by_elapsed;
+            }
             let by_active = active.and_then(|id| {
                 uri_for_blocking.as_ref().and_then(|u| {
                     db.track_by_id(id)
@@ -190,15 +206,12 @@ impl AppState {
                         .filter(|t| &t.uri == u)
                 })
             });
-            let by_elapsed = uri_for_blocking
-                .as_ref()
-                .and_then(|u| db.track_by_uri_and_elapsed(u, elapsed).ok().flatten());
             let by_uri = uri_for_blocking.as_ref().and_then(|u| {
                 db.track_by_uri_cue(u, current_track.map(|t| t as i32))
                     .ok()
                     .flatten()
             });
-            by_active.or(by_elapsed).or(by_uri)
+            by_active.or(by_uri)
         })
         .await
         .ok()
@@ -215,6 +228,12 @@ impl AppState {
             sample_rate: t.sample_rate,
             bit_depth: t.bit_depth,
             channels: t.channels,
+            duration: t.cue_index.and_then(|_| match (t.start_time, t.end_time) {
+                (Some(start), Some(end)) => Some((end - start).max(0.0)),
+                (Some(start), None) => t.duration.map(|d| (d - start).max(0.0)),
+                _ => t.duration,
+            }),
+            cue_start: t.cue_index.and(t.start_time),
         });
         // Fallback: MPD is playing a song but we couldn't resolve it from the
         // library DB — still return a minimal TrackRef so the UI doesn't show
@@ -231,6 +250,8 @@ impl AppState {
             sample_rate: None,
             bit_depth: None,
             channels: None,
+            duration: None,
+            cue_start: None,
         }))
     }
 

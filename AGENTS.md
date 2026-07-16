@@ -8,6 +8,10 @@ Project conventions and hard rules for working in this repo. Loaded by the agent
 - **Frontend:** React 18 + TypeScript + Vite 5. **CSS Modules only** — no UI framework, no Tailwind.
 - **Audio:** MPD (music player daemon) + CamillaDSP (DSP). The backend is a control/metadata layer in front of MPD.
 
+## Bug rule (hard)
+
+- For **every reported bug** (direct or via GitHub issue), first write a test that **reproduces/confirms** the bug, then fix it. Add that test to the suite that runs **before pushing to `main`** (PR or direct push) so the bug can never silently regress.
+
 ## Build / run / test
 
 ```bash

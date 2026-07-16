@@ -10,6 +10,8 @@ export interface TrackRef {
   sample_rate: number | null
   bit_depth: number | null
   channels: number | null
+  duration: number | null
+  cue_start: number | null
 }
 
 export interface Track extends TrackRef {
@@ -88,6 +90,7 @@ export interface Config {
   mpd_autostart: boolean
   mpd_binary: string | null
   mpd_config: string | null
+  mpd_music_directory: string | null
   listen: string
   data_dir: string
   library_dirs: string[]

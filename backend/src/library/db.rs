@@ -330,6 +330,21 @@ impl LibraryDb {
 
     /// Delete tracks whose backing file is no longer in the scanned set
     /// (deleted or newly ignored via `.mpdignore`). Returns the number removed.
+    /// Delete the non-CUE (whole-file) row for `uri`, if one exists while CUE
+    /// tracks for the same uri are present. Used by the scanner so a CUE-backed
+    /// file never lingers as a single full-length track.
+    pub fn delete_non_cue(&self, uri: &str) -> AppResult<u64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n = conn
+            .execute(
+                "DELETE FROM tracks WHERE uri = ? AND cue_index IS NULL \
+                 AND EXISTS (SELECT 1 FROM tracks t2 WHERE t2.uri = ? AND t2.cue_index IS NOT NULL)",
+                params![uri, uri],
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        Ok(n as u64)
+    }
+
     pub fn prune_missing(&self, seen: &std::collections::HashSet<PathBuf>) -> AppResult<u64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
@@ -609,5 +624,101 @@ mod search_tests {
         let r = db.search(Some("hotel"), Some("Eagles"), None, None).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].artist.as_deref(), Some("Eagles"));
+    }
+
+    /// Insert a CUE-backed track: a split of `uri` at the given cue index with
+    /// the `[start, end)` window within the backing file.
+    fn put_cue(
+        db: &LibraryDb,
+        uri: &str,
+        cue_index: i32,
+        start: f64,
+        end: Option<f64>,
+        duration: f64,
+    ) {
+        db.insert_track(
+            uri, uri, Some("Cue Track"), Some("Artist"), Some("Album"), None, None, None,
+            Some(cue_index), Some(duration), Some("flac"), Some(44100), Some(16), Some(2),
+            None, Some(cue_index), Some(start), end, Some(1),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn delete_non_cue_removes_plain_row_only_when_cue_sibling_exists() {
+        let db = fresh();
+        // A CUE-backed file: one plain (non-CUE) row plus two split rows.
+        db.insert_track(
+            "Album.flac", "Album.flac", Some("Whole"), Some("Artist"), Some("Album"),
+            None, None, None, Some(0), Some(180.0), Some("flac"), Some(44100), Some(16),
+            Some(2), None, None, None, None, Some(1),
+        )
+        .unwrap();
+        put_cue(&db, "Album.flac", 1, 0.0, Some(100.0), 180.0);
+        put_cue(&db, "Album.flac", 2, 100.0, Some(180.0), 180.0);
+
+        let removed = db.delete_non_cue("Album.flac").unwrap();
+        assert_eq!(removed, 1, "plain row removed, CUE rows kept");
+
+        // Plain (whole-file) row gone — only the CUE splits remain.
+        let leftover_title = db
+            .track_by_uri_cue("Album.flac", None)
+            .unwrap()
+            .and_then(|t| t.title);
+        assert_ne!(
+            leftover_title.as_deref(),
+            Some("Whole"),
+            "plain row with title 'Whole' should have been deleted"
+        );
+        assert!(db.track_by_uri_cue("Album.flac", Some(1)).unwrap().is_some());
+        assert!(db.track_by_uri_cue("Album.flac", Some(2)).unwrap().is_some());
+    }
+
+    #[test]
+    fn delete_non_cue_is_noop_without_cue_sibling() {
+        let db = fresh();
+        db.insert_track(
+            "Solo.flac", "Solo.flac", Some("Solo"), Some("Artist"), Some("Album"),
+            None, None, None, Some(0), Some(180.0), Some("flac"), Some(44100), Some(16),
+            Some(2), None, None, None, None, Some(1),
+        )
+        .unwrap();
+        let removed = db.delete_non_cue("Solo.flac").unwrap();
+        assert_eq!(removed, 0, "no CUE sibling -> nothing deleted");
+        assert!(db.track_by_uri_cue("Solo.flac", None).unwrap().is_some());
+    }
+
+    #[test]
+    fn track_by_uri_and_elapsed_picks_cue_split_for_elapsed() {
+        let db = fresh();
+        put_cue(&db, "Album.flac", 1, 0.0, Some(100.0), 180.0);
+        put_cue(&db, "Album.flac", 2, 100.0, Some(200.0), 180.0);
+
+        // 50s in -> first split.
+        let t1 = db.track_by_uri_and_elapsed("Album.flac", 50.0).unwrap();
+        assert_eq!(t1.and_then(|t| t.cue_index), Some(1));
+
+        // 150s in -> second split.
+        let t2 = db.track_by_uri_and_elapsed("Album.flac", 150.0).unwrap();
+        assert_eq!(t2.and_then(|t| t.cue_index), Some(2));
+    }
+
+    #[test]
+    fn track_by_uri_and_elapsed_rolls_to_next_track_at_boundary() {
+        let db = fresh();
+        put_cue(&db, "Album.flac", 1, 0.0, Some(100.0), 180.0);
+        put_cue(&db, "Album.flac", 2, 100.0, None, 180.0);
+
+        // Exactly at the boundary (elapsed == end_time of track 1) selects track 2.
+        let t = db.track_by_uri_and_elapsed("Album.flac", 100.0).unwrap();
+        assert_eq!(t.and_then(|x| x.cue_index), Some(2));
+    }
+
+    #[test]
+    fn track_by_uri_and_elapsed_none_outside_all_windows() {
+        let db = fresh();
+        put_cue(&db, "Album.flac", 1, 10.0, Some(100.0), 180.0);
+        // 5s is before the first split's window.
+        assert!(db.track_by_uri_and_elapsed("Album.flac", 5.0).unwrap().is_none());
     }
 }

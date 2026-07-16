@@ -77,6 +77,13 @@ pub struct TrackRef {
     pub sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,
     pub channels: Option<u32>,
+    /// Duration of this (possibly CUE-split) track in seconds. For CUE tracks
+    /// this is the split range (`end_time - start_time`), not the full file.
+    pub duration: Option<f64>,
+    /// For CUE-split tracks, the offset into the backing file where this track
+    /// begins. MPD reports `elapsed` against the full file, so the UI subtracts
+    /// this to get the position within the track.
+    pub cue_start: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

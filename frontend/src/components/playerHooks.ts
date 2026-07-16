@@ -17,11 +17,22 @@ export function useSmoothElapsed(status: PlayerStatus | null, duration: number):
     baseRef.current = { e: v, t: performance.now() }
     setElapsed(v)
   }, [])
+  const songId = status?.current_song?.id ?? null
+  const serverElapsed = status?.elapsed ?? 0
+  const lastSongRef = useRef(songId)
   useEffect(() => {
-    const e = status?.elapsed ?? 0
-    baseRef.current = { e, t: performance.now() }
-    setElapsed(e)
-  }, [status?.elapsed, status?.current_song?.id])
+    const songChanged = lastSongRef.current !== songId
+    lastSongRef.current = songId
+    if (songChanged) {
+      baseRef.current = { e: serverElapsed, t: performance.now() }
+      setElapsed(serverElapsed)
+    }
+  }, [songId])
+
+  useEffect(() => {
+    baseRef.current = { e: serverElapsed, t: performance.now() }
+    setElapsed(serverElapsed)
+  }, [serverElapsed])
 
   const playing = status?.state === 'playing'
   useEffect(() => {

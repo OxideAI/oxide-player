@@ -363,7 +363,12 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
             match parse_cue(cue, dir) {
                 Ok(tracks) => {
                     if let Some(first) = tracks.first() {
-                        if !seen.contains(&first.audio_rel) {
+                        // `seen` holds absolute file paths (used by prune_missing);
+                        // compare the cue's referenced audio against its absolute
+                        // path, not the relative `audio_rel`, or every CUE is
+                        // wrongly skipped as "excluded by .mpdignore".
+                        let audio_abs = dir.join(&first.audio_rel);
+                        if !seen.contains(&audio_abs) {
                             tracing::warn!(
                                 "cue {} references audio not in scan — likely excluded by .mpdignore",
                                 cue.display()
@@ -410,6 +415,11 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
         }
     }
 
+    // Uris for which at least one CUE track was successfully ingested. We only
+    // prune the leftover plain (non-CUE) row for these — if every CUE track
+    // failed to ingest (e.g. a transient lofty error), the plain row is the
+    // only playable entry and must survive.
+    let mut ingested_cue_uris: HashSet<String> = HashSet::new();
     for (dir, ct) in &parsed_cues {
         let uri = ct.audio_rel.to_string_lossy().replace('\\', "/");
         let mtime = file_mtime(&dir.join(&ct.audio_rel));
@@ -425,6 +435,16 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
             tracing::warn!("skip cue track {}: {e}", ct.audio_rel.display());
         } else {
             scanned += 1;
+            ingested_cue_uris.insert(uri);
+        }
+    }
+
+    // Drop any leftover non-CUE (whole-file) row for a uri that also has CUE
+    // tracks: a CUE-backed file must surface as its split tracks, not one
+    // 75-minute blob. Without this, an older scan's plain row lingers forever.
+    for uri in ingested_cue_uris {
+        if let Err(e) = db.delete_non_cue(uri.as_str()) {
+            tracing::warn!("prune plain cue row {}: {e}", uri);
         }
     }
 
