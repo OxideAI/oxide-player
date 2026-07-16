@@ -809,6 +809,7 @@ dependencies = [
  "clap",
  "futures-util",
  "lofty",
+ "mime_guess",
  "mpd_client",
  "mpd_protocol",
  "rusqlite",
