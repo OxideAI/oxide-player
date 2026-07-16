@@ -734,7 +734,10 @@ async fn playlist_delete(
 }
 
 async fn queue(State(s): State<AppState>) -> AppResult<Json<crate::types::QueueResponse>> {
-    let resp = s.queue_snapshot_and_broadcast().await;
+    // One-off REST fetch (fallback for non-WS clients). The live push is driven
+    // by the broadcast on connect + the queue-mutating endpoints, so this must
+    // NOT broadcast again or a single mutation would emit Queue twice.
+    let resp = s.queue_snapshot().await;
     Ok(Json(resp))
 }
 

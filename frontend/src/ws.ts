@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PlayerStatus, QueueResponse, StatusEvent } from './types'
+import { api } from './api'
 
 export interface PlayerState {
   status: PlayerStatus | null
@@ -20,6 +21,11 @@ function wsUrl(): string {
  * server sends on connect, then applies every pushed `StatusEvent`. Reconnects
  * with exponential backoff and re-seeds on reopen. Replaces the old
  * `setInterval` polls of `/api/status` + `/api/queue` (issue #3).
+ *
+ * If the socket can't be opened (e.g. an older backend without `/api/ws`, or a
+ * transient network failure), it falls back to one-shot REST fetches of
+ * `/api/status` + `/api/queue` so the UI still renders rather than sitting on
+ * "Connecting…" forever.
  */
 export function usePlayerStatus(): PlayerState {
   const [state, setState] = useState<PlayerState>({
@@ -35,17 +41,39 @@ export function usePlayerStatus(): PlayerState {
     stopped.current = false
     let ws: WebSocket | null = null
     let timer: ReturnType<typeof setTimeout> | null = null
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null
+
+    // One-shot REST fallback used only when the WS never connects.
+    const restFallback = () => {
+      if (stopped.current) return
+      Promise.all([api.status().catch(() => null), api.queue().catch(() => null)])
+        .then(([status, queue]) => {
+          if (stopped.current) return
+          setState((s) => ({
+            ...s,
+            status: status ?? s.status,
+            queue: queue ?? s.queue,
+          }))
+        })
+        .catch(() => {})
+    }
 
     const connect = () => {
       if (stopped.current) return
       try {
         ws = new WebSocket(wsUrl())
       } catch {
+        restFallback()
         scheduleReconnect()
         return
       }
 
+      // If the socket hasn't opened shortly, try the REST fallback once so the
+      // UI isn't blank while we keep retrying the socket.
+      fallbackTimer = setTimeout(restFallback, 1500)
+
       ws.onopen = () => {
+        if (fallbackTimer) clearTimeout(fallbackTimer)
         backoff.current = 1000
         setState((s) => ({ ...s, connected: true, error: null }))
       }
@@ -65,6 +93,7 @@ export function usePlayerStatus(): PlayerState {
       }
 
       ws.onerror = () => {
+        if (fallbackTimer) clearTimeout(fallbackTimer)
         setState((s) => ({
           ...s,
           connected: false,
@@ -73,6 +102,7 @@ export function usePlayerStatus(): PlayerState {
       }
 
       ws.onclose = () => {
+        if (fallbackTimer) clearTimeout(fallbackTimer)
         setState((s) => ({ ...s, connected: false }))
         scheduleReconnect()
       }
@@ -90,6 +120,7 @@ export function usePlayerStatus(): PlayerState {
     return () => {
       stopped.current = true
       if (timer) clearTimeout(timer)
+      if (fallbackTimer) clearTimeout(fallbackTimer)
       if (ws) {
         ws.onclose = null
         ws.close()
