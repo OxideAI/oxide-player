@@ -1,12 +1,18 @@
 # AGENTS.md — Oxide
 
-Project conventions and hard rules for working in this repo. Loaded by the agent on every session.
+Compact conventions and hard rules for working in this repo. Loaded by the agent on every session.
 
 ## Stack
 
 - **Backend:** Rust, Axum 0.8, Tokio, `mpd_client` 1.4 / `mpd_protocol` 1.0, `rusqlite` (bundled), `lofty` (tags), `serde_yaml`/`serde_json`, `clap`, `tokio-tungstenite`.
 - **Frontend:** React 18 + TypeScript + Vite 5. **CSS Modules only** — no UI framework, no Tailwind.
 - **Audio:** MPD (music player daemon) + CamillaDSP (DSP). The backend is a control/metadata layer in front of MPD.
+
+## Repo structure
+
+- This is a **Cargo workspace** (`Cargo.toml` at root, `members = ["backend"]`). The backend is the only workspace member; `cargo build` / `cargo test` work from the repo root **or** `backend/`.
+- The built binary is **`target/debug/oxide-player` at the repo root** (not `backend/target/`).
+- Frontend is a separate npm package under `frontend/`; the backend serves `frontend/dist/` as static files.
 
 ## Bug rule (hard)
 
@@ -15,19 +21,21 @@ Project conventions and hard rules for working in this repo. Loaded by the agent
 ## Build / run / test
 
 ```bash
-# Backend
-cd backend && cargo build            # debug binary at target/debug/oxide-player
-cd backend && cargo test             # unit tests (scanner, dsp config)
-./target/debug/oxide-player -c config.json   # default listen 0.0.0.0:8000
+# Backend (from repo root or backend/)
+cargo build                                   # debug binary at target/debug/oxide-player
+cargo test                                    # unit tests (scanner, dsp config, PWA static serving)
+./target/debug/oxide-player -c config.json    # default listen 0.0.0.0:8000
 #   flags: --mpd-host, --mpd-port, --listen
 
 # Frontend
 cd frontend && npm install
-cd frontend && npm run dev           # Vite dev server
-cd frontend && npm run build         # tsc (type-check) + vite build -> frontend/dist/
+cd frontend && npm run dev            # Vite dev server (:5173)
+cd frontend && npm run build          # tsc (type-check) + vite build -> frontend/dist/
+cd frontend && npm test               # frontend tests
 ```
 
-- The backend **serves `frontend/dist/` as static files**. After a frontend rebuild you usually do **not** need to restart the backend (files are read from disk per request); you **do** need a backend rebuild + restart when you add/change an API route.
+- **`cargo test` needs `frontend/dist/` to exist first.** A backend test asserts on the served PWA/static artifacts, and CI builds the frontend before running backend tests. Build the frontend (`npm run build`) before `cargo test`, or that test fails.
+- The backend serves `dist/` from disk per request, so a UI-only change usually needs **no backend restart**; you **do** need a backend rebuild + restart when you add/change an API route.
 - `npm run build` runs `tsc` first, so it doubles as the type-check. Fix type errors there before declaring done.
 
 ## MPD gotchas (memory — easy to get wrong)
@@ -55,4 +63,4 @@ frontend/src/  App.tsx, api.ts, types.ts, util.ts,
                            KioskView, DspView, DevicesView, PlaylistsView}
 ```
 
-See `ARCHITECTURE.md` for the full picture and `README.md` for usage.
+See `ARCHITECTURE.md` for the full picture (module breakdown, full API reference, request flow) and `README.md` for install/usage.

@@ -66,10 +66,12 @@ Styling is **CSS Modules** (`*.module.css`) — no Tailwind. Each component gets
 | Method | Path | Body | Purpose |
 | --- | --- | --- | --- |
 | GET | `/api/status` | — | `PlayerStatus` (state, volume, elapsed, duration, `random`, `current_song`, outputs) |
+| GET | `/api/ws` | — | WebSocket status stream (alternative to polling `/api/status`) |
 | GET | `/api/library` | `q?` `artist?` `album?` | Tracks matching filters |
 | GET | `/api/library/albums` | — | Album names |
+| GET | `/api/library/albums/sources` | — | Library source roots |
 | GET | `/api/library/artists` | — | Artist names |
-| GET | `/api/cover/{id}` | — | Cover image bytes |
+| GET | `/api/cover/{key}` | — | Cover image bytes (by cover key) |
 | POST | `/api/library/scan` | — | Scan music root into DB |
 | POST | `/api/library/refresh` | — | Re-scan |
 | POST | `/api/library/rescan-art` | — | Re-extract cover art |
@@ -85,12 +87,20 @@ Styling is **CSS Modules** (`*.module.css`) — no Tailwind. Each component gets
 | POST | `/api/playback/shuffle` | `{ on: bool }` | Toggle MPD `random` mode |
 | POST | `/api/playback/jump` | `{ pos: u32 }` | Jump to queue position (0-based) |
 | POST | `/api/playback/remove` | `{ pos: u32 }` | Remove queue entry by position |
+| POST | `/api/playback/clear-queue` | — | Clear the whole queue |
 | GET | `/api/devices` | — | MPD outputs |
 | POST | `/api/devices/{id}/enable` `disable` | — | Toggle output |
 | GET/PUT | `/api/dsp` | `DspProfile` | Read/apply CamillaDSP profile |
 | GET | `/api/playlists` | — | Playlist names |
 | POST | `/api/playlists` | `{ name, profile? }` | Save playlist |
 | POST | `/api/playlists/{name}/add` | `{ tracks }` | Add track(s) to a playlist |
+| GET | `/api/playlists/{name}` | — | Tracks in a playlist |
+| POST | `/api/playlists/{name}/play` | — | Play a playlist |
+| POST | `/api/playlists/{name}/remove` | `{ uris }` | Remove track(s) from a playlist |
+| POST | `/api/playlists/{name}/rename` | `{ name }` | Rename a playlist |
+| DELETE | `/api/playlists/{name}` | — | Delete a playlist |
+| GET/PUT | `/api/config` | `Config` | Read/update runtime config |
+| POST/DELETE | `/api/config/library-dirs` | `{ path }` | Add/remove a library source dir |
 
 ## MPD integration notes (gotchas)
 - Smoke MPD is **0.24.0**. The **`playid` command does not exist** there → seek/play by **0-based
