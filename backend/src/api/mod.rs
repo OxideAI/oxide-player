@@ -101,10 +101,10 @@ async fn library_artists(State(s): State<AppState>) -> AppResult<Json<Vec<String
     Ok(Json(s.db().list_artists()?))
 }
 
-async fn cover(State(s): State<AppState>, Path(id): Path<i64>) -> AppResult<Response> {
+async fn cover(State(s): State<AppState>, Path(key): Path<String>) -> AppResult<Response> {
     let dir = s.config().await.cover_cache_dir();
     for ext in ["jpg", "png", "bin"] {
-        let p = dir.join(format!("{id}.{ext}"));
+        let p = dir.join(format!("{key}.{ext}"));
         if let Ok(bytes) = tokio::fs::read(&p).await {
             let ct = match ext {
                 "jpg" => "image/jpeg",
@@ -114,7 +114,7 @@ async fn cover(State(s): State<AppState>, Path(id): Path<i64>) -> AppResult<Resp
             return Ok(([(header::CONTENT_TYPE, ct)], bytes).into_response());
         }
     }
-    Err(AppError::NotFound(format!("cover {id}")))
+    Err(AppError::NotFound(format!("cover {key}")))
 }
 
 /// Scan the configured library directories into the DB. `incremental` chooses

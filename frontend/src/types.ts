@@ -5,6 +5,7 @@ export interface TrackRef {
   artist: string | null
   album: string | null
   has_cover: boolean
+  cover_key: string | null
   format: string | null
   sample_rate: number | null
   bit_depth: number | null
