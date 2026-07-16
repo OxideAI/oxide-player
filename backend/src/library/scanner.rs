@@ -12,6 +12,10 @@ const AUDIO_EXTS: &[&str] = &[
     "opus", "mpc", "alac",
 ];
 
+/// Cover image extensions stored in the cover cache. Must stay in sync with the
+/// write side (`extract_cover` via `cover_ext`) and the read side (`cover` route).
+pub const COVER_EXTS: &[&str] = &["jpg", "png", "bin"];
+
 fn is_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -561,7 +565,7 @@ fn album_key(album_artist: Option<&str>, album: Option<&str>, fallback: i64) -> 
         (Some(aa), Some(al)) if !aa.is_empty() && !al.is_empty() => {
             format!("al_{}", simple_hash(&format!("{aa}\u{1f}{al}")))
         }
-        (None, Some(al)) | (Some(_), Some(al)) if !al.is_empty() => {
+        (None, Some(al)) if !al.is_empty() => {
             format!("al_{}", simple_hash(&format!("\u{1f}{al}")))
         }
         _ => fallback.to_string(),
@@ -647,7 +651,7 @@ pub fn rescan_art(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
     for (id, path, album, album_artist, _cover_key) in tracks {
         let key = album_key(album_artist.as_deref(), album.as_deref(), id);
         let has = if extracted.contains(&key) {
-            find_existing_cover(cover_dir, &key).is_some()
+            find_existing_cover(cover_dir, &key)
         } else {
             extracted.insert(key.clone());
             extract_cover(None, Path::new(&path), &key, cover_dir)
@@ -670,25 +674,22 @@ pub fn backfill_covers(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
     if rows.is_empty() {
         return Ok(0);
     }
-    let mut done: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut backfilled = 0u64;
     for (id, path, album, album_artist) in rows {
         let key = album_key(album_artist.as_deref(), album.as_deref(), id);
         // Reuse an already-relocated album cover, or move this track's old
         // per-id cover file over (and drop the now-redundant copies).
-        let has = if find_existing_cover(cover_dir, &key).is_some() {
+        let has = if find_existing_cover(cover_dir, &key) {
             true
         } else {
             let mut relocated = false;
-            for ext in ["jpg", "png", "bin"] {
+            for ext in COVER_EXTS {
                 let src = cover_dir.join(format!("{id}.{ext}"));
                 if src.exists() {
                     let dst = cover_dir.join(format!("{key}.{ext}"));
                     if std::fs::copy(&src, &dst).is_ok() {
                         relocated = true;
-                    }
-                    let _ = std::fs::remove_file(&src);
-                    if relocated {
+                        let _ = std::fs::remove_file(&src);
                         break;
                     }
                 }
@@ -700,9 +701,6 @@ pub fn backfill_covers(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
                 extract_cover(None, Path::new(&path), &key, cover_dir)
             }
         };
-        if !done.contains(&key) {
-            done.insert(key.clone());
-        }
         db.set_cover(id, has, Some(&key))?;
         backfilled += 1;
     }
@@ -710,13 +708,13 @@ pub fn backfill_covers(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
 }
 
 /// Return `true` if a cover file for `key` already exists in `cover_dir`.
-fn find_existing_cover(cover_dir: &Path, key: &str) -> Option<bool> {
-    for ext in ["jpg", "png", "bin"] {
+fn find_existing_cover(cover_dir: &Path, key: &str) -> bool {
+    for ext in COVER_EXTS {
         if cover_dir.join(format!("{key}.{ext}")).exists() {
-            return Some(true);
+            return true;
         }
     }
-    None
+    false
 }
 
 #[cfg(test)]
