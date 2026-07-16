@@ -14,6 +14,8 @@ interface Props {
   nowPlayingUri: string | null
   nowPlayingId: number | null
   isPlaying: boolean
+  album: string | null
+  onAlbumChange: (album: string | null) => void
 }
 
 interface Folder {
@@ -44,20 +46,16 @@ export function LibraryView({
   nowPlayingUri,
   nowPlayingId,
   isPlaying,
+  album,
+  onAlbumChange,
 }: Props) {
   const [tracks, setTracks] = useState<Track[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [playingUri, setPlayingUri] = useState<string | null>(null)
-  const [openFolder, setOpenFolder] = useState<string | null>(() => {
-    try { return localStorage.getItem('oxide:album') }
-    catch { return null }
-  })
-  useEffect(() => {
-    if (openFolder !== null) localStorage.setItem('oxide:album', openFolder)
-    else localStorage.removeItem('oxide:album')
-  }, [openFolder])
+  const openFolder = album
+  const setOpenFolder = onAlbumChange
   const [toast, setToast] = useState<string | null>(null)
 
   const toastTimer = useRef<number | undefined>(undefined)
