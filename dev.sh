@@ -43,6 +43,7 @@ kill_port "$API_PORT"
 echo "==> Building backend (this may take a while on first run)..."
 ( cd "$BACKEND" && cargo build )
 
+BACK_BIN="$ROOT/target/debug/oxide-player"
 BACK_ARGS=()
 if [[ "$MODE" == "prod" ]]; then
     # Bind all interfaces so LAN devices (phone) can reach the single origin
@@ -58,7 +59,7 @@ if [[ -n "$CONFIG" ]]; then
 fi
 
 echo "==> Starting backend on :$API_PORT..."
-( cd "$BACKEND" && cargo run -- "${BACK_ARGS[@]}" ) &
+"$BACK_BIN" "${BACK_ARGS[@]}" &
 BACK_PID=$!
 
 if [[ "$MODE" == "prod" ]]; then
