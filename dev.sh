@@ -7,11 +7,12 @@ FRONTEND="$ROOT/frontend"
 API_PORT="${OXIDE_API_PORT:-8000}"
 VITE_PORT="${OXIDE_VITE_PORT:-5173}"
 CONFIG="${OXIDE_CONFIG:-}"
-# prod: build the frontend and serve it from the backend on all interfaces
-# (best for accessing from another device on the LAN, e.g. a phone — no Vite
-# proxy, so the /api/ws upgrade is direct and there is no proxy EPIPE noise).
-# dev (default): Vite dev server on :5173 proxying /api -> backend.
-MODE="${OXIDE_MODE:-dev}"
+# prod (default): build the frontend and serve it from the backend on all
+# interfaces (best for accessing from another device on the LAN, e.g. a phone
+# — no Vite proxy, so the /api/ws upgrade is direct and there is no proxy
+# EPIPE noise). dev: Vite dev server on :5173 proxying /api -> backend, for
+# local HMR development (set OXIDE_MODE=dev).
+MODE="${OXIDE_MODE:-prod}"
 
 cleanup() {
     echo
