@@ -7,6 +7,8 @@ import { LibraryView } from './components/LibraryView'
 import { ConfigView } from './components/ConfigView'
 import { PlaylistsView } from './components/PlaylistsView'
 import { Reveal } from './components/Reveal'
+import { InstallPrompt } from './components/InstallPrompt'
+import { OfflineBanner } from './components/OfflineBanner'
 import styles from './App.module.css'
 
 type Tab = 'library' | 'playlists' | 'settings'
@@ -276,6 +278,9 @@ export function App() {
         onVolume={setVolume}
         onReloadStatus={loadStatus}
       />
+
+      <InstallPrompt />
+      <OfflineBanner />
     </div>
   )
 }

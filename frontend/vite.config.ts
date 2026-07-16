@@ -1,8 +1,67 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    VitePWA({
+      registerType: 'prompt',
+      includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'],
+      manifest: {
+        short_name: 'Oxide',
+        name: 'Oxide Player',
+        description: 'Audiophile music player controlling MPD + CamillaDSP.',
+        display: 'standalone',
+        background_color: '#050507',
+        theme_color: '#050507',
+        start_url: '/',
+        scope: '/',
+        orientation: 'any',
+        icons: [
+          { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: 'icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+        ],
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api\//],
+        runtimeCaching: [
+          // Covers are immutable per key but the backend may rewrite them on a
+          // rescan; cache-first with a long TTL so they survive offline without
+          // masking frequent stateful endpoints.
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/cover/'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'oxide-covers',
+              expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+          // Stateful endpoints (status/queue/playback) are never cached, so the
+          // UI never shows stale play/pause state while offline. Only the app
+          // shell + covers work offline; live data falls back to the network.
+          {
+            urlPattern: ({ url }) =>
+              url.pathname.startsWith('/api/') &&
+              !url.pathname.startsWith('/api/cover/'),
+            handler: 'NetworkOnly',
+            options: {
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+        ],
+      },
+      devOptions: {
+        enabled: false,
+      },
+    }),
+  ],
   server: {
     proxy: {
       '/api': 'http://127.0.0.1:8000',
