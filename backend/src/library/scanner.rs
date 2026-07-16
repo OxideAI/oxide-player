@@ -45,21 +45,67 @@ fn load_mpdignore(dir: &Path) -> Vec<String> {
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
             .collect(),
-        Err(_) => Vec::new(),
+        Err(_) => {
+            if path.exists() {
+                tracing::warn!("failed to read {} — ignoring patterns", path.display());
+            }
+            Vec::new()
+        }
     }
 }
 
-/// Simple glob match (`*` matches any sequence, `?` matches one char).
+/// Simple glob match (`*` matches any sequence, `?` matches one char,
+/// `[abc]` / `[!abc]` / `[a-z]` match character classes).
 fn matches_glob(name: &str, pattern: &str) -> bool {
-    let n = name.as_bytes();
-    let p = pattern.as_bytes();
+    let n: Vec<char> = name.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
     let (mut ni, mut pi) = (0, 0);
     let (mut star_ni, mut star_pi) = (None, None);
     while ni < n.len() {
-        if pi < p.len() && (p[pi] == b'?' || p[pi] == n[ni]) {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
             ni += 1;
             pi += 1;
-        } else if pi < p.len() && p[pi] == b'*' {
+        } else if pi < p.len() && p[pi] == '[' {
+            pi += 1;
+            if pi >= p.len() {
+                return false;
+            }
+            let negate = p[pi] == '!';
+            if negate {
+                pi += 1;
+            }
+            let mut matched = false;
+            while pi < p.len() && p[pi] != ']' {
+                if pi + 2 < p.len() && p[pi + 1] == '-' && p[pi + 2] != ']' {
+                    if n[ni] >= p[pi] && n[ni] <= p[pi + 2] {
+                        matched = true;
+                    }
+                    pi += 3;
+                } else {
+                    if p[pi] == n[ni] {
+                        matched = true;
+                    }
+                    pi += 1;
+                }
+            }
+            if pi >= p.len() {
+                return false;
+            }
+            pi += 1;
+            if negate {
+                matched = !matched;
+            }
+            if !matched {
+                if let (Some(sn), Some(sp)) = (star_ni, star_pi) {
+                    ni = sn + 1;
+                    pi = sp + 1;
+                    star_ni = Some(ni);
+                    continue;
+                }
+                return false;
+            }
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
             star_ni = Some(ni);
             star_pi = Some(pi);
             pi += 1;
@@ -71,7 +117,7 @@ fn matches_glob(name: &str, pattern: &str) -> bool {
             return false;
         }
     }
-    while pi < p.len() && p[pi] == b'*' {
+    while pi < p.len() && p[pi] == '*' {
         pi += 1;
     }
     pi == p.len()
@@ -91,11 +137,6 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>, cues: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let p = entry.path();
         let name = p.file_name().and_then(|n| n.to_str()).map(|n| n.to_string());
-        if let Some(ref name) = name {
-            if is_ignored(name, &patterns) {
-                continue;
-            }
-        }
         // Use symlink_metadata so we never follow directory symlinks: a symlink
         // loop (or a symlink to elsewhere on disk) would otherwise cause
         // infinite recursion / traversal outside the library.
@@ -103,7 +144,20 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>, cues: &mut Vec<PathBuf>) {
             Ok(m) => m,
             Err(_) => continue,
         };
-        if meta.is_dir() {
+        let is_dir = meta.is_dir();
+        if let Some(ref name) = name {
+            if is_ignored(name, &patterns) {
+                continue;
+            }
+            // MPD: trailing `/` in .mpdignore patterns matches directories only.
+            if is_dir {
+                let dir_name = format!("{}/", name);
+                if is_ignored(&dir_name, &patterns) {
+                    continue;
+                }
+            }
+        }
+        if is_dir {
             if meta.file_type().is_symlink() {
                 continue;
             }
@@ -296,12 +350,23 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
 
     // Parse CUE sheets; the audio files they reference are split into per-track
     // entries, so we skip ingesting them as whole-file tracks.
+    // When a CUE's audio file was excluded by .mpdignore (not in `seen`), skip
+    // parsing entirely to avoid ingest-then-prune cycles.
     let mut parsed_cues: Vec<(PathBuf, CueTrack)> = Vec::new();
     let mut referenced: HashSet<PathBuf> = HashSet::new();
     for cue in &cues {
         if let Some(dir) = dirs.iter().find(|d| cue.starts_with(d)) {
             match parse_cue(cue, dir) {
                 Ok(tracks) => {
+                    if let Some(first) = tracks.first() {
+                        if !seen.contains(&first.audio_rel) {
+                            tracing::warn!(
+                                "cue {} references audio not in scan — likely excluded by .mpdignore",
+                                cue.display()
+                            );
+                            continue;
+                        }
+                    }
                     for t in &tracks {
                         referenced.insert(t.audio_rel.clone());
                     }
@@ -582,6 +647,41 @@ mod tests {
     }
 
     #[test]
+    fn matches_glob_unicode_question() {
+        assert!(matches_glob("caf\u{00E9}.txt", "caf?.txt"));
+        assert!(!matches_glob("cafe\u{0301}.txt", "caf?.txt"));
+    }
+
+    #[test]
+    fn matches_glob_bracket_expression() {
+        assert!(matches_glob("Thumbs.db", "[Tt]humbs.db"));
+        assert!(matches_glob("thumbs.db", "[Tt]humbs.db"));
+        assert!(!matches_glob("thumbs.txt", "[Tt]humbs.db"));
+        assert!(matches_glob("abc", "ab[cd]"));
+        assert!(!matches_glob("abx", "ab[cd]"));
+    }
+
+    #[test]
+    fn matches_glob_bracket_negation() {
+        assert!(matches_glob("xbc", "[!a]bc"));
+        assert!(!matches_glob("abc", "[!a]bc"));
+    }
+
+    #[test]
+    fn matches_glob_bracket_range() {
+        assert!(matches_glob("file1.txt", "file[a-z0-9].txt"));
+        assert!(matches_glob("filed.txt", "file[a-z0-9].txt"));
+        assert!(!matches_glob("file.txt", "file[a-z0-9].txt"));
+    }
+
+    #[test]
+    fn matches_glob_bracket_with_star() {
+        assert!(matches_glob(".stfolder", ".st*"));
+        assert!(!matches_glob("folder", ".st*"));
+        assert!(matches_glob("Thumbs.db", "[Tt]humbs.*"));
+    }
+
+    #[test]
     fn is_ignored_checks_against_patterns() {
         let patterns = vec!["*.bak".to_string(), ".git".to_string()];
         assert!(is_ignored("backup.bak", &patterns));
@@ -621,6 +721,27 @@ mod tests {
         std::fs::write(dir.join("ignored_dir").join("hidden.flac"), b"").unwrap();
         let _ = std::fs::create_dir_all(dir.join("other_dir"));
         std::fs::write(dir.join("other_dir").join("deep.flac"), b"").unwrap();
+
+        let mut files = Vec::new();
+        let mut cues = Vec::new();
+        walk(&dir, &mut files, &mut cues);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|p| p.ends_with("track.flac")));
+        assert!(files.iter().any(|p| p.ends_with("deep.flac")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn walk_skips_trailing_slash_dir_patterns() {
+        let dir = std::env::temp_dir().join("mpdignore_trailing_slash");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join(".mpdignore"), b"ignored_dir/\n").unwrap();
+        std::fs::write(dir.join("track.flac"), b"").unwrap();
+        std::fs::write(dir.join("ignored_file.txt"), b"").unwrap();
+        let _ = std::fs::create_dir_all(dir.join("ignored_dir"));
+        std::fs::write(dir.join("ignored_dir").join("hidden.flac"), b"").unwrap();
+        let _ = std::fs::create_dir_all(dir.join("keep_dir"));
+        std::fs::write(dir.join("keep_dir").join("deep.flac"), b"").unwrap();
 
         let mut files = Vec::new();
         let mut cues = Vec::new();
