@@ -8,6 +8,7 @@ import styles from './TrackMenu.module.css'
 interface Props {
   tracks: Track[]
   label?: string
+  playing?: boolean
   onPlayNext?: () => void
   onClearAndPlay?: () => void
   onAdded?: (msg: string) => void
@@ -32,7 +33,7 @@ function MI({ d }: { d: string }) {
   )
 }
 
-export function TrackMenu({ tracks, label, onPlayNext, onClearAndPlay, onAdded, onError }: Props) {
+export function TrackMenu({ tracks, label, playing, onPlayNext, onClearAndPlay, onAdded, onError }: Props) {
   const [open, setOpen] = useState(false)
   const [showPlaylists, setShowPlaylists] = useState(false)
   const [playlists, setPlaylists] = useState<string[]>([])
@@ -78,7 +79,7 @@ export function TrackMenu({ tracks, label, onPlayNext, onClearAndPlay, onAdded, 
   const single = tracks.length === 1 ? tracks[0] : null
 
   return (
-    <div className={styles.trackMenu} ref={wrapRef}>
+    <div className={`${styles.trackMenu}${playing ? ` ${styles.playing}` : ''}`} ref={wrapRef}>
       <button
         className={styles.trackMenuBtn}
         title={label ?? 'More actions'}

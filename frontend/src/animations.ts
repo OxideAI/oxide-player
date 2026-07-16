@@ -12,26 +12,15 @@ if (typeof document !== 'undefined') {
     filter 0.9s var(--ease-out, ease);
   will-change: transform, opacity, filter;
 }
-.ox-reveal.is-in {
-  opacity: 1;
-  transform: translate3d(0, 0, 0);
-  filter: blur(0);
-  will-change: auto;
-}
-@media (prefers-reduced-motion: reduce) {
-  .ox-reveal { opacity: 1; transform: none; filter: none; transition: none; }
-}
-
-/* shared keyframes used across modules via composing classes */
-@keyframes oxSpin { to { transform: rotate(360deg); } }
-@keyframes oxPulse {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
-}
-@keyframes oxEq {
-  0%, 100% { transform: scaleY(0.35); }
-  50% { transform: scaleY(1); }
-}
+  .ox-reveal.is-in {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    filter: blur(0);
+    will-change: auto;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ox-reveal { opacity: 1; transform: none; filter: none; transition: none; }
+  }
 `
   document.head.appendChild(style)
 }

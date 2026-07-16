@@ -33,6 +33,20 @@
   transform: rotate(90deg);
 }
 
+/* Playing indicator: pulse the three dots sequentially when the host row is the active song.
+   Triggered by the local .playing class (set via the `playing` prop), so it coexists with hover rotate. */
+.playing .trackMenuBtn :global(svg circle) {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: oxDotPulse 1.2s var(--ease) infinite;
+}
+.playing .trackMenuBtn :global(svg circle):nth-child(2) {
+  animation-delay: 0.18s;
+}
+.playing .trackMenuBtn :global(svg circle):nth-child(3) {
+  animation-delay: 0.36s;
+}
+
 .trackMenuPop {
   position: absolute;
   right: 0;
@@ -205,4 +219,15 @@
 
 .fileInfoValue {
   color: var(--text);
+}
+
+@keyframes oxDotPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.9); opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playing .trackMenuBtn :global(svg circle) {
+    animation: none !important;
+  }
 }

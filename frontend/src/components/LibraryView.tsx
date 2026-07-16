@@ -292,7 +292,7 @@ export function LibraryView({
                   <span className={styles.tArtist}>{t.artist ?? '—'}</span>
                   <span className={styles.tTime}>{fmtTime(t.duration)}</span>
                   <span className={styles.rowMenu}>
-                    <TrackMenu tracks={[t]} onAdded={notify} onError={setError} />
+                    <TrackMenu tracks={[t]} playing={nowId === t.id && isPlaying} onAdded={notify} onError={setError} />
                   </span>
                 </li>
               ))}
