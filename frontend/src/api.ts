@@ -160,6 +160,10 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pos }),
     }).then((r) => json<unknown>(r)),
+  clearQueue: () =>
+    fetch('/api/playback/clear-queue', {
+      method: 'POST',
+    }).then((r) => json<unknown>(r)),
 
   // —— Settings / config ——
   getConfig: () => fetch('/api/config').then((r) => json<Config>(r)),

@@ -47,6 +47,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/playback/shuffle", post(shuffle_queue))
         .route("/api/playback/jump", post(jump))
         .route("/api/playback/remove", post(remove))
+        .route("/api/playback/clear-queue", post(clear_queue))
         .route("/api/devices", get(devices))
         .route("/api/devices/{id}/enable", post(enable_device))
         .route("/api/devices/{id}/disable", post(disable_device))
@@ -627,14 +628,20 @@ async fn playlist_delete(
     Ok(StatusCode::OK)
 }
 
-async fn queue(State(s): State<AppState>) -> AppResult<Json<crate::types::QueueResponse>> {
-    let entries = s.mpd().queue().await?;
-    // Use the cached current song id from the 1s status poller instead of a
-    // second MPD round-trip.
-    let current_pos = match s.status_snapshot().await.current_id {
+/// Position of the current song within `entries`, or `None` when nothing is
+/// playing. Uses the cached current song id from the 1s status poller instead
+/// of a second MPD round-trip. `QueueEntry.id` and `current_id` are both MPD
+/// SongIds (not DB track ids), so the comparison is sound.
+async fn current_pos(s: &AppState, entries: &[crate::types::QueueEntry]) -> Option<u32> {
+    match s.status_snapshot().await.current_id {
         Some(id) => entries.iter().position(|e| e.id == id).map(|p| p as u32),
         None => None,
-    };
+    }
+}
+
+async fn queue(State(s): State<AppState>) -> AppResult<Json<crate::types::QueueResponse>> {
+    let entries = s.mpd().queue().await?;
+    let current_pos = current_pos(&s, &entries).await;
     Ok(Json(crate::types::QueueResponse { entries, current: current_pos }))
 }
 
@@ -665,5 +672,20 @@ struct RemoveBody {
 
 async fn remove(State(s): State<AppState>, Json(b): Json<RemoveBody>) -> AppResult<StatusCode> {
     s.mpd().delete_position(b.pos).await?;
+    Ok(StatusCode::OK)
+}
+
+async fn clear_queue(State(s): State<AppState>) -> AppResult<StatusCode> {
+    let entries = s.mpd().queue().await?;
+    // Skip the currently playing/paused song so playback is uninterrupted.
+    // When nothing is current, every entry is removed.
+    let current_pos = current_pos(&s, &entries).await;
+    // Delete from the highest position down so earlier indices stay valid.
+    for pos in (0..entries.len() as u32).rev() {
+        if Some(pos) == current_pos {
+            continue;
+        }
+        s.mpd().delete_position(pos).await?;
+    }
     Ok(StatusCode::OK)
 }
