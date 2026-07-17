@@ -76,6 +76,7 @@ export function KioskView({
               className={styles.subBtn}
               onClick={() => onOpenAlbum(folderKey(song.uri))}
               title="Open album"
+              aria-label={`Open album: ${[song.artist, song.album].filter(Boolean).join(' — ')}`}
             >
               {[song.artist, song.album].filter(Boolean).join(' · ')}
             </button>

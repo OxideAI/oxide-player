@@ -217,6 +217,7 @@ export function PlaylistsView({ onOpenAlbum }: Props) {
                         className={styles.trackMetaBtn}
                         onClick={() => onOpenAlbum(folderKey(t.uri))}
                         title="Open album"
+                        aria-label={`Open album: ${[t.artist, t.album].filter(Boolean).join(' — ')}`}
                       >
                         {[t.artist, t.album].filter(Boolean).join(' · ')}
                       </button>
