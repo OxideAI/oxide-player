@@ -97,6 +97,15 @@ fetch_source() {
 }
 
 build_backend() {
+  # When installing from a local checkout that already carries a release
+  # binary (e.g. a prebuilt deployment package), skip the toolchain entirely
+  # and copy the existing artifact instead of compiling on-device.
+  if [ -n "$INSTALL_FROM_DIR" ] && [ -x "$SRC_DIR/target/release/oxide-player" ]; then
+    log "Prebuilt backend found in $SRC_DIR — skipping cargo build"
+    run install -Dm0755 "$SRC_DIR/target/release/oxide-player" "$BIN_DIR/oxide-player"
+    log "Installed backend -> $BIN_DIR/oxide-player"
+    return
+  fi
   log "Building backend (release)..."
   # backend/ is a workspace member, so cargo places the binary in the
   # workspace root target/ dir, not backend/target/.
