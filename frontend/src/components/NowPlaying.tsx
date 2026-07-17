@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
 import type { PlayerStatus, QueueResponse } from '../types'
 import { api } from '../api'
-import { fmtTime, displayTitle, audioQuality } from '../util'
+import { fmtTime, displayTitle, audioQuality, folderKey } from '../util'
 import { QueueView } from './QueueView'
 import { fracFromPointer, useDragValue, useSmoothElapsed } from './playerHooks'
 import styles from './NowPlaying.module.css'
@@ -15,6 +15,7 @@ interface Props {
   onPrev: () => void
   onSeek: (seconds: number) => void
   onVolume: (volume: number) => void
+  onOpenAlbum: (album: string) => void
 }
 export function NowPlaying({
   status,
@@ -24,6 +25,7 @@ export function NowPlaying({
   onPrev,
   onSeek,
   onVolume,
+  onOpenAlbum,
 }: Props) {
   const loading = status === null
   const song = status?.current_song ?? null
@@ -112,9 +114,18 @@ export function NowPlaying({
         </a>
         <div className={styles.text}>
           <div className={styles.title}>{loading ? 'Loading…' : (song ? displayTitle(song) : 'Nothing playing')}</div>
-          <div className={styles.artist}>
-            {[song?.artist, song?.album].filter(Boolean).join(' — ')}
-          </div>
+          {song ? (
+            <button
+              type="button"
+              className={styles.artistBtn}
+              onClick={() => onOpenAlbum(folderKey(song.uri))}
+              title="Open album"
+            >
+              {[song.artist, song.album].filter(Boolean).join(' — ')}
+            </button>
+          ) : (
+            <div className={styles.artist} />
+          )}
           {song && <div className={styles.quality}>{audioQuality(song)}</div>}
         </div>
       </div>

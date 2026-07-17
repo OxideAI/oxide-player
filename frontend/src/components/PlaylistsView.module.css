@@ -197,13 +197,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.trackMeta {
+.trackMetaBtn {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   font-size: 0.8rem;
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 220px;
+}
+.trackMetaBtn:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 .trackDur {
   font-size: 0.8rem;

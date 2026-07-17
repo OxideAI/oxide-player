@@ -11,6 +11,11 @@ export function displayTitle(t: { title: string | null; uri: string }): string {
   return name.replace(/\.[^./\\]+$/, '')
 }
 
+export function folderKey(uri: string): string {
+  const idx = uri.lastIndexOf('/')
+  return idx >= 0 ? uri.slice(0, idx) : ''
+}
+
 export function audioQuality(t: {
   format?: string | null
   sample_rate?: number | null

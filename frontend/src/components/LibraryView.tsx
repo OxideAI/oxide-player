@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Track } from '../types'
 import { api, toPlayRef } from '../api'
-import { fmtTime, displayTitle } from '../util'
+import { fmtTime, displayTitle, folderKey } from '../util'
 import { TrackMenu } from './TrackMenu'
 import { Reveal } from './Reveal'
 import styles from './LibraryView.module.css'
@@ -23,11 +23,6 @@ interface Folder {
   artist: string | null
   coverKey: string | null
   tracks: Track[]
-}
-
-function folderKey(uri: string): string {
-  const idx = uri.lastIndexOf('/')
-  return idx >= 0 ? uri.slice(0, idx) : ''
 }
 
 function trackOrder(a: Track, b: Track): number {
