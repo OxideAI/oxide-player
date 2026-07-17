@@ -136,13 +136,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sub {
+.subBtn {
   margin-top: 0.6rem;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   font-size: clamp(0.95rem, 2.4vw, 1.2rem);
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.subBtn:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 .quality {
   margin-top: 0.5rem;

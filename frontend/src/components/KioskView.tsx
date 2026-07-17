@@ -1,6 +1,6 @@
 import type { PlayerStatus, QueueResponse } from '../types'
 import { api } from '../api'
-import { fmtTime, displayTitle, audioQuality } from '../util'
+import { fmtTime, displayTitle, audioQuality, folderKey } from '../util'
 import { useDragValue, useSmoothElapsed } from './playerHooks'
 import styles from './KioskView.module.css'
 
@@ -12,6 +12,7 @@ interface Props {
   onPrev: () => void
   onSeek: (seconds: number) => void
   onVolume: (volume: number) => void
+  onOpenAlbum: (album: string) => void
 }
 
 export function KioskView({
@@ -21,6 +22,7 @@ export function KioskView({
   onPrev,
   onSeek,
   onVolume,
+  onOpenAlbum,
 }: Props) {
   const loading = status === null
   const song = status?.current_song ?? null
@@ -69,9 +71,15 @@ export function KioskView({
           <span className={styles.eyebrow}>Now playing</span>
           <div className={styles.title}>{title}</div>
           {song && (
-            <div className={styles.sub}>
+            <button
+              type="button"
+              className={styles.subBtn}
+              onClick={() => onOpenAlbum(folderKey(song.uri))}
+              title="Open album"
+              aria-label={`Open album: ${[song.artist, song.album].filter(Boolean).join(' — ')}`}
+            >
               {[song.artist, song.album].filter(Boolean).join(' · ')}
-            </div>
+            </button>
           )}
           {song && <div className={styles.quality}>{audioQuality(song)}</div>}
         </div>

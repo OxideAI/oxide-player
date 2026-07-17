@@ -141,6 +141,12 @@ export function App() {
     [],
   )
 
+  const openAlbum = useCallback((album: string) => {
+    setRoute({ tab: 'library', album })
+    window.history.pushState(null, '', buildPath({ tab: 'library', album }))
+    setNavOpen(false)
+  }, [])
+
   if (kiosk) {
     return (
       <KioskView
@@ -151,6 +157,7 @@ export function App() {
         onPrev={prev}
         onSeek={seek}
         onVolume={setVolume}
+        onOpenAlbum={openAlbum}
       />
     )
   }
@@ -249,7 +256,7 @@ export function App() {
             }}
           />
         )}
-        {tab === 'playlists' && <PlaylistsView />}
+        {tab === 'playlists' && <PlaylistsView onOpenAlbum={openAlbum} />}
         {tab === 'settings' && <ConfigView />}
       </main>
 
@@ -261,6 +268,7 @@ export function App() {
         onPrev={prev}
         onSeek={seek}
         onVolume={setVolume}
+        onOpenAlbum={openAlbum}
       />
 
       <InstallPrompt />
