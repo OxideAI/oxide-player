@@ -124,15 +124,6 @@ impl AppState {
         }
     }
 
-    /// Snapshot the queue and push it to WS clients. Used by `GET /api/queue`
-    /// and the queue-mutating endpoints so connected clients update instantly
-    /// regardless of whether the change came from this UI or MPD directly.
-    pub async fn queue_snapshot_and_broadcast(&self) -> QueueResponse {
-        let snapshot = self.queue_snapshot().await;
-        let _ = self.inner.event_tx.send(StatusEvent::Queue(snapshot.clone()));
-        snapshot
-    }
-
     /// Broadcast the current queue to WS clients without returning it. Called by
     /// mutation endpoints (remove, jump, shuffle, …) so the UI updates the very
     /// next frame instead of waiting for the 1s poller to notice.
