@@ -23,6 +23,7 @@ clap = { version = "4", features = ["derive"] }
 tokio-tungstenite = "0.30"
 futures-util = "0.3"
 anyhow = "1"
+image = "0.25"
 
 [dev-dependencies]
 tempfile = "3"

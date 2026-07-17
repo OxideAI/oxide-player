@@ -42,6 +42,61 @@ pub struct Config {
     pub camilladsp_capture_rate: Option<u32>,
     #[serde(default)]
     pub default_dsp_profiles: Vec<crate::dsp::profile::DspProfile>,
+    /// Longest side (in px) a cover image is allowed to have after
+    /// optimization. Oversized covers are downscaled to fit. 0 keeps the
+    /// original dimension (only file-size recompression applies).
+    #[serde(default = "default_cover_max_dimension")]
+    pub cover_max_dimension: u32,
+    /// Maximum cover file size (in bytes) after optimization. Covers larger
+    /// than this are recompressed. 0 disables the size check.
+    #[serde(default = "default_cover_max_bytes")]
+    pub cover_max_bytes: u64,
+    /// JPEG quality (0–100) used when re-encoding oversized covers.
+    #[serde(default = "default_cover_quality")]
+    pub cover_quality: u8,
+}
+
+fn default_cover_max_dimension() -> u32 {
+    1200
+}
+
+fn default_cover_max_bytes() -> u64 {
+    512_000
+}
+
+fn default_cover_quality() -> u8 {
+    85
+}
+
+/// Resolved cover optimization settings, with safe defaults applied for any
+/// out-of-range values so a malformed config can never disable optimization
+/// entirely or produce garbage output.
+#[derive(Debug, Clone, Copy)]
+pub struct CoverOptimization {
+    pub max_dimension: u32,
+    pub max_bytes: u64,
+    pub quality: u8,
+}
+
+impl CoverOptimization {
+    pub fn from_config(cfg: &Config) -> Self {
+        let max_dimension = if cfg.cover_max_dimension == 0 {
+            1200
+        } else {
+            cfg.cover_max_dimension
+        };
+        let max_bytes = if cfg.cover_max_bytes == 0 {
+            512_000
+        } else {
+            cfg.cover_max_bytes
+        };
+        let quality = cfg.cover_quality.clamp(10, 100);
+        CoverOptimization {
+            max_dimension,
+            max_bytes,
+            quality,
+        }
+    }
 }
 
 fn read_json_config(path: &Path) -> Result<Config> {
@@ -104,6 +159,9 @@ impl Config {
             camilladsp_capture_device: None,
             camilladsp_capture_rate: None,
             default_dsp_profiles: Vec::new(),
+            cover_max_dimension: default_cover_max_dimension(),
+            cover_max_bytes: default_cover_max_bytes(),
+            cover_quality: default_cover_quality(),
         }
     }
 

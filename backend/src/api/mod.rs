@@ -209,9 +209,11 @@ async fn run_scan(s: &AppState, incremental: bool) -> AppResult<u64> {
     let db = s.db().clone();
     let cover_dir = cfg.cover_cache_dir();
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
-    let count = tokio::task::spawn_blocking(move || crate::library::scan(&dirs, &db, &cover_dir))
-        .await
-        .map_err(|e| AppError::Library(e.to_string()))??;
+    let count = tokio::task::spawn_blocking(move || {
+        crate::library::scan(&dirs, &db, &cover_dir, crate::config::CoverOptimization::from_config(&cfg))
+    })
+    .await
+    .map_err(|e| AppError::Library(e.to_string()))??;
     if incremental {
         // Keep MPD's index in sync with the filesystem so every scanned track
         // is playable (a stale MPD db is the usual cause of "No such song" on
@@ -325,10 +327,12 @@ async fn config_remove_dir(
 async fn library_rescan_art(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
     let _guard = s.scan_guard().await;
     let db = s.db().clone();
-    let cover_dir = s.config().await.cover_cache_dir();
+    let cfg = s.config().await;
+    let cover_dir = cfg.cover_cache_dir();
+    let opt = crate::config::CoverOptimization::from_config(&cfg);
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
     let with_cover =
-        tokio::task::spawn_blocking(move || crate::library::scanner::rescan_art(&db, &cover_dir))
+        tokio::task::spawn_blocking(move || crate::library::scanner::rescan_art(&db, &cover_dir, opt))
             .await
             .map_err(|e| AppError::Library(e.to_string()))??;
     Ok(Json(serde_json::json!({ "with_cover": with_cover })))
