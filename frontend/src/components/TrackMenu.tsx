@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Track } from '../types'
 import { api, toPlayRef } from '../api'
 import { displayTitle } from '../util'
@@ -135,8 +136,9 @@ export function TrackMenu({ tracks, label, playing, onPlayNext, onClearAndPlay, 
           )}
         </div>
       )}
-      {showPlaylists && (
-        <div className={styles.trackMenuModal} onClick={() => setShowPlaylists(false)}>
+      {showPlaylists &&
+        createPortal(
+          <div className={styles.trackMenuModal} onClick={() => setShowPlaylists(false)}>
           <div className={styles.trackMenuModalBox} onClick={(e) => e.stopPropagation()}>
             <div className={styles.trackMenuModalTitle}>Add to playlist</div>
             <ul className={styles.trackMenuPlaylistList}>
@@ -153,9 +155,14 @@ export function TrackMenu({ tracks, label, playing, onPlayNext, onClearAndPlay, 
               Close
             </button>
           </div>
-        </div>
-      )}
-      {infoTrack && <FileInfo track={infoTrack} onClose={() => setInfoTrack(null)} />}
+        </div>,
+          document.body,
+        )}
+      {infoTrack &&
+        createPortal(
+          <FileInfo track={infoTrack} onClose={() => setInfoTrack(null)} />,
+          document.body,
+        )}
     </div>
   )
 }
