@@ -250,7 +250,7 @@ impl Config {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "oxide-player", about = "Audiophile music server")]
+#[command(name = "oxide-player", about = "Audiophile music server", version)]
 pub struct Cli {
     #[arg(short, long)]
     pub config: Option<PathBuf>,

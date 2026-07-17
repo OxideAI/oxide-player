@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & package (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Raspberry Pi 3/4/5 (64-bit OS)
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+          # Desktop / server (x86_64)
+          - target: x86_64-unknown-linux-gnu
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compile linker (aarch64)
+        if: matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: release-${{ matrix.target }}
+
+      - name: Build backend (release, cross)
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (dist/)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Assemble package
+        id: pkg
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          STAGE="oxide-player-${ARCH}"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/bin" "$STAGE/dist" "$STAGE/contrib"
+
+          # Prebuilt backend binary (consumed by install.sh's INSTALL_FROM_DIR path)
+          install -Dm0755 "target/${TARGET}/release/oxide-player" "$STAGE/bin/oxide-player"
+          # install.sh looks for target/release/oxide-player under INSTALL_FROM_DIR,
+          # so also place it where the installer expects it.
+          mkdir -p "$STAGE/target/release"
+          install -Dm0755 "target/${TARGET}/release/oxide-player" "$STAGE/target/release/oxide-player"
+
+          cp -r frontend/dist/. "$STAGE/dist/"
+          cp -r contrib/. "$STAGE/contrib/"
+          cp install.sh "$STAGE/install.sh"
+          chmod +x "$STAGE/install.sh"
+
+          tar -czf "${STAGE}.tar.gz" "$STAGE"
+          echo "asset=${STAGE}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Verify package (toolchain-free smoke test)
+        run: |
+          set -euo pipefail
+          ARCH="${{ matrix.arch }}"
+          STAGE="oxide-player-${ARCH}"
+          rm -rf "$STAGE"
+          tar -xzf "${STAGE}.tar.gz"
+
+          echo "== layout =="
+          ls -R "$STAGE" | head -40
+
+          echo "== binary --version exits 0 =="
+          "$STAGE/bin/oxide-player" --version
+
+          echo "== dist/index.html exists and references hashed assets =="
+          test -f "$STAGE/dist/index.html"
+          grep -Eq 'src="[^"]+\.(js|css)(\?[^"]*)?"' "$STAGE/dist/index.html" \
+            || { echo "index.html does not reference hashed JS/CSS"; exit 1; }
+
+          echo "== systemd unit present =="
+          test -f "$STAGE/contrib/systemd/oxide-player.service"
+          if command -v systemd-analyze >/dev/null 2>&1; then
+            systemd-analyze verify "$STAGE/contrib/systemd/oxide-player.service" \
+              && echo "systemd-analyze verify OK"
+          else
+            echo "systemd-analyze not available; skipping unit verify"
+          fi
+
+          echo "== install.sh is executable =="
+          test -x "$STAGE/install.sh"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.pkg.outputs.asset }}
+          fail_on_unmatched_files: true
