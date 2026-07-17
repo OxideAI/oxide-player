@@ -13,6 +13,7 @@ export type ActionId =
   | 'toggleShuffle'
   | 'toggleMute'
   | 'help'
+  | 'search'
 
 export interface Binding {
   id: ActionId
@@ -34,6 +35,7 @@ export const BINDINGS: Binding[] = [
   { id: 'toggleMute', key: 'm', label: 'M', desc: 'Mute / unmute' },
   { id: 'help', key: '?', label: '?', desc: 'Show this help' },
   { id: 'help', key: 'h', label: 'H', desc: 'Show this help' },
+  { id: 'search', key: '/', label: '/', desc: 'Search' },
 ]
 
 const KEY_TO_ID = new Map<string, ActionId>()

@@ -20,6 +20,7 @@ export interface ShortcutHandlers {
   onToggleMute: () => void
   onHelp: () => void
   onFeedback: (text: string) => void
+  onSearch: () => void
 }
 
 export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
@@ -84,6 +85,9 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
           return
         case 'help':
           fire('help', h.onHelp, undefined)
+          return
+        case 'search':
+          fire('search', h.onSearch, undefined)
           return
       }
     }

@@ -12,6 +12,8 @@ import { OfflineBanner } from './components/OfflineBanner'
 import { useKeyboardShortcuts } from './components/useKeyboardShortcuts'
 import { ShortcutToast } from './components/ShortcutToast'
 import { ShortcutHelp } from './components/ShortcutHelp'
+import { SearchBar } from './components/SearchBar'
+import { SearchView } from './components/SearchView'
 import styles from './App.module.css'
 
 type Tab = 'library' | 'playlists' | 'settings'
@@ -174,6 +176,13 @@ export function App() {
 
   const [helpOpen, setHelpOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState<string | null>(null)
+
+  const openSearch = useCallback((q: string) => {
+    setSearchQuery(q)
+    setSearchOpen(false)
+  }, [])
 
   useKeyboardShortcuts({
     status,
@@ -187,6 +196,7 @@ export function App() {
     onToggleMute: toggleMute,
     onHelp: () => setHelpOpen((o) => !o),
     onFeedback: setToast,
+    onSearch: () => setSearchOpen(true),
   })
 
   const openAlbum = useCallback((album: string) => {
@@ -306,6 +316,15 @@ export function App() {
         )}
         {tab === 'playlists' && <PlaylistsView onOpenAlbum={openAlbum} />}
         {tab === 'settings' && <ConfigView />}
+        {searchQuery && (
+          <SearchView
+            query={searchQuery}
+            nowPlayingId={status?.current_song?.id ?? null}
+            isPlaying={status?.state === 'playing'}
+            onBack={() => setSearchQuery(null)}
+            onOpenAlbum={openAlbum}
+          />
+        )}
       </main>
 
       <NowPlaying
@@ -323,6 +342,7 @@ export function App() {
       <OfflineBanner />
       <ShortcutToast text={toast} onClear={() => setToast(null)} />
       <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <SearchBar open={searchOpen} onClose={() => setSearchOpen(false)} onSearch={openSearch} />
     </div>
   )
 }
