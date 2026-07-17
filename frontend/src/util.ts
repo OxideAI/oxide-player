@@ -1,3 +1,27 @@
+/// The wire envelope sent to the playback endpoints (play-next, clear-play,
+/// playlist add). Maps a library `Track` to the shape the backend `TrackRef`
+/// deserializer expects: `{ uri, start, end, track_id }`.
+export interface PlayRef {
+  uri: string
+  start: number | undefined
+  end: number | undefined
+  track_id: number
+}
+
+export function toPlayRef(t: {
+  uri: string
+  start_time?: number | null
+  end_time?: number | null
+  id: number
+}): PlayRef {
+  return {
+    uri: t.uri,
+    start: t.start_time ?? undefined,
+    end: t.end_time ?? undefined,
+    track_id: t.id,
+  }
+}
+
 export function fmtTime(s: number | null | undefined): string {
   if (s == null || !isFinite(s) || s < 0) s = 0
   const m = Math.floor(s / 60)

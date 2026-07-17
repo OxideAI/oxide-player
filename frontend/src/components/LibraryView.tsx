@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Track } from '../types'
 import { api } from '../api'
-import { fmtTime, displayTitle } from '../util'
+import { fmtTime, displayTitle, toPlayRef } from '../util'
 import { TrackMenu } from './TrackMenu'
 import { Reveal } from './Reveal'
 import styles from './LibraryView.module.css'
@@ -138,9 +138,7 @@ export function LibraryView({
   const play = async (t: Track) => {
     setPlayingUri(t.uri)
     try {
-      await api.clearAndPlay([
-        { uri: t.uri, start: t.start_time ?? undefined, end: t.end_time ?? undefined, track_id: t.id },
-      ])
+      await api.clearAndPlay([toPlayRef(t)])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
