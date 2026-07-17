@@ -191,6 +191,7 @@ export const api = {
     }).then((r) => json<unknown>(r)),
 
   // —— Settings / config ——
+  version: () => fetch('/api/version').then((r) => json<{ backend: string; frontend: string }>(r)),
   getConfig: () => fetch('/api/config').then((r) => json<Config>(r)),
   updateConfig: (cfg: Config) =>
     fetch('/api/config', {
