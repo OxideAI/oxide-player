@@ -9,6 +9,9 @@ import { PlaylistsView } from './components/PlaylistsView'
 import { Reveal } from './components/Reveal'
 import { InstallPrompt } from './components/InstallPrompt'
 import { OfflineBanner } from './components/OfflineBanner'
+import { useKeyboardShortcuts } from './components/useKeyboardShortcuts'
+import { ShortcutToast } from './components/ShortcutToast'
+import { ShortcutHelp } from './components/ShortcutHelp'
 import styles from './App.module.css'
 
 type Tab = 'library' | 'playlists' | 'settings'
@@ -140,6 +143,51 @@ export function App() {
     },
     [],
   )
+
+  const prevVolume = useRef<number>(status?.volume && status.volume > 0 ? status.volume : 80)
+  useEffect(() => {
+    if (status?.volume && status.volume > 0) prevVolume.current = status.volume
+  }, [status?.volume])
+  const toggleMute = useCallback(() => {
+    const cur = status?.volume ?? 0
+    if (cur > 0) {
+      prevVolume.current = cur
+      void setVolume(0)
+    } else {
+      void setVolume(prevVolume.current || 80)
+    }
+  }, [status, setVolume])
+
+  const toggleKiosk = useCallback(() => {
+    if (window.location.pathname === '/kiosk') window.location.pathname = '/'
+    else window.location.pathname = '/kiosk'
+  }, [])
+
+  const toggleShuffle = useCallback(async () => {
+    if (!status) return
+    try {
+      await api.shuffle(!status.random)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [status])
+
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+
+  useKeyboardShortcuts({
+    status,
+    onTogglePlay: togglePlay,
+    onNext: next,
+    onPrev: prev,
+    onSeek: seek,
+    onVolume: setVolume,
+    onToggleKiosk: toggleKiosk,
+    onToggleShuffle: toggleShuffle,
+    onToggleMute: toggleMute,
+    onHelp: () => setHelpOpen((o) => !o),
+    onFeedback: setToast,
+  })
 
   const openAlbum = useCallback((album: string) => {
     setRoute({ tab: 'library', album })
@@ -273,6 +321,8 @@ export function App() {
 
       <InstallPrompt />
       <OfflineBanner />
+      <ShortcutToast text={toast} onClear={() => setToast(null)} />
+      <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   )
 }
