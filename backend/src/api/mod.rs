@@ -66,6 +66,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/playlists/{name}/remove", post(playlist_remove))
         .route("/api/playlists/{name}/rename", post(playlist_rename))
         .route("/api/playlists/{name}", delete(playlist_delete))
+        .route("/api/version", get(version_get))
         .route("/api/config", get(config_get))
         .route("/api/config", put(config_put))
         .route("/api/config/library-dirs", post(config_add_dir))
@@ -234,6 +235,24 @@ async fn library_scan(State(s): State<AppState>) -> AppResult<Json<serde_json::V
 async fn library_refresh(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
     let count = run_scan(&s, true).await?;
     Ok(Json(serde_json::json!({ "scanned": count })))
+}
+
+/// Backend and frontend build versions, shown on the Settings page.
+async fn version_get() -> AppResult<Json<serde_json::Value>> {
+    let frontend = parse_frontend_version();
+    Ok(Json(serde_json::json!({
+        "backend": env!("CARGO_PKG_VERSION"),
+        "frontend": frontend,
+    })))
+}
+
+/// Frontend version is read at compile time from the built UI manifest.
+fn parse_frontend_version() -> String {
+    let raw = include_str!("../../../frontend/package.json");
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Serialized view of the current config for the Settings UI.
@@ -792,4 +811,57 @@ async fn clear_queue(State(s): State<AppState>) -> AppResult<StatusCode> {
     }
     s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::Config;
+    use crate::dsp::DspManager;
+    use crate::library::LibraryDb;
+    use crate::mpd::Mpd;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    async fn test_app() -> axum::Router {
+        let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let dsp = DspManager::new(
+            std::env::temp_dir().join("oxide_test_version_dsp.yaml"),
+            None,
+            "".to_string(),
+            44100,
+            false,
+            None,
+        );
+        let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
+        let state = AppState::new(Config::default_config(), db, dsp, mpd, None);
+        super::router(state).await
+    }
+
+    #[tokio::test]
+    async fn version_endpoint_returns_both_versions() {
+        let app = test_app().await;
+        let req = Request::builder()
+            .uri("/api/version")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(
+            v["backend"],
+            env!("CARGO_PKG_VERSION"),
+            "backend version must match CARGO_PKG_VERSION"
+        );
+        assert!(
+            v["frontend"].is_string() && !v["frontend"].as_str().unwrap().is_empty(),
+            "frontend version must be a non-empty string"
+        );
+    }
 }
