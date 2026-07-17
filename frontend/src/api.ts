@@ -9,6 +9,28 @@ import type {
   Track,
 } from './types'
 
+/**
+ * The wire envelope sent to the playback endpoints (play-next, clear-play,
+ * playlist add). Maps a library `Track` to the shape the backend `TrackRef`
+ * deserializer expects: `{ uri, start, end, track_id }`. This is the *request*
+ * shape and is distinct from the `TrackRef` *response* model in `types.ts`.
+ */
+export interface PlayRef {
+  uri: string
+  start: number | undefined
+  end: number | undefined
+  track_id: number
+}
+
+export function toPlayRef(t: Track): PlayRef {
+  return {
+    uri: t.uri,
+    start: t.start_time ?? undefined,
+    end: t.end_time ?? undefined,
+    track_id: t.id,
+  }
+}
+
 async function json<T>(res: Response): Promise<T> {
   const text = await res.text()
   const body = text ? JSON.parse(text) : undefined
@@ -123,21 +145,21 @@ export const api = {
       body: JSON.stringify({ name }),
     }).then((r) => json<unknown>(r)),
 
-  // `tracks` is a single track object or an array of them (whole album),
-  // wrapped in `{ tracks }` to match the add-to-playlist envelope.
-  playNext: (tracks: unknown) =>
+  // `tracks` is one or more `PlayRef` envelopes (a single track or a whole
+  // album), wrapped in `{ tracks }` to match the add-to-playlist envelope.
+  playNext: (tracks: PlayRef[]) =>
     fetch('/api/playback/play-next', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tracks }),
     }).then((r) => json<unknown>(r)),
-  clearAndPlay: (tracks: unknown) =>
+  clearAndPlay: (tracks: PlayRef[]) =>
     fetch('/api/playback/clear-play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tracks }),
     }).then((r) => json<unknown>(r)),
-  addToPlaylist: (name: string, tracks: unknown) =>
+  addToPlaylist: (name: string, tracks: PlayRef[]) =>
     fetch(`/api/playlists/${encodeURIComponent(name)}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

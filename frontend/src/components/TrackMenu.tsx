@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Track } from '../types'
-import { api } from '../api'
-import { displayTitle, toPlayRef } from '../util'
+import { api, toPlayRef } from '../api'
+import { displayTitle } from '../util'
 import { FileInfo } from './FileInfo'
 import styles from './TrackMenu.module.css'
 
