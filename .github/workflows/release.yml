@@ -48,11 +48,18 @@ jobs:
           sudo apt-get update
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             sudo dpkg --add-architecture arm64
-            # The default Azure mirror does not serve arm64 (binary-arm64)
-            # indexes, so point the arm64 architecture at Ubuntu ports.
-            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main universe" | sudo tee /etc/apt/sources.list.d/arm64.list
-            sudo apt-get update
-            sudo apt-get install -y libasound2-dev:arm64
+            # The runner's Azure mirror does not publish arm64 (binary-arm64)
+            # indexes, so fetch the ALSA dev packages directly from Ubuntu ports.
+            BASE=http://ports.ubuntu.com/ubuntu-ports/pool/main/a/alsa-lib
+            TMP=$(mktemp -d)
+            curl -fsSL -o "$TMP/libasound2-data.deb" \
+              "$BASE/libasound2-data_1.2.11-1ubuntu0.3_all.deb"
+            curl -fsSL -o "$TMP/libasound2t64.deb" \
+              "$BASE/libasound2t64_1.2.11-1ubuntu0.3_arm64.deb"
+            curl -fsSL -o "$TMP/libasound2-dev.deb" \
+              "$BASE/libasound2-dev_1.2.11-1ubuntu0.3_arm64.deb"
+            sudo dpkg -i "$TMP"/*.deb || sudo apt-get install -f -y
+            rm -rf "$TMP"
           else
             sudo apt-get install -y libasound2-dev
           fi
