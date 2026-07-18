@@ -3,7 +3,7 @@ name: Release (build & package)
 on:
   push:
     tags:
-      - "backend-v*"
+      - "oxide-player-v*"
   workflow_call:
 
 permissions:
@@ -25,6 +25,8 @@ jobs:
             arch: x86_64
     steps:
       - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -120,5 +122,6 @@ jobs:
       - name: Upload release asset
         uses: softprops/action-gh-release@v3
         with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           files: ${{ steps.pkg.outputs.asset }}
           fail_on_unmatched_files: true
