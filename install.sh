@@ -10,6 +10,7 @@ set -euo pipefail
 
 # ---- configurable knobs -----------------------------------------------------
 REPO_URL="${REPO_URL:-https://github.com/OxideAI/oxide-player.git}"
+REPO_API="${REPO_API:-https://api.github.com/repos/OxideAI/oxide-player}"
 INSTALL_FROM_DIR="${INSTALL_FROM_DIR:-}"          # set to a local checkout to skip cloning
 BRANCH="${BRANCH:-main}"
 
@@ -85,10 +86,62 @@ ensure_camilladsp() {
   run cargo install --git https://github.com/HEnquist/camilladsp --tag v4.1.3
 }
 
+detect_arch() {
+  # Map the current machine to the release asset suffix used by the packaging
+  # workflow: oxide-player-<arch>.tar.gz (arch in {x86_64, arm64}).
+  local m
+  m="$(uname -m)"
+  case "$m" in
+    x86_64|amd64)   echo "x86_64" ;;
+    aarch64|arm64)  echo "arm64" ;;
+    *) die "Unsupported architecture '$m' for prebuilt packages. Install from source instead (set INSTALL_FROM_DIR, or build manually)." ;;
+  esac
+}
+
+fetch_release_pkg() {
+  # Download the latest GitHub release package for this architecture and unpack
+  # it into BUILD_DIR so build_backend() can reuse the prebuilt binary via the
+  # INSTALL_FROM_DIR path. Falls back to a source clone on any failure.
+  command -v curl >/dev/null 2>&1 || { warn "curl missing — skipping release download."; return 1; }
+  command -v jq   >/dev/null 2>&1 || { warn "jq missing — skipping release download."; return 1; }
+
+  local arch asset url tag
+  arch="$(detect_arch)"
+  asset="oxide-player-${arch}.tar.gz"
+
+  log "Looking up latest release asset: $asset"
+  url="$(curl -fsSL "$REPO_API/releases/latest" \
+        | jq -r --arg a "$asset" '.tag_name as $t | (.assets[]? | select(.name==$a) | {url: .browser_download_url, tag: $t}) | "\(.tag)\t\(.url)"' \
+        | head -1)"
+
+  if [ -z "$url" ]; then
+    warn "No matching release asset found — will build from source."
+    return 1
+  fi
+  tag="${url%%$'\t'*}"
+  url="${url#*$'\t'}"
+  log "Found $asset in release $tag"
+
+  rm -rf "$BUILD_DIR"
+  mkdir -p "$BUILD_DIR"
+  run curl -fsSL -L "$url" -o "$BUILD_DIR/$asset"
+  run tar -xzf "$BUILD_DIR/$asset" -C "$BUILD_DIR"
+  SRC_DIR="$BUILD_DIR/oxide-player-${arch}"
+  if [ ! -d "$SRC_DIR" ]; then
+    warn "Unexpected package layout — will build from source."
+    return 1
+  fi
+  log "Using prebuilt release package: $SRC_DIR"
+  return 0
+}
+
 fetch_source() {
   if [ -n "$INSTALL_FROM_DIR" ]; then
     SRC_DIR="$INSTALL_FROM_DIR"
     log "Using local source: $SRC_DIR"
+    return
+  fi
+  if fetch_release_pkg; then
     return
   fi
   SRC_DIR="$BUILD_DIR"
@@ -97,10 +150,10 @@ fetch_source() {
 }
 
 build_backend() {
-  # When installing from a local checkout that already carries a release
-  # binary (e.g. a prebuilt deployment package), skip the toolchain entirely
-  # and copy the existing artifact instead of compiling on-device.
-  if [ -n "$INSTALL_FROM_DIR" ] && [ -x "$SRC_DIR/target/release/oxide-player" ]; then
+  # When installing from a local checkout or a prebuilt release package that
+  # already carries a release binary, skip the toolchain entirely and copy the
+  # existing artifact instead of compiling on-device.
+  if [ -x "$SRC_DIR/target/release/oxide-player" ]; then
     log "Prebuilt backend found in $SRC_DIR — skipping cargo build"
     run install -Dm0755 "$SRC_DIR/target/release/oxide-player" "$BIN_DIR/oxide-player"
     log "Installed backend -> $BIN_DIR/oxide-player"
@@ -115,6 +168,15 @@ build_backend() {
 }
 
 build_frontend() {
+  # A prebuilt release package ships a ready-made dist/ at its root. Reuse it
+  # instead of compiling the frontend (no node toolchain needed on-device).
+  if [ -d "$SRC_DIR/dist" ] && [ -f "$SRC_DIR/dist/index.html" ]; then
+    log "Using prebuilt frontend dist from release package"
+    run mkdir -p "$SHARE_DIR/dist"
+    run cp -r "$SRC_DIR/dist/." "$SHARE_DIR/dist/"
+    log "Installed frontend UI -> $SHARE_DIR/dist"
+    return
+  fi
   if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
     warn "node/npm not found — skipping web UI build."
     warn "Install the frontend manually: copy a built 'dist/' into $SHARE_DIR/dist"

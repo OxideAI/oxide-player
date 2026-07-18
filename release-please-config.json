@@ -1,0 +1,8 @@
+{
+  "packages": {
+    "backend": {
+      "release-type": "rust",
+      "package-name": "oxide-player"
+    }
+  }
+}
