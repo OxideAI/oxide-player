@@ -1,9 +1,10 @@
-name: Release
+name: Release (build & package)
 
 on:
   push:
     tags:
-      - "v*"
+      - "backend-v*"
+  workflow_call:
 
 permissions:
   contents: write
