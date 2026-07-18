@@ -20,6 +20,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
+          cache-on-failure: true
       # The PWA static-serving test asserts on frontend/dist artifacts, so the
       # frontend must be built before the backend tests run.
       - uses: actions/setup-node@v7
