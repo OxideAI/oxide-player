@@ -41,6 +41,9 @@ jobs:
         run: |
           npm install
           npm run build
+      # cpal (used by the visualizer) needs native ALSA dev headers to build.
+      - name: Install ALSA dev headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Test
         run: cargo test
 
