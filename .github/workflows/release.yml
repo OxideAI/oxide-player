@@ -55,10 +55,7 @@ jobs:
             # The runner's Azure/security mirrors do not publish arm64 indexes,
             # so resolve the arm64 cross sysroot solely from Ubuntu ports
             # (noble + noble-updates, matching the host's ALSA version).
-            cat > /tmp/arm64.sources.list <<'EOF'
-deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main
-deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main
-EOF
+            printf 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main\ndeb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main\n' | sudo tee /tmp/arm64.sources.list
             sudo apt-get update -o Dir::Etc::sourcelist=/tmp/arm64.sources.list -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
             sudo apt-get install -y -o Dir::Etc::sourcelist=/tmp/arm64.sources.list -o Dir::Etc::sourceparts="-" libasound2-dev:arm64
             ls /usr/lib/aarch64-linux-gnu/pkgconfig/alsa.pc
