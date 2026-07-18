@@ -5,11 +5,15 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -17,7 +21,6 @@ jobs:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
@@ -28,6 +31,4 @@ jobs:
     name: Build & publish packages
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    permissions:
-      contents: read
     uses: ./.github/workflows/release.yml
