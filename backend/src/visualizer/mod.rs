@@ -12,7 +12,9 @@ use tokio::sync::broadcast;
 
 /// Number of magnitude bins published to clients. The spectrum is log-grouped
 /// into this many bands so the visualizer gets a musically useful, evenly
-/// spaced low→high breakdown rather than raw FFT bins.
+/// spaced low→high breakdown rather than raw FFT bins. The frontend mirrors
+/// this value in `Visualizer.tsx` (BARS) — keep the two in sync, since the
+/// WebSocket frames carry exactly BANDS floats.
 pub const BANDS: usize = 72;
 
 /// How often (Hz) the analyzer publishes a frame. ~40 fps is smooth without
@@ -72,20 +74,41 @@ impl VizParams {
     pub fn load(data_dir: &std::path::Path) -> Self {
         let path = data_dir.join("vizparams.json");
         match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-                tracing::warn!("visualizer params unparseable, using defaults: {e}");
-                VizParams::default()
-            }),
+            Ok(text) => serde_json::from_str(&text)
+                .map(|p: VizParams| p.clamp())
+                .unwrap_or_else(|e| {
+                    tracing::warn!("visualizer params unparseable, using defaults: {e}");
+                    VizParams::default()
+                }),
             Err(_) => VizParams::default(),
+        }
+    }
+
+    /// Clamp every field to a sane range so a client-supplied (or hand-edited)
+    /// `vizparams.json` can never produce a degenerate visual or a panic in the
+    /// renderer. Mirrors `CoverOptimization::from_config` in config.rs.
+    fn clamp(self) -> Self {
+        VizParams {
+            bloom_alpha: self.bloom_alpha.clamp(0.0, 1.0),
+            bloom_beat: self.bloom_beat.clamp(0.0, 1.0),
+            bloom_energy: self.bloom_energy.clamp(0.0, 1.0),
+            bloom_radius: self.bloom_radius.clamp(0.0, 4.0),
+            bar_idle: self.bar_idle.clamp(0.0, 1.0),
+            bar_peak: self.bar_peak.clamp(0.0, 1.0),
+            bar_gap: self.bar_gap.clamp(0.0, 32.0),
+            bar_radius: self.bar_radius.clamp(0.0, 32.0),
+            phase_speed: self.phase_speed.clamp(0.0, 16.0),
+            blur: self.blur.clamp(0.0, 64.0),
         }
     }
 
     /// Persist params to `<data_dir>/vizparams.json` (atomic temp+rename).
     pub fn save(&self, data_dir: &std::path::Path) -> Result<()> {
+        let params = self.clone().clamp();
         std::fs::create_dir_all(data_dir)
             .map_err(|e| anyhow::anyhow!("create data dir: {e}"))?;
         let path = data_dir.join("vizparams.json");
-        let text = serde_json::to_string_pretty(self)
+        let text = serde_json::to_string_pretty(&params)
             .map_err(|e| anyhow::anyhow!("serialize viz params: {e}"))?;
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, text).map_err(|e| anyhow::anyhow!("write viz params: {e}"))?;
@@ -192,21 +215,25 @@ impl VisualizerAnalyzer {
         // Publisher: pulls the latest window, runs the FFT, groups into BANDS,
         // and broadcasts. Runs detached; never touches the audio callback's hot
         // path so capture stays glitch-free.
-        let publish_shared = shared.clone();
-        let publish_tx = tx.clone();
-        let fft_bins = fft.len();
-        tokio::spawn(async move {
-            tracing::debug!("visualizer publisher task started");
-            let mut planner = FftPlanner::<f32>::new();
-            let fft = planner.plan_fft_forward(
-                publish_shared.window_size.next_power_of_two(),
-            );
-            let mut interval =
-                tokio::time::interval(std::time::Duration::from_secs_f64(1.0 / PUBLISH_HZ));
-            let mut published = 0u32;
-            loop {
-                interval.tick().await;
-                let frame = compute_frame(&publish_shared, &fft, fft_bins);
+         let publish_shared = shared.clone();
+         let publish_tx = tx.clone();
+         let fft_bins = fft.len();
+         tokio::spawn(async move {
+             tracing::debug!("visualizer publisher task started");
+             let mut planner = FftPlanner::<f32>::new();
+             let fft = planner.plan_fft_forward(
+                 publish_shared.window_size.next_power_of_two(),
+             );
+             // Reused scratch buffer — avoids a ~16k-element heap alloc every
+             // frame (40 fps) on the publisher hot path.
+             let padded = publish_shared.window_size.next_power_of_two();
+             let mut scratch = vec![Complex::new(0.0f32, 0.0f32); padded];
+             let mut interval =
+                 tokio::time::interval(std::time::Duration::from_secs_f64(1.0 / PUBLISH_HZ));
+             let mut published = 0u32;
+             loop {
+                 interval.tick().await;
+                 let frame = compute_frame(&publish_shared, &fft, fft_bins, &mut scratch);
                 match publish_tx.send(frame) {
                     Ok(n) => {
                         published += 1;
@@ -235,6 +262,14 @@ fn pick_device(
     host: &cpal::Host,
     name: &str,
 ) -> Result<cpal::Device> {
+    // An empty name can't be an intentional match — skip straight to the
+    // platform default rather than letting `contains("")` grab the first
+    // enumerated device.
+    if name.is_empty() {
+        return host
+            .default_input_device()
+            .ok_or_else(|| anyhow::anyhow!("no default input device available"));
+    }
     if let Ok(devices) = host.input_devices().map(|d| d.collect::<Vec<_>>()) {
         for d in &devices {
             if d.name().map(|n| n == name).unwrap_or(false) {
@@ -312,10 +347,13 @@ where
 }
 
 /// Run the FFT over the current window and group into `BANDS` log-spaced bins.
+/// `scratch` is a caller-owned, reusable `padded`-length buffer (avoids a
+/// per-frame allocation).
 fn compute_frame(
     shared: &SharedState,
     fft: &Arc<dyn rustfft::Fft<f32>>,
     fft_bins: usize,
+    scratch: &mut [Complex<f32>],
 ) -> SpectrumFrame {
     let guard = shared.samples.lock().unwrap();
     let n = shared.window_size;
@@ -329,14 +367,16 @@ fn compute_frame(
     let level = (sumsq_td / len as f32).sqrt().clamp(0.0, 1.0);
 
     let padded = n.next_power_of_two();
-    let mut buf: Vec<Complex<f32>> = Vec::with_capacity(padded);
     // Hann window for cleaner spectral leakage, then zero-pad to the FFT size.
+    // Reuse `scratch` (already sized `padded`); clear only what we touch.
     for (i, s) in guard.iter().enumerate() {
         let w = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (n as f32 - 1.0)).cos();
-        buf.push(Complex::new(s * w, 0.0));
+        scratch[i] = Complex::new(s * w, 0.0);
     }
-    buf.resize(padded, Complex::new(0.0, 0.0));
-    fft.process(&mut buf);
+    for i in guard.len()..padded {
+        scratch[i] = Complex::new(0.0, 0.0);
+    }
+    fft.process(scratch);
 
     // Magnitude of the first half (real signal → symmetric spectrum). Each bin's
     // magnitude is ~amplitude * N/2, so dividing by N/2 recovers the per-bin
@@ -345,7 +385,7 @@ fn compute_frame(
     let mut mag = vec![0.0f32; half];
     let scale = (n as f32 / 2.0).max(1.0);
     for i in 0..half {
-        let m = (buf[i].re * buf[i].re + buf[i].im * buf[i].im).sqrt() / scale;
+        let m = (scratch[i].re * scratch[i].re + scratch[i].im * scratch[i].im).sqrt() / scale;
         mag[i] = m;
     }
 

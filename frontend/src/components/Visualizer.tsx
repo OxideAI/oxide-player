@@ -36,7 +36,10 @@ export const DEFAULT_VIZ_PARAMS: VizParams = {
   blur: 6,
 }
 
-const BARS = 72
+// The number of bars follows the backend's published bin count (BANDS in
+// visualizer/mod.rs) at runtime, so the two can never drift out of sync. We
+// only need a stable upper bound for the smoothed-height buffer.
+const MAX_BARS = 256
 
 export function Visualizer({ playing, frame, params }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -93,7 +96,7 @@ export function Visualizer({ playing, frame, params }: Props) {
     applyBlur(paramsRef.current.blur)
 
     // Smoothed bar heights so the spectrum eases instead of flickering.
-    const smoothed = new Float32Array(BARS)
+    const smoothed = new Float32Array(MAX_BARS)
     // Gentle idle pulse so the visualizer breathes even on silence/pause.
     let phase = 0
 
@@ -106,6 +109,8 @@ export function Visualizer({ playing, frame, params }: Props) {
       phase += dt * p.phaseSpeed
       const f = frameRef.current
       const energy = f ? f.level : 0
+      const bins = f?.bins
+      const barCount = bins && bins.length > 0 ? Math.min(bins.length, MAX_BARS) : MAX_BARS
 
       ctx.clearRect(0, 0, w, h)
 
@@ -127,10 +132,9 @@ export function Visualizer({ playing, frame, params }: Props) {
       // are tall (up to the full viewport height) and bold so the spectrum
       // reads as a large, prominent animation behind the album art.
       const gap = p.barGap
-      const bw = (w - gap * (BARS - 1)) / BARS
-      const bins = f?.bins
-      for (let i = 0; i < BARS; i++) {
-        const target = bins && bins.length === BARS ? bins[i] : 0
+      const bw = (w - gap * (barCount - 1)) / barCount
+      for (let i = 0; i < barCount; i++) {
+        const target = bins && bins.length === barCount ? bins[i] : 0
         // Attack fast, release slow — mimics a real VU/spectrum meter.
         const k = target > smoothed[i] ? 0.5 : 0.12
         smoothed[i] += (target - smoothed[i]) * k

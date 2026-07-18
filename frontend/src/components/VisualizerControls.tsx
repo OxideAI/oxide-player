@@ -31,11 +31,11 @@ interface Props {
 }
 
 /**
- * Temporary tuning panel for the Kiosk visualizer. Lets you drag the look live
- * and Save the resulting `VizParams` to disk on the server (`/api/visualizer/params`,
- * written to `<data_dir>/vizparams.json`) so they persist across restarts, while
- * still showing the JSON snippet to paste back into the code. Not part of the
- * shipped UI — remove once the values are locked in.
+ * Tuning panel for the Kiosk visualizer, reachable from the "Tune visualizer"
+ * button in Kiosk mode. Lets you drag the look live and Save the resulting
+ * `VizParams` to disk on the server (`/api/visualizer/params`, written to
+ * `<data_dir>/vizparams.json`) so they persist across restarts. The JSON
+ * snippet is shown for reference / manual editing.
  */
 export function VisualizerControls({ params, onChange, onClose }: Props) {
   const [saved, setSaved] = useState(false)
