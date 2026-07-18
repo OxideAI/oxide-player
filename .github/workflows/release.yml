@@ -122,8 +122,17 @@ jobs:
           echo "== layout =="
           ls -R "$STAGE" | head -40
 
-          echo "== binary --version exits 0 =="
-          "$STAGE/bin/oxide-player" --version
+          echo "== binary present and non-empty =="
+          test -s "$STAGE/bin/oxide-player"
+          file "$STAGE/bin/oxide-player" || true
+          # Cross-compiled arm64 binaries cannot execute on the x86_64 runner,
+          # so only smoke-run --version on the matching host architecture.
+          if [ "$ARCH" = "x86_64" ]; then
+            echo "== binary --version exits 0 =="
+            "$STAGE/bin/oxide-player" --version
+          else
+            echo "== cross-arch build: skipping execute smoke test =="
+          fi
 
           echo "== dist/index.html exists and references hashed assets =="
           test -f "$STAGE/dist/index.html"
