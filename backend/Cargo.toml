@@ -24,6 +24,8 @@ tokio-tungstenite = "0.30"
 futures-util = "0.3"
 anyhow = "1"
 image = "0.25"
+rustfft = "6"
+cpal = "0.15"
 
 [dev-dependencies]
 tempfile = "3"

@@ -115,4 +115,7 @@ export interface Config {
   camilladsp_capture_device: string | null
   camilladsp_capture_rate: number | null
   default_dsp_profiles: DspProfile[]
+  visualizer_fft: boolean
+  visualizer_capture_device: string | null
+  visualizer_capture_rate: number | null
 }

@@ -2,6 +2,7 @@ mod api;
 mod config;
 pub mod dsp;
 mod error;
+mod visualizer;
 mod library;
 mod mpd;
 mod state;
@@ -53,6 +54,8 @@ async fn main() -> anyhow::Result<()> {
 
     dsp.ensure_running().await;
 
+    let visualizer = visualizer::VisualizerAnalyzer::new(&config);
+
     let mpd = mpd::Mpd::connect(
         &config.mpd_host,
         config.mpd_port,
@@ -66,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("MPD not started: {e}");
     }
 
-    let state = state::AppState::new(config, db, dsp, mpd, config_path);
+    let state = state::AppState::new(config, db, dsp, mpd, visualizer, config_path);
     state.spawn_status_poller();
 
     // The frontend is served from this same origin, so no cross-origin access

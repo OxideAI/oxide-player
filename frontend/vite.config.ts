@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'prompt',
+      registerType: 'autoUpdate',
       includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'],
       manifest: {
         short_name: 'Oxide',
@@ -27,6 +27,10 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Take control of open pages immediately so a rebuilt bundle (e.g. the
+        // Kiosk visualizer) is served without a stale precache gap.
+        clientsClaim: true,
+        skipWaiting: true,
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],

@@ -1,7 +1,11 @@
-import type { PlayerStatus, QueueResponse } from '../types'
+import { useEffect, useState } from 'react'
+import type { PlayerStatus, QueueResponse, Config } from '../types'
 import { api } from '../api'
 import { fmtTime, displayTitle, audioQuality, folderKey } from '../util'
 import { useDragValue, useSmoothElapsed } from './playerHooks'
+import { Visualizer, DEFAULT_VIZ_PARAMS, type VizParams } from './Visualizer'
+import { VisualizerControls } from './VisualizerControls'
+import { useVisualizer } from '../useVisualizer'
 import styles from './KioskView.module.css'
 
 interface Props {
@@ -35,10 +39,72 @@ export function KioskView({
   const seek = useDragValue(smoothElapsed, onSeek)
   const vol = useDragValue(status?.volume ?? 0, onVolume)
 
+  // Whether the real FFT visualizer is enabled server-side. When off we pass
+  // `enabled=false` so the hook stays disconnected (zero cost).
+  const [fftEnabled, setFftEnabled] = useState(false)
+  useEffect(() => {
+    let alive = true
+    api.getConfig().then((c: Config) => { if (alive) setFftEnabled(!!c.visualizer_fft) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+  const frame = useVisualizer(fftEnabled)
+
+  // Temporary live-tuning state for the visualizer (sliders + save button).
+  // Loads the saved look from disk (`/api/visualizer/params`) on mount, so a
+  // restart keeps the look you tuned; falls back to the code defaults.
+  const [vizParams, setVizParams] = useState<VizParams>(DEFAULT_VIZ_PARAMS)
+  const [vizTuning, setVizTuning] = useState(false)
+  useEffect(() => {
+    let alive = true
+    api.getVizParams()
+      .then((p: Record<string, number>) => {
+        if (!alive) return
+        // Backend keys are snake_case; map to the frontend camelCase shape.
+        setVizParams({
+          bloomAlpha: p.bloom_alpha ?? DEFAULT_VIZ_PARAMS.bloomAlpha,
+          bloomBeat: p.bloom_beat ?? DEFAULT_VIZ_PARAMS.bloomBeat,
+          bloomEnergy: p.bloom_energy ?? DEFAULT_VIZ_PARAMS.bloomEnergy,
+          bloomRadius: p.bloom_radius ?? DEFAULT_VIZ_PARAMS.bloomRadius,
+          barIdle: p.bar_idle ?? DEFAULT_VIZ_PARAMS.barIdle,
+          barPeak: p.bar_peak ?? DEFAULT_VIZ_PARAMS.barPeak,
+          barGap: p.bar_gap ?? DEFAULT_VIZ_PARAMS.barGap,
+          barRadius: p.bar_radius ?? DEFAULT_VIZ_PARAMS.barRadius,
+          phaseSpeed: p.phase_speed ?? DEFAULT_VIZ_PARAMS.phaseSpeed,
+          blur: p.blur ?? DEFAULT_VIZ_PARAMS.blur,
+        })
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const seekFrac = duration > 0 ? Math.min(1, seek.local / duration) : 0
 
   return (
     <div className={styles.kiosk}>
+      <Visualizer
+        playing={playing}
+        frame={frame}
+        params={vizParams}
+      />
+      <button
+        className={styles.tune}
+        onClick={() => setVizTuning((v) => !v)}
+        title="Tune visualizer"
+        aria-label="Tune visualizer"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+          <path d="M4 8h10M18 8h2M4 16h2M10 16h10M14 6v4M8 14v4" />
+        </svg>
+      </button>
+      {vizTuning && (
+        <VisualizerControls
+          params={vizParams}
+          onChange={setVizParams}
+          onClose={() => setVizTuning(false)}
+        />
+      )}
       <button
         className={styles.exit}
         onClick={() => {
@@ -55,15 +121,7 @@ export function KioskView({
 
       <div className={styles.stage}>
         <div className={styles.art} style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
-          {!cover && (
-            <span className={styles.note}>
-              <span className={styles.eq} aria-hidden>
-                <i />
-                <i />
-                <i />
-              </span>
-            </span>
-          )}
+          {!cover && <span className={styles.note} aria-hidden />}
           {cover && <span className={styles.artGlow} aria-hidden />}
         </div>
 

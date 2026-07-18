@@ -42,6 +42,22 @@ pub struct Config {
     pub camilladsp_capture_rate: Option<u32>,
     #[serde(default)]
     pub default_dsp_profiles: Vec<crate::dsp::profile::DspProfile>,
+    /// Enable the real FFT audio visualizer. When true the backend taps the PCM
+    /// capture device and streams magnitude bins to `/api/visualizer`. Off by
+    /// default so the feature has zero cost / no capture device dependency when
+    /// unused (especially important where the capture device isn't available).
+    #[serde(default)]
+    pub visualizer_fft: bool,
+    /// ALSA/CoreAudio device to capture for the FFT visualizer. Defaults to the
+    /// CamillaDSP capture device (the MPD→DSP loopback), so on the real player
+    /// the visualizer analyzes the actual output. On macOS set this to a local
+    /// input/output device name (e.g. "BlackHole" / "Built-in Microphone").
+    #[serde(default)]
+    pub visualizer_capture_device: Option<String>,
+    /// Sample rate for the FFT capture stream. When unset, defaults to the
+    /// CamillaDSP capture rate (44.1 kHz) so it matches the loopback on Linux.
+    #[serde(default)]
+    pub visualizer_capture_rate: Option<u32>,
     /// Longest side (in px) a cover image is allowed to have after
     /// optimization. Oversized covers are downscaled to fit. 0 keeps the
     /// original dimension (only file-size recompression applies).
@@ -159,6 +175,9 @@ impl Config {
             camilladsp_capture_device: None,
             camilladsp_capture_rate: None,
             default_dsp_profiles: Vec::new(),
+            visualizer_fft: false,
+            visualizer_capture_device: None,
+            visualizer_capture_rate: None,
             cover_max_dimension: default_cover_max_dimension(),
             cover_max_bytes: default_cover_max_bytes(),
             cover_quality: default_cover_quality(),
