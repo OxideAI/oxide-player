@@ -336,11 +336,34 @@ finish() {
   log "Logs:          journalctl -u oxide-player -f"
 }
 
+check_linux() {
+  case "$(uname -s)" in
+    Linux) ;;
+    *) die "oxide-player only runs on Linux (you're on $(uname -s))." ;;
+  esac
+}
+
+check_dependencies() {
+  # These must already be present; the installer relies on them at runtime.
+  local missing=()
+  for c in mpd camilladsp; do
+    command -v "$c" >/dev/null 2>&1 || missing+=("$c")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    warn "Missing runtime dependency/ies: ${missing[*]}"
+    warn "The installer will try to provide them, but ensure they are available:"
+    warn "  - mpd:          apt-get install -y mpd"
+    warn "  - camilladsp:   built from source by this installer (needs Rust)"
+  fi
+}
+
 main() {
   need_root
+  check_linux
   detect_os
   apt_install curl jq git build-essential pkg-config libssl-dev \
               libasound2-dev alsa-utils mpd ffmpeg
+  check_dependencies
   ensure_camilladsp
   fetch_source
   build_backend
