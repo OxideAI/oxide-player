@@ -100,11 +100,17 @@ export function Visualizer({ playing, frame, params }: Props) {
     // Gentle idle pulse so the visualizer breathes even on silence/pause.
     let phase = 0
 
-    const render = () => {
+    const render = (animate: boolean) => {
       const p = paramsRef.current
       if (canvas.style.filter !== `blur(${p.blur}px) saturate(1.5)`) applyBlur(p.blur)
       const w = canvas.clientWidth
       const h = canvas.clientHeight
+      // When playback is stopped we render a single static, empty frame and
+      // stop the loop entirely — no idle pulse, no halo, no bars.
+      if (!animate) {
+        ctx.clearRect(0, 0, w, h)
+        return
+      }
       const dt = 1 / 60
       phase += dt * p.phaseSpeed
       const f = frameRef.current
@@ -156,14 +162,15 @@ export function Visualizer({ playing, frame, params }: Props) {
     }
 
     const loop = () => {
-      render()
+      render(true)
       rafRef.current = requestAnimationFrame(loop)
     }
 
-    if (!reducedRef.current) {
+    if (playing && !reducedRef.current) {
       rafRef.current = requestAnimationFrame(loop)
     } else {
-      render()
+      // Stopped/paused (or reduced motion): paint one static frame and halt.
+      render(playing)
     }
 
     return () => {
