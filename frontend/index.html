@@ -20,6 +20,20 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Kill any stale service worker from a previous build (e.g. the old
+      // `prompt` SW that precached a pre-visualizer bundle and never updated).
+      // Runs before the app module so a stuck SW can't serve old code.
+      (function () {
+        try {
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              regs.forEach(function (r) { r.unregister(); });
+            });
+          }
+        } catch (e) {}
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -46,6 +46,9 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/playback/clear-play", post(clear_play))
         .route("/api/queue", get(queue))
         .route("/api/ws", get(ws))
+        .route("/api/visualizer", get(visualizer_ws))
+        .route("/api/visualizer/params", get(visualizer_params_get))
+        .route("/api/visualizer/params", put(visualizer_params_put))
         .route("/api/playback/shuffle", post(shuffle_queue))
         .route("/api/playback/jump", post(jump))
         .route("/api/playback/remove", post(remove))
@@ -144,6 +147,81 @@ async fn ws(
                 }
                 Err(RecvError::Lagged(n)) => {
                     tracing::debug!("ws client lagged, dropped {n} messages");
+                    continue;
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    })
+}
+
+/// Return the saved visualizer look-and-feel params (from `<data_dir>/vizparams.json`,
+/// or code defaults when none are saved).
+async fn visualizer_params_get(
+    State(s): State<AppState>,
+) -> AppResult<Json<crate::visualizer::VizParams>> {
+    let data_dir = s.config().await.data_dir;
+    Ok(Json(crate::visualizer::VizParams::load(&data_dir)))
+}
+
+/// Persist visualizer look-and-feel params to `<data_dir>/vizparams.json`.
+async fn visualizer_params_put(
+    State(s): State<AppState>,
+    Json(body): Json<crate::visualizer::VizParams>,
+) -> AppResult<StatusCode> {
+    let data_dir = s.config().await.data_dir;
+    body.save(&data_dir)
+        .map_err(|e| AppError::Library(e.to_string()))?;
+    Ok(StatusCode::OK)
+}
+
+/// Stream live FFT spectrum frames over a WebSocket. Each message is a JSON
+/// object `{ "bins": [f32; BANDS], "level": f32 }` (low→high frequency). The
+/// client only receives frames while audio is playing through the captured
+/// device; an idle/stopped stream sends a single zeroed frame on connect so the
+/// visualizer can render a calm baseline. Best-effort like `/api/ws`.
+async fn visualizer_ws(
+    ws: WebSocketUpgrade,
+    State(s): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| async move {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::sync::broadcast::error::RecvError;
+
+        let (mut writer, _reader) = socket.split();
+        let mut rx = s.visualizer().subscribe();
+
+        // Seed with a calm baseline so the visualizer isn't frozen on connect.
+        let baseline = crate::visualizer::SpectrumFrame {
+            bins: vec![0.0; crate::visualizer::BANDS],
+            level: 0.0,
+        };
+        if let Ok(text) = serde_json::to_string(&baseline) {
+            let _ = writer
+                .send(axum::extract::ws::Message::Text(text.into()))
+                .await;
+        }
+
+        loop {
+            match rx.recv().await {
+                Ok(frame) => {
+                    let text = match serde_json::to_string(&frame) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::warn!("visualizer serialize failed: {e}");
+                            continue;
+                        }
+                    };
+                    if writer
+                        .send(axum::extract::ws::Message::Text(text.into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(n)) => {
+                    tracing::debug!("visualizer client lagged, dropped {n} frames");
                     continue;
                 }
                 Err(RecvError::Closed) => break,
@@ -836,7 +914,8 @@ mod tests {
             None,
         );
         let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
-        let state = AppState::new(Config::default_config(), db, dsp, mpd, None);
+        let visualizer = crate::visualizer::VisualizerAnalyzer::new(&Config::default_config());
+        let state = AppState::new(Config::default_config(), db, dsp, mpd, visualizer, None);
         super::router(state).await
     }
 

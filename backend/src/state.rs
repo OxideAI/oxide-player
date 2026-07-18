@@ -3,6 +3,7 @@ use crate::dsp::DspManager;
 use crate::library::LibraryDb;
 use crate::mpd::{Mpd, MpdStatus};
 use crate::types::{PlaybackState, PlayerStatus, QueueResponse, StatusEvent};
+use crate::visualizer::VisualizerAnalyzer;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -18,6 +19,7 @@ struct Inner {
     pub db: LibraryDb,
     pub dsp: DspManager,
     pub mpd: Mpd,
+    pub visualizer: VisualizerAnalyzer,
     pub status: RwLock<PlayerStatus>,
     /// Push channel carrying player-status and queue changes to WebSocket
     /// clients. A late-joining client receives the current snapshot on connect
@@ -34,6 +36,7 @@ impl AppState {
         db: LibraryDb,
         dsp: DspManager,
         mpd: Mpd,
+        visualizer: VisualizerAnalyzer,
         config_path: Option<PathBuf>,
     ) -> Self {
         let profiles = config.default_dsp_profiles.clone();
@@ -48,6 +51,7 @@ impl AppState {
                 db,
                 dsp,
                 mpd,
+                visualizer,
                 status: RwLock::new(PlayerStatus::stopped()),
                 event_tx,
                 scan_lock: tokio::sync::Mutex::new(()),
@@ -70,6 +74,10 @@ impl AppState {
 
     pub fn mpd(&self) -> &Mpd {
         &self.inner.mpd
+    }
+
+    pub fn visualizer(&self) -> &VisualizerAnalyzer {
+        &self.inner.visualizer
     }
 
     pub async fn config(&self) -> Config {
@@ -371,7 +379,8 @@ mod tests {
             None,
         );
         let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
-        (AppState::new(cfg, db.clone(), dsp, mpd, None), db)
+        let visualizer = VisualizerAnalyzer::new(&cfg);
+        (AppState::new(cfg, db.clone(), dsp, mpd, visualizer, None), db)
     }
 
     /// Regression: after a restart MPD resumes at the CUE address URI

@@ -211,4 +211,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),
     }).then((r) => json<unknown>(r)),
+
+  // —— Visualizer tuning (persisted on disk, not the browser) ——
+  getVizParams: () =>
+    fetch('/api/visualizer/params').then((r) => json<Record<string, number>>(r)),
+  saveVizParams: (params: Record<string, number>) =>
+    fetch('/api/visualizer/params', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    }).then((r) => json<unknown>(r)),
 }
