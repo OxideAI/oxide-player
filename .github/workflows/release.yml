@@ -118,7 +118,7 @@ jobs:
           test -x "$STAGE/install.sh"
 
       - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ steps.pkg.outputs.asset }}
           fail_on_unmatched_files: true
