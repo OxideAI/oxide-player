@@ -25,7 +25,7 @@ futures-util = "0.3"
 anyhow = "1"
 image = "0.25"
 rustfft = "6"
-cpal = "0.15"
+cpal = "0.18"
 
 [dev-dependencies]
 tempfile = "3"
