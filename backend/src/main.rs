@@ -78,8 +78,8 @@ async fn main() -> anyhow::Result<()> {
     // and serve the UI from a different origin.
     let app = api::router(state.clone()).await.layer(CorsLayer::new());
 
-    let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
-    tracing::info!("oxide-player listening on http://{}", cli.listen);
+    let listener = tokio::net::TcpListener::bind(&config.listen).await?;
+    tracing::info!("oxide-player listening on http://{}", config.listen);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(state))
         .await?;
