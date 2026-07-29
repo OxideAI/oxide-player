@@ -29,7 +29,15 @@ export interface Track extends TrackRef {
   start_time: number | null
   end_time: number | null
   file_mtime: number | null
+  source: string | null
 }
+
+/**
+ * An album paired with the library source folder(s) that produced it. A single
+ * album can list more than one source when parent/child sources are both
+ * configured (issue #46).
+ */
+export type AlbumSources = [string, string[]]
 
 export interface QueueItem {
   pos: number
@@ -64,6 +72,13 @@ export interface PlayerStatus {
   current_song: TrackRef | null
   random: boolean
 }
+
+// Mirrors the backend's `StatusEvent` (serde internally-tagged enum). The
+// variant struct is flattened into the object next to `type` — there is no
+// `Status`/`Queue` wrapper key.
+export type StatusEvent =
+  | ({ type: 'status' } & PlayerStatus)
+  | ({ type: 'queue' } & QueueResponse)
 
 export type DspMode = 'bit_perfect' | 'resample'
 export type ResamplePreset = 'balanced' | 'high' | 'extreme'
@@ -100,4 +115,7 @@ export interface Config {
   camilladsp_capture_device: string | null
   camilladsp_capture_rate: number | null
   default_dsp_profiles: DspProfile[]
+  visualizer_fft: boolean
+  visualizer_capture_device: string | null
+  visualizer_capture_rate: number | null
 }

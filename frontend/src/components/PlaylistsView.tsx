@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { QueueItem } from '../types'
+import { folderKey } from '../util'
 import styles from './PlaylistsView.module.css'
 
 function fmt(d: number | null): string {
@@ -10,7 +11,11 @@ function fmt(d: number | null): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-export function PlaylistsView() {
+interface Props {
+  onOpenAlbum: (album: string) => void
+}
+
+export function PlaylistsView({ onOpenAlbum }: Props) {
   const [names, setNames] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -206,9 +211,17 @@ export function PlaylistsView() {
                 {tracks.map((t) => (
                   <div key={t.pos} className={styles.trackRow}>
                     <span className={styles.trackTitle}>{t.title ?? t.uri}</span>
-                    <span className={styles.trackMeta}>
-                      {[t.artist, t.album].filter(Boolean).join(' · ')}
-                    </span>
+                    {t.uri && (
+                      <button
+                        type="button"
+                        className={styles.trackMetaBtn}
+                        onClick={() => onOpenAlbum(folderKey(t.uri))}
+                        title="Open album"
+                        aria-label={`Open album: ${[t.artist, t.album].filter(Boolean).join(' — ')}`}
+                      >
+                        {[t.artist, t.album].filter(Boolean).join(' · ')}
+                      </button>
+                    )}
                     <span className={styles.trackDur}>{fmt(t.duration)}</span>
                     <button
                       className={styles.iconBtnDanger}

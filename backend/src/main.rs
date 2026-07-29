@@ -2,6 +2,7 @@ mod api;
 mod config;
 pub mod dsp;
 mod error;
+mod visualizer;
 mod library;
 mod mpd;
 mod state;
@@ -33,6 +34,16 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    if config.mpd_music_directory.is_none() && !config.library_dirs.is_empty() {
+        tracing::warn!(
+            "mpd_music_directory is not set. MPD addresses tracks relative to its \
+             own music_directory, but the library scanner stores absolute paths. \
+             Without this setting, play requests will fail with 'Access to local \
+             files via TCP is not allowed'. Set mpd_music_directory in the config \
+             (usually the same path as your library_dirs entry)."
+        );
+    }
+
     std::fs::create_dir_all(&config.data_dir).context("create data dir")?;
     std::fs::create_dir_all(&config.cover_cache_dir()).context("create cover cache dir")?;
 
@@ -53,6 +64,8 @@ async fn main() -> anyhow::Result<()> {
 
     dsp.ensure_running().await;
 
+    let visualizer = visualizer::VisualizerAnalyzer::new(&config);
+
     let mpd = mpd::Mpd::connect(
         &config.mpd_host,
         config.mpd_port,
@@ -66,7 +79,8 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("MPD not started: {e}");
     }
 
-    let state = state::AppState::new(config, db, dsp, mpd, config_path);
+    let listen_addr = config.listen.clone();
+    let state = state::AppState::new(config, db, dsp, mpd, visualizer, config_path);
     state.spawn_status_poller();
 
     // The frontend is served from this same origin, so no cross-origin access
@@ -75,8 +89,8 @@ async fn main() -> anyhow::Result<()> {
     // and serve the UI from a different origin.
     let app = api::router(state.clone()).await.layer(CorsLayer::new());
 
-    let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
-    tracing::info!("oxide-player listening on http://{}", cli.listen);
+    let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
+    tracing::info!("oxide-player listening on http://{}", listen_addr);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(state))
         .await?;

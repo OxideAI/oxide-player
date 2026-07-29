@@ -1,4 +1,5 @@
 import type {
+  AlbumSources,
   Config,
   DspProfile,
   OutputDevice,
@@ -7,6 +8,28 @@ import type {
   QueueResponse,
   Track,
 } from './types'
+
+/**
+ * The wire envelope sent to the playback endpoints (play-next, clear-play,
+ * playlist add). Maps a library `Track` to the shape the backend `TrackRef`
+ * deserializer expects: `{ uri, start, end, track_id }`. This is the *request*
+ * shape and is distinct from the `TrackRef` *response* model in `types.ts`.
+ */
+export interface PlayRef {
+  uri: string
+  start: number | undefined
+  end: number | undefined
+  track_id: number
+}
+
+export function toPlayRef(t: Track): PlayRef {
+  return {
+    uri: t.uri,
+    start: t.start_time ?? undefined,
+    end: t.end_time ?? undefined,
+    track_id: t.id,
+  }
+}
 
 async function json<T>(res: Response): Promise<T> {
   const text = await res.text()
@@ -26,6 +49,8 @@ export const api = {
     return fetch(`/api/library${qs}`).then((r) => json<Track[]>(r))
   },
   albums: () => fetch('/api/library/albums').then((r) => json<string[]>(r)),
+  albumSources: () =>
+    fetch('/api/library/albums/sources').then((r) => json<AlbumSources[]>(r)),
   artists: () => fetch('/api/library/artists').then((r) => json<string[]>(r)),
   coverUrl: (key: string | number) => `/api/cover/${key}`,
   // Prefer the album-level cover key; fall back to the track id for rows not
@@ -120,21 +145,21 @@ export const api = {
       body: JSON.stringify({ name }),
     }).then((r) => json<unknown>(r)),
 
-  // `tracks` is a single track object or an array of them (whole album),
-  // wrapped in `{ tracks }` to match the add-to-playlist envelope.
-  playNext: (tracks: unknown) =>
+  // `tracks` is one or more `PlayRef` envelopes (a single track or a whole
+  // album), wrapped in `{ tracks }` to match the add-to-playlist envelope.
+  playNext: (tracks: PlayRef[]) =>
     fetch('/api/playback/play-next', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tracks }),
     }).then((r) => json<unknown>(r)),
-  clearAndPlay: (tracks: unknown) =>
+  clearAndPlay: (tracks: PlayRef[]) =>
     fetch('/api/playback/clear-play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tracks }),
     }).then((r) => json<unknown>(r)),
-  addToPlaylist: (name: string, tracks: unknown) =>
+  addToPlaylist: (name: string, tracks: PlayRef[]) =>
     fetch(`/api/playlists/${encodeURIComponent(name)}/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -166,6 +191,7 @@ export const api = {
     }).then((r) => json<unknown>(r)),
 
   // —— Settings / config ——
+  version: () => fetch('/api/version').then((r) => json<{ backend: string; frontend: string }>(r)),
   getConfig: () => fetch('/api/config').then((r) => json<Config>(r)),
   updateConfig: (cfg: Config) =>
     fetch('/api/config', {
@@ -184,5 +210,15 @@ export const api = {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),
+    }).then((r) => json<unknown>(r)),
+
+  // —— Visualizer tuning (persisted on disk, not the browser) ——
+  getVizParams: () =>
+    fetch('/api/visualizer/params').then((r) => json<Record<string, number>>(r)),
+  saveVizParams: (params: Record<string, number>) =>
+    fetch('/api/visualizer/params', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
     }).then((r) => json<unknown>(r)),
 }

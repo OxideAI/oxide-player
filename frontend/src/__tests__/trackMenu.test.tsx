@@ -27,6 +27,7 @@ function makeTrack(): Track {
     start_time: null,
     end_time: null,
     file_mtime: null,
+    source: null,
   }
 }
 

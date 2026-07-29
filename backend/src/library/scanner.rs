@@ -18,7 +18,7 @@ pub const COVER_EXTS: &[&str] = &["jpg", "png", "bin"];
 
 fn is_audio(path: &Path) -> bool {
     path.extension()
-        .and_then(|e| e.to_str())
+        .map(|e| e.to_string_lossy())
         .map(|e| AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
         .unwrap_or(false)
 }
@@ -141,6 +141,21 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>, cues: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let p = entry.path();
         let name = p.file_name().and_then(|n| n.to_str()).map(|n| n.to_string());
+        // Warn when a filename is not valid UTF-8 — the URI stored in the DB
+        // will be mangled (replacement characters), and the play API may fail
+        // to resolve it later. Suggest a fix (the most common culprit is files
+        // copied from macOS with Latin-1 encoded names).
+        if name.is_none() {
+            if let Some(fname) = p.file_name().map(|n| n.to_string_lossy()) {
+                if fname.contains('\u{FFFD}') {
+                    tracing::warn!(
+                        "non-UTF-8 filename: {fname} — scanner will store a \
+                         mangled URI. Fix with: convmv -r --nfc '{}'",
+                        dir.display()
+                    );
+                }
+            }
+        }
         // Use symlink_metadata so we never follow directory symlinks: a symlink
         // loop (or a symlink to elsewhere on disk) would otherwise cause
         // infinite recursion / traversal outside the library.
@@ -339,7 +354,12 @@ fn find_local_cover(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
+pub fn scan(
+    dirs: &[PathBuf],
+    db: &LibraryDb,
+    cover_dir: &Path,
+    opt: crate::config::CoverOptimization,
+) -> AppResult<u64> {
     let mut files = Vec::new();
     let mut cues = Vec::new();
     for d in dirs {
@@ -390,10 +410,13 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
 
     let mut scanned = 0u64;
     for path in files {
-        let uri = dirs
-            .iter()
-            .find(|d| path.starts_with(d))
-            .and_then(|d| path.strip_prefix(d).ok())
+        let source = match dirs.iter().find(|d| path.starts_with(d)) {
+            Some(d) => d,
+            None => continue,
+        };
+        let uri = path
+            .strip_prefix(source)
+            .ok()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|| path.to_string_lossy().to_string());
         if referenced.contains(Path::new(&uri)) {
@@ -408,7 +431,7 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
                 continue;
             }
         }
-        if let Err(e) = ingest(&uri, &path, db, cover_dir, mtime) {
+        if let Err(e) = ingest(&uri, &path, source, db, cover_dir, mtime, opt) {
             tracing::warn!("skip {}: {e}", path.display());
         } else {
             scanned += 1;
@@ -431,7 +454,7 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
                 continue;
             }
         }
-        if let Err(e) = ingest_cue(ct, dir, db, cover_dir, mtime) {
+        if let Err(e) = ingest_cue(ct, dir, db, cover_dir, mtime, opt) {
             tracing::warn!("skip cue track {}: {e}", ct.audio_rel.display());
         } else {
             scanned += 1;
@@ -448,7 +471,7 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
         }
     }
 
-    if let Ok(pruned) = db.prune_missing(&seen) {
+    if let Ok(pruned) = db.prune_missing(&seen, dirs) {
         if pruned > 0 {
             tracing::info!("pruned {pruned} tracks no longer in the library");
         }
@@ -456,7 +479,7 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
 
     // Migrate any pre-existing rows (scanned before covers were album-keyed) so
     // their cover files and `cover_key` match the new scheme.
-    if let Ok(n) = backfill_covers(db, cover_dir) {
+    if let Ok(n) = backfill_covers(db, cover_dir, opt) {
         if n > 0 {
             tracing::info!("backfilled cover keys for {n} tracks");
         }
@@ -465,7 +488,7 @@ pub fn scan(dirs: &[PathBuf], db: &LibraryDb, cover_dir: &Path) -> AppResult<u64
     Ok(scanned)
 }
 
-fn ingest(uri: &str, path: &Path, db: &LibraryDb, cover_dir: &Path, mtime: i64) -> AppResult<()> {
+fn ingest(uri: &str, path: &Path, source: &Path, db: &LibraryDb, cover_dir: &Path, mtime: i64, opt: crate::config::CoverOptimization) -> AppResult<()> {
     let tagged = read_from_path(path).map_err(|e| AppError::Library(e.to_string()))?;
     let props = tagged.properties();
 
@@ -509,10 +532,11 @@ fn ingest(uri: &str, path: &Path, db: &LibraryDb, cover_dir: &Path, mtime: i64) 
         None,
         None,
         Some(mtime),
+        source.to_str(),
     )?;
 
     let cover_key = album_key(album_artist.as_deref(), album.as_deref(), id);
-    let has_cover = extract_cover(Some(&tagged), path, &cover_key, cover_dir);
+    let has_cover = extract_cover(Some(&tagged), path, &cover_key, cover_dir, Some(opt));
     db.set_cover(id, has_cover, Some(&cover_key))?;
     Ok(())
 }
@@ -525,6 +549,7 @@ fn ingest_cue(
     db: &LibraryDb,
     cover_dir: &Path,
     mtime: i64,
+    opt: crate::config::CoverOptimization,
 ) -> AppResult<()> {
     let audio_path = library_dir.join(&ct.audio_rel);
     let tagged = read_from_path(&audio_path).map_err(|e| AppError::Library(e.to_string()))?;
@@ -558,10 +583,11 @@ fn ingest_cue(
         Some(ct.start),
         ct.end,
         Some(mtime),
+        library_dir.to_str(),
     )?;
 
     let cover_key = album_key(ct.album_artist.as_deref(), ct.album.as_deref(), id);
-    let has_cover = extract_cover(Some(&tagged), &audio_path, &cover_key, cover_dir);
+    let has_cover = extract_cover(Some(&tagged), &audio_path, &cover_key, cover_dir, Some(opt));
     db.set_cover(id, has_cover, Some(&cover_key))?;
     Ok(())
 }
@@ -615,6 +641,7 @@ pub fn extract_cover(
     path: &Path,
     cover_key: &str,
     cover_dir: &Path,
+    opt: Option<crate::config::CoverOptimization>,
 ) -> bool {
     if let Some(local) = find_local_cover(path.parent().unwrap_or(path)) {
         let ext = match local
@@ -628,6 +655,7 @@ pub fn extract_cover(
         };
         let cover_path = cover_dir.join(format!("{cover_key}.{ext}"));
         if std::fs::copy(&local, &cover_path).is_ok() {
+            optimize_cover(&cover_path, opt);
             return true;
         }
     }
@@ -643,6 +671,7 @@ pub fn extract_cover(
                 let ext = cover_ext(pic.mime_type().unwrap_or(&MimeType::Jpeg));
                 let cover_path = cover_dir.join(format!("{cover_key}.{ext}"));
                 if std::fs::write(&cover_path, pic.data()).is_ok() {
+                    optimize_cover(&cover_path, opt);
                     return true;
                 }
             }
@@ -652,11 +681,113 @@ pub fn extract_cover(
     false
 }
 
+/// Shrink `path` in place if it exceeds the configured cover limits. JPEGs are
+/// re-encoded at `opt.quality`; PNGs are flattened onto a white background and
+/// converted to JPEG (the music UI has no use for alpha). Images already within
+/// limits, animated formats (e.g. APNG/GIF), or anything the decoder can't read
+/// are left untouched. Failures are logged and swallowed — cover extraction must
+/// never fail because optimization failed.
+fn optimize_cover(path: &Path, opt: Option<crate::config::CoverOptimization>) {
+    let Some(opt) = opt else {
+        return;
+    };
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    let needs_size = opt.max_bytes > 0 && meta.len() > opt.max_bytes;
+    let needs_dim = opt.max_dimension > 0;
+    if !needs_size && !needs_dim {
+        return;
+    }
+
+    let img = match image::open(path) {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!("cover optimization: cannot open {}: {e}", path.display());
+            return;
+        }
+    };
+
+    let (w, h) = (img.width(), img.height());
+    let longest = w.max(h);
+    let too_big = longest > opt.max_dimension;
+    if !needs_size && !too_big {
+        return;
+    }
+
+    // Resize only when exceeding the dimension limit, preserving aspect ratio.
+    let resized = if too_big {
+        let scale = opt.max_dimension as f32 / longest as f32;
+        let nw = (w as f32 * scale).max(1.0) as u32;
+        let nh = (h as f32 * scale).max(1.0) as u32;
+        img.resize(nw, nh, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+
+    // Re-encode as JPEG (flatten transparency onto white). Only write back if
+    // the recompressed result is actually smaller than what's on disk.
+    let mut buf = Vec::new();
+    {
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, opt.quality);
+        if let Err(e) = enc.encode_image(&flatten_white(&resized)) {
+            tracing::warn!("cover optimization: encode failed for {}: {e}", path.display());
+            return;
+        }
+    }
+    if buf.is_empty() || (meta.len() as usize) <= buf.len() {
+        return;
+    }
+
+    let src_ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if src_ext == "jpg" || src_ext == "jpeg" {
+        if let Err(e) = std::fs::write(path, &buf) {
+            tracing::warn!("cover optimization: write failed for {}: {e}", path.display());
+        }
+    } else {
+        // Non-JPEG source (e.g. PNG) gets converted to JPEG; rename the file so
+        // the stored extension matches the actual bytes and the `cover` route
+        // serves the right content-type.
+        let jpg = path.with_extension("jpg");
+        if let Err(e) = std::fs::write(&jpg, &buf) {
+            tracing::warn!("cover optimization: write failed for {}: {e}", jpg.display());
+            return;
+        }
+        if jpg != path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Composite an RGBA image onto an opaque white background, dropping alpha so it
+/// can be stored as JPEG.
+fn flatten_white(img: &image::DynamicImage) -> image::RgbaImage {
+    let rgba = img.to_rgba8();
+    let white = image::Rgba([255u8, 255, 255, 255]);
+    let mut out = image::RgbaImage::new(rgba.width(), rgba.height());
+    for (dst, src) in out.pixels_mut().zip(rgba.pixels()) {
+        let a = src[3] as u32;
+        let inv = 255 - a;
+        dst.0 = [
+            ((src[0] as u32 * a + white[0] as u32 * inv) / 255) as u8,
+            ((src[1] as u32 * a + white[1] as u32 * inv) / 255) as u8,
+            ((src[2] as u32 * a + white[2] as u32 * inv) / 255) as u8,
+            255,
+        ];
+    }
+    out
+}
+
 /// Re-derive covers for every track already in the database, without touching
 /// metadata. Clears the cover cache first so removed/renamed local art is
 /// dropped. Covers are keyed by album, so a multi-track album writes and reads
 /// a single image (issue #31).
-pub fn rescan_art(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
+pub fn rescan_art(db: &LibraryDb, cover_dir: &Path, opt: crate::config::CoverOptimization) -> AppResult<u64> {
     if let Ok(entries) = std::fs::read_dir(cover_dir) {
         for entry in entries.flatten() {
             let _ = std::fs::remove_file(entry.path());
@@ -674,7 +805,7 @@ pub fn rescan_art(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
             find_existing_cover(cover_dir, &key)
         } else {
             extracted.insert(key.clone());
-            extract_cover(None, Path::new(&path), &key, cover_dir)
+            extract_cover(None, Path::new(&path), &key, cover_dir, Some(opt))
         };
         db.set_cover(id, has, Some(&key))?;
         if has {
@@ -689,7 +820,7 @@ pub fn rescan_art(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
 /// and relocate its existing `{id}.{ext}` cover file to `{cover_key}.{ext}`.
 /// The first track of each album wins (all share the same image), so audio is
 /// never re-read. Returns the number of tracks backfilled.
-pub fn backfill_covers(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
+pub fn backfill_covers(db: &LibraryDb, cover_dir: &Path, opt: crate::config::CoverOptimization) -> AppResult<u64> {
     let rows = db.tracks_missing_cover_key()?;
     if rows.is_empty() {
         return Ok(0);
@@ -718,7 +849,7 @@ pub fn backfill_covers(db: &LibraryDb, cover_dir: &Path) -> AppResult<u64> {
                 true
             } else {
                 // No pre-extracted cover on disk — regenerate from the file.
-                extract_cover(None, Path::new(&path), &key, cover_dir)
+                extract_cover(None, Path::new(&path), &key, cover_dir, Some(opt))
             }
         };
         db.set_cover(id, has, Some(&key))?;
@@ -900,5 +1031,93 @@ mod tests {
         let solo = album_key(None, None, 7);
         assert_eq!(solo, "7");
         assert_ne!(solo, a);
+    }
+
+    // --- cover optimization (issue #39) -------------------------------------
+
+    fn make_image(path: &Path, w: u32, h: u32, rgba: bool) {
+        if rgba {
+            let img = image::RgbaImage::from_pixel(w, h, image::Rgba([10, 20, 30, 128]));
+            img.save(path).unwrap();
+        } else {
+            let img = image::RgbImage::from_pixel(w, h, image::Rgb([10, 20, 30]));
+            img.save(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn optimize_shrinks_oversized_jpeg() {
+        // Reproduces #39: a 4000px cover must be downscaled and recompressed to
+        // stay within the configured dimension/size limits.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("cover.jpg");
+        make_image(&p, 4000, 3000, false);
+
+        let opt = crate::config::CoverOptimization {
+            max_dimension: 1200,
+            max_bytes: 512_000,
+            quality: 85,
+        };
+        optimize_cover(&p, Some(opt));
+
+        let img = image::open(&p).unwrap();
+        assert!(img.width().max(img.height()) <= 1200, "dim not reduced");
+        assert!(
+            std::fs::metadata(&p).unwrap().len() <= 512_000,
+            "size not reduced"
+        );
+    }
+
+    #[test]
+    fn optimize_flattens_png_alpha_to_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("cover.png");
+        make_image(&p, 2000, 2000, true);
+
+        let opt = crate::config::CoverOptimization {
+            max_dimension: 1200,
+            max_bytes: 512_000,
+            quality: 85,
+        };
+        optimize_cover(&p, Some(opt));
+
+        // PNG is converted to a JPEG file (renamed) so the stored extension
+        // matches the actual bytes, and the image is downscaled.
+        let jpg = dir.path().join("cover.jpg");
+        assert!(jpg.exists(), "png should be converted to jpg");
+        assert!(!p.exists(), "old png should be removed");
+        let img = image::open(&jpg).unwrap();
+        assert!(img.width().max(img.height()) <= 1200);
+        assert!(std::fs::metadata(&jpg).unwrap().len() <= 512_000);
+    }
+
+    #[test]
+    fn optimize_leaves_small_image_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("cover.jpg");
+        make_image(&p, 300, 300, false);
+        let before = std::fs::metadata(&p).unwrap().len();
+
+        let opt = crate::config::CoverOptimization {
+            max_dimension: 1200,
+            max_bytes: 512_000,
+            quality: 85,
+        };
+        optimize_cover(&p, Some(opt));
+
+        // Within limits and already small: file content must not be recompressed.
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), before);
+    }
+
+    #[test]
+    fn optimize_does_nothing_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("cover.jpg");
+        make_image(&p, 4000, 4000, false);
+        let before = std::fs::metadata(&p).unwrap().len();
+
+        optimize_cover(&p, None);
+
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), before);
     }
 }

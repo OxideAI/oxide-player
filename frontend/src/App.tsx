@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PlayerStatus } from './types'
 import { api } from './api'
+import { usePlayerStatus } from './ws'
 import { NowPlaying } from './components/NowPlaying'
 import { KioskView } from './components/KioskView'
 import { LibraryView } from './components/LibraryView'
 import { ConfigView } from './components/ConfigView'
 import { PlaylistsView } from './components/PlaylistsView'
 import { Reveal } from './components/Reveal'
+import { InstallPrompt } from './components/InstallPrompt'
+import { OfflineBanner } from './components/OfflineBanner'
+import { useKeyboardShortcuts } from './components/useKeyboardShortcuts'
+import { ShortcutToast } from './components/ShortcutToast'
+import { ShortcutHelp } from './components/ShortcutHelp'
+import { SearchBar } from './components/SearchBar'
+import { SearchView } from './components/SearchView'
 import styles from './App.module.css'
 
 type Tab = 'library' | 'playlists' | 'settings'
@@ -45,7 +52,6 @@ function buildPath(route: Route): string {
 }
 
 export function App() {
-  const [status, setStatus] = useState<PlayerStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [route, setRoute] = useState<Route>(() => parsePath())
   const tab = route.tab
@@ -53,6 +59,12 @@ export function App() {
   const [navOpen, setNavOpen] = useState(false)
   const [kiosk] = useState(() => window.location.pathname === '/kiosk')
   const overlayRef = useRef<HTMLDivElement>(null)
+
+  // Live player status + queue, pushed over a single WebSocket (issue #3).
+  const { status, queue, connected } = usePlayerStatus()
+  const connectionError =
+    status === null && !connected ? 'Connecting to player…' : null
+  const banner = error ?? connectionError
 
   useEffect(() => {
     if (overlayRef.current) overlayRef.current.inert = !navOpen
@@ -64,42 +76,24 @@ export function App() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
-  const loadStatus = useCallback(async () => {
-    try {
-      const s = await api.status()
-      setStatus(s)
-      setError(s.error)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }, [])
-
-  useEffect(() => {
-    loadStatus()
-    const id = setInterval(loadStatus, 1000)
-    return () => clearInterval(id)
-  }, [loadStatus])
-
   const refreshLibrary = useCallback(async () => {
     setError(null)
     try {
       await api.refresh()
       setRefreshToken((n) => n + 1)
-      await loadStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [loadStatus])
+  }, [])
 
   const rescanArt = useCallback(async () => {
     setError(null)
     try {
       await api.rescanArt()
-      await loadStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [loadStatus])
+  }, [])
 
   const togglePlay = useCallback(async () => {
     if (!status) return
@@ -107,63 +101,121 @@ export function App() {
       if (status.state === 'playing') await api.pause(true)
       else if (status.state === 'paused') await api.pause(false)
       else await api.play()
-      await loadStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [status, loadStatus])
+  }, [status])
 
   const next = useCallback(async () => {
     try {
       await api.next()
-      await loadStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [loadStatus])
+  }, [])
 
   const prev = useCallback(async () => {
     try {
       await api.prev()
-      await loadStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [loadStatus])
+  }, [])
 
+  // Optimistic local update so the scrubber/volume feel instant; the WS push
+  // from the server reconciles within a frame.
   const seek = useCallback(
     async (seconds: number) => {
       try {
         await api.seek(seconds)
-        await loadStatus()
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       }
     },
-    [loadStatus],
+    [],
   )
 
   const setVolume = useCallback(
     async (v: number) => {
       try {
         await api.setVolume(v)
-        await loadStatus()
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       }
     },
-    [loadStatus],
+    [],
   )
+
+  const prevVolume = useRef<number>(status?.volume && status.volume > 0 ? status.volume : 80)
+  useEffect(() => {
+    if (status?.volume && status.volume > 0) prevVolume.current = status.volume
+  }, [status?.volume])
+  const toggleMute = useCallback(() => {
+    const cur = status?.volume ?? 0
+    if (cur > 0) {
+      prevVolume.current = cur
+      void setVolume(0)
+    } else {
+      void setVolume(prevVolume.current || 80)
+    }
+  }, [status, setVolume])
+
+  const toggleKiosk = useCallback(() => {
+    if (window.location.pathname === '/kiosk') window.location.pathname = '/'
+    else window.location.pathname = '/kiosk'
+  }, [])
+
+  const toggleShuffle = useCallback(async () => {
+    if (!status) return
+    try {
+      await api.shuffle(!status.random)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [status])
+
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState<string | null>(null)
+
+  const openSearch = useCallback((q: string) => {
+    setSearchQuery(q)
+    setSearchOpen(false)
+  }, [])
+
+  useKeyboardShortcuts({
+    status,
+    onTogglePlay: togglePlay,
+    onNext: next,
+    onPrev: prev,
+    onSeek: seek,
+    onVolume: setVolume,
+    onToggleKiosk: toggleKiosk,
+    onToggleShuffle: toggleShuffle,
+    onToggleMute: toggleMute,
+    onHelp: () => setHelpOpen((o) => !o),
+    onFeedback: setToast,
+    onSearch: () => setSearchOpen(true),
+  })
+
+  const openAlbum = useCallback((album: string) => {
+    setRoute({ tab: 'library', album })
+    window.history.pushState(null, '', buildPath({ tab: 'library', album }))
+    setNavOpen(false)
+  }, [])
 
   if (kiosk) {
     return (
       <KioskView
         status={status}
+        queue={queue}
         onTogglePlay={togglePlay}
         onNext={next}
         onPrev={prev}
         onSeek={seek}
         onVolume={setVolume}
+        onOpenAlbum={openAlbum}
       />
     )
   }
@@ -236,10 +288,10 @@ export function App() {
         </div>
       </div>
 
-      {error && (
+      {banner && (
         <div className={styles.banner} role="alert">
           <span className={styles.bannerDot} />
-          {error}
+          {banner}
         </div>
       )}
 
@@ -247,7 +299,6 @@ export function App() {
         {tab === 'library' && (
           <LibraryView
             refreshToken={refreshToken}
-            onPlay={api.play}
             onRefresh={refreshLibrary}
             onRescanArt={rescanArt}
             nowPlayingUri={status?.current_song?.uri ?? null}
@@ -263,19 +314,35 @@ export function App() {
             }}
           />
         )}
-        {tab === 'playlists' && <PlaylistsView />}
+        {tab === 'playlists' && <PlaylistsView onOpenAlbum={openAlbum} />}
         {tab === 'settings' && <ConfigView />}
+        {searchQuery && (
+          <SearchView
+            query={searchQuery}
+            nowPlayingId={status?.current_song?.id ?? null}
+            isPlaying={status?.state === 'playing'}
+            onBack={() => setSearchQuery(null)}
+            onOpenAlbum={openAlbum}
+          />
+        )}
       </main>
 
       <NowPlaying
         status={status}
+        queue={queue}
         onTogglePlay={togglePlay}
         onNext={next}
         onPrev={prev}
         onSeek={seek}
         onVolume={setVolume}
-        onReloadStatus={loadStatus}
+        onOpenAlbum={openAlbum}
       />
+
+      <InstallPrompt />
+      <OfflineBanner />
+      <ShortcutToast text={toast} onClear={() => setToast(null)} />
+      <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <SearchBar open={searchOpen} onClose={() => setSearchOpen(false)} onSearch={openSearch} />
     </div>
   )
 }

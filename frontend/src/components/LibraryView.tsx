@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Track } from '../types'
-import { api } from '../api'
-import { fmtTime, displayTitle } from '../util'
+import { api, toPlayRef } from '../api'
+import { fmtTime, displayTitle, folderKey } from '../util'
 import { TrackMenu } from './TrackMenu'
 import { Reveal } from './Reveal'
 import styles from './LibraryView.module.css'
 
 interface Props {
   refreshToken: number
-  onPlay: (uri: string, start?: number, end?: number, trackId?: number) => Promise<unknown>
   onRefresh: () => Promise<void>
   onRescanArt: () => Promise<void>
   nowPlayingUri: string | null
@@ -26,11 +25,6 @@ interface Folder {
   tracks: Track[]
 }
 
-function folderKey(uri: string): string {
-  const idx = uri.lastIndexOf('/')
-  return idx >= 0 ? uri.slice(0, idx) : ''
-}
-
 function trackOrder(a: Track, b: Track): number {
   const ai = a.cue_index ?? a.track ?? 0
   const bi = b.cue_index ?? b.track ?? 0
@@ -40,7 +34,6 @@ function trackOrder(a: Track, b: Track): number {
 
 export function LibraryView({
   refreshToken,
-  onPlay,
   onRefresh,
   onRescanArt,
   nowPlayingUri,
@@ -140,7 +133,7 @@ export function LibraryView({
   const play = async (t: Track) => {
     setPlayingUri(t.uri)
     try {
-      await onPlay(t.uri, t.start_time ?? undefined, t.end_time ?? undefined, t.id)
+      await api.clearAndPlay([toPlayRef(t)])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -268,6 +261,7 @@ export function LibraryView({
               .map((t) => (
                 <li
                   key={t.id}
+                  data-track-id={t.id}
                   className={
                     nowId === t.id
                       ? isPlaying

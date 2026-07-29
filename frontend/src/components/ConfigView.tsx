@@ -13,6 +13,7 @@ export function ConfigView() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [restartNeeded, setRestartNeeded] = useState(false)
+  const [version, setVersion] = useState<{ backend: string; frontend: string } | null>(null)
 
   const [newDir, setNewDir] = useState('')
   const [scanning, setScanning] = useState(false)
@@ -33,6 +34,13 @@ export function ConfigView() {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    api
+      .version()
+      .then(setVersion)
+      .catch(() => setVersion(null))
+  }, [])
 
   const patch = (p: Partial<Config>) =>
     setConfig((c) => (c ? { ...c, ...p } : c))
@@ -274,6 +282,12 @@ export function ConfigView() {
         </div>
         <DspView />
       </section>
+
+      {version && (
+        <p className={styles.dim}>
+          App versions — Backend {version.backend} · Frontend {version.frontend}
+        </p>
+      )}
     </div>
   )
 }

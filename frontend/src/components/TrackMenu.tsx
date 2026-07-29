@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Track } from '../types'
-import { api } from '../api'
+import { api, toPlayRef } from '../api'
 import { displayTitle } from '../util'
 import { FileInfo } from './FileInfo'
 import styles from './TrackMenu.module.css'
@@ -71,7 +72,7 @@ export function TrackMenu({ tracks, label, playing, onPlayNext, onClearAndPlay, 
     setShowPlaylists(false)
     setOpen(false)
     void run(
-      () => api.addToPlaylist(name, tracks.map((t) => trackRef(t))),
+      () => api.addToPlaylist(name, tracks.map(toPlayRef)),
       `Added ${tracks.length} to “${name}”`,
     )
   }
@@ -100,7 +101,7 @@ export function TrackMenu({ tracks, label, playing, onPlayNext, onClearAndPlay, 
               if (onPlayNext) onPlayNext()
               else
                 void run(
-                  () => api.playNext(tracks.map(trackRef)),
+                  () => api.playNext(tracks.map(toPlayRef)),
                   `Queued “${single ? displayTitle(single) : `${tracks.length} tracks`}” next`,
                 )
             }}
@@ -115,7 +116,7 @@ export function TrackMenu({ tracks, label, playing, onPlayNext, onClearAndPlay, 
               if (onClearAndPlay) onClearAndPlay()
               else
                 void run(
-                  () => api.clearAndPlay(tracks.map(trackRef)),
+                  () => api.clearAndPlay(tracks.map(toPlayRef)),
                   `Playing ${single ? displayTitle(single) : `${tracks.length} tracks`}`,
                 )
             }}
@@ -135,8 +136,9 @@ export function TrackMenu({ tracks, label, playing, onPlayNext, onClearAndPlay, 
           )}
         </div>
       )}
-      {showPlaylists && (
-        <div className={styles.trackMenuModal} onClick={() => setShowPlaylists(false)}>
+      {showPlaylists &&
+        createPortal(
+          <div className={styles.trackMenuModal} onClick={() => setShowPlaylists(false)}>
           <div className={styles.trackMenuModalBox} onClick={(e) => e.stopPropagation()}>
             <div className={styles.trackMenuModalTitle}>Add to playlist</div>
             <ul className={styles.trackMenuPlaylistList}>
@@ -153,13 +155,14 @@ export function TrackMenu({ tracks, label, playing, onPlayNext, onClearAndPlay, 
               Close
             </button>
           </div>
-        </div>
-      )}
-      {infoTrack && <FileInfo track={infoTrack} onClose={() => setInfoTrack(null)} />}
+        </div>,
+          document.body,
+        )}
+      {infoTrack &&
+        createPortal(
+          <FileInfo track={infoTrack} onClose={() => setInfoTrack(null)} />,
+          document.body,
+        )}
     </div>
   )
-}
-
-function trackRef(t: Track) {
-  return { uri: t.uri, start: t.start_time ?? undefined, end: t.end_time ?? undefined, track_id: t.id }
 }

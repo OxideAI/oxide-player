@@ -1,29 +1,31 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
 import type { PlayerStatus, QueueResponse } from '../types'
 import { api } from '../api'
-import { fmtTime, displayTitle, audioQuality } from '../util'
+import { fmtTime, displayTitle, audioQuality, folderKey } from '../util'
 import { QueueView } from './QueueView'
 import { fracFromPointer, useDragValue, useSmoothElapsed } from './playerHooks'
 import styles from './NowPlaying.module.css'
 
 interface Props {
   status: PlayerStatus | null
+  queue: QueueResponse | null
   onTogglePlay: () => void
   onNext: () => void
   onPrev: () => void
   onSeek: (seconds: number) => void
   onVolume: (volume: number) => void
-  onReloadStatus: () => void
+  onOpenAlbum: (album: string) => void
 }
 export function NowPlaying({
   status,
+  queue,
   onTogglePlay,
   onNext,
   onPrev,
   onSeek,
   onVolume,
-  onReloadStatus,
+  onOpenAlbum,
 }: Props) {
   const loading = status === null
   const song = status?.current_song ?? null
@@ -36,25 +38,8 @@ export function NowPlaying({
   const displayElapsed = seek.isDragging() ? seek.local : smoothElapsed
   const fraction = duration > 0 ? Math.min(1, seek.local / duration) : 0
 
-  const [queue, setQueue] = useState<QueueResponse | null>(null)
+  // Queue is pushed over the WebSocket (App owns the connection); no polling.
   const [queueOpen, setQueueOpen] = useState(false)
-
-  const reqId = useRef(0)
-  const loadQueue = useCallback(async () => {
-    const token = ++reqId.current
-    try {
-      const q = await api.queue()
-      if (token === reqId.current) setQueue(q)
-    } catch {
-      /* keep previous */
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!queueOpen) return
-    const id = setInterval(loadQueue, 1000)
-    return () => clearInterval(id)
-  }, [queueOpen, loadQueue])
 
   const shuffleRef = useRef<boolean | undefined>(status?.random)
   useEffect(() => {
@@ -79,10 +64,7 @@ export function NowPlaying({
     seek.end()
   }
 
-  const toggleQueue = async () => {
-    if (!queueOpen) {
-      await loadQueue()
-    }
+  const toggleQueue = () => {
     setQueueOpen((o) => !o)
   }
 
@@ -90,26 +72,19 @@ export function NowPlaying({
     const next = !shuffleRef.current
     shuffleRef.current = next
     await api.shuffle(next)
-    onReloadStatus()
-    if (queueOpen) await loadQueue()
   }
 
   const onJump = async (pos: number) => {
     await api.jump(pos)
-    onReloadStatus()
     setQueueOpen(false)
   }
 
   const onRemove = async (pos: number) => {
     await api.remove(pos)
-    onReloadStatus()
-    await loadQueue()
   }
 
   const onClearQueue = async () => {
     await api.clearQueue()
-    onReloadStatus()
-    await loadQueue()
   }
 
   return (
@@ -139,9 +114,19 @@ export function NowPlaying({
         </a>
         <div className={styles.text}>
           <div className={styles.title}>{loading ? 'Loading…' : (song ? displayTitle(song) : 'Nothing playing')}</div>
-          <div className={styles.artist}>
-            {[song?.artist, song?.album].filter(Boolean).join(' — ')}
-          </div>
+          {song ? (
+            <button
+              type="button"
+              className={styles.artistBtn}
+              onClick={() => onOpenAlbum(folderKey(song.uri))}
+              title="Open album"
+              aria-label={`Open album: ${[song.artist, song.album].filter(Boolean).join(' — ')}`}
+            >
+              {[song.artist, song.album].filter(Boolean).join(' — ')}
+            </button>
+          ) : (
+            <div className={styles.artist} />
+          )}
           {song && <div className={styles.quality}>{audioQuality(song)}</div>}
         </div>
       </div>

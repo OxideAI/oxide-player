@@ -2,7 +2,7 @@ use crate::dsp::profile::DspProfile;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::types::{PlaybackState, Track};
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{Path, Query, Request, State, ws::WebSocketUpgrade};
 use axum::handler::HandlerWithoutStateExt;
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -29,6 +29,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/status", get(status))
         .route("/api/library", get(library_list))
         .route("/api/library/albums", get(library_albums))
+        .route("/api/library/albums/sources", get(library_albums_sources))
         .route("/api/library/artists", get(library_artists))
         .route("/api/cover/{key}", get(cover))
         .route("/api/library/scan", post(library_scan))
@@ -44,6 +45,10 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/playback/play-next", post(play_next))
         .route("/api/playback/clear-play", post(clear_play))
         .route("/api/queue", get(queue))
+        .route("/api/ws", get(ws))
+        .route("/api/visualizer", get(visualizer_ws))
+        .route("/api/visualizer/params", get(visualizer_params_get))
+        .route("/api/visualizer/params", put(visualizer_params_put))
         .route("/api/playback/shuffle", post(shuffle_queue))
         .route("/api/playback/jump", post(jump))
         .route("/api/playback/remove", post(remove))
@@ -64,6 +69,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/playlists/{name}/remove", post(playlist_remove))
         .route("/api/playlists/{name}/rename", post(playlist_rename))
         .route("/api/playlists/{name}", delete(playlist_delete))
+        .route("/api/version", get(version_get))
         .route("/api/config", get(config_get))
         .route("/api/config", put(config_put))
         .route("/api/config/library-dirs", post(config_add_dir))
@@ -78,6 +84,150 @@ pub async fn router(state: AppState) -> Router {
 
 async fn status(State(s): State<AppState>) -> AppResult<Json<crate::types::PlayerStatus>> {
     Ok(Json(s.status_snapshot().await))
+}
+
+/// Stream player status and queue changes over a WebSocket. On connect the
+/// client receives the current snapshot (one `Status` + one `Queue` event) so it
+/// is in sync immediately, then every subsequent change is forwarded as a JSON
+/// `StatusEvent`. Lagging clients (slower than the 32-slot backlog) drop old
+/// messages and resync on their next reconnect, which is acceptable: push
+/// updates are best-effort and the snapshot on connect is authoritative.
+async fn ws(
+    ws: WebSocketUpgrade,
+    State(s): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| async move {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::sync::broadcast::error::RecvError;
+
+        let (mut writer, _reader) = socket.split();
+        let mut rx = s.subscribe_events();
+
+        // Seed the client with the current state before draining the stream.
+        let snapshot_status = s.status_snapshot().await;
+        let snapshot_queue = s.queue_snapshot().await;
+        for event in [
+            crate::types::StatusEvent::Status(snapshot_status),
+            crate::types::StatusEvent::Queue(snapshot_queue),
+        ] {
+            match serde_json::to_string(&event) {
+                Ok(text) => {
+                    if writer
+                        .send(axum::extract::ws::Message::Text(text.into()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("ws snapshot serialize failed: {e}");
+                    return;
+                }
+            }
+        }
+
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let text = match serde_json::to_string(&event) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::warn!("ws event serialize failed: {e}");
+                            continue;
+                        }
+                    };
+                    if writer
+                        .send(axum::extract::ws::Message::Text(text.into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(n)) => {
+                    tracing::debug!("ws client lagged, dropped {n} messages");
+                    continue;
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    })
+}
+
+/// Return the saved visualizer look-and-feel params (from `<data_dir>/vizparams.json`,
+/// or code defaults when none are saved).
+async fn visualizer_params_get(
+    State(s): State<AppState>,
+) -> AppResult<Json<crate::visualizer::VizParams>> {
+    let data_dir = s.config().await.data_dir;
+    Ok(Json(crate::visualizer::VizParams::load(&data_dir)))
+}
+
+/// Persist visualizer look-and-feel params to `<data_dir>/vizparams.json`.
+async fn visualizer_params_put(
+    State(s): State<AppState>,
+    Json(body): Json<crate::visualizer::VizParams>,
+) -> AppResult<StatusCode> {
+    let data_dir = s.config().await.data_dir;
+    body.save(&data_dir)
+        .map_err(|e| AppError::Library(e.to_string()))?;
+    Ok(StatusCode::OK)
+}
+
+/// Stream live FFT spectrum frames over a WebSocket. Each message is a JSON
+/// object `{ "bins": [f32; BANDS], "level": f32 }` (low→high frequency). The
+/// client only receives frames while audio is playing through the captured
+/// device; an idle/stopped stream sends a single zeroed frame on connect so the
+/// visualizer can render a calm baseline. Best-effort like `/api/ws`.
+async fn visualizer_ws(
+    ws: WebSocketUpgrade,
+    State(s): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| async move {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::sync::broadcast::error::RecvError;
+
+        let (mut writer, _reader) = socket.split();
+        let mut rx = s.visualizer().subscribe();
+
+        // Seed with a calm baseline so the visualizer isn't frozen on connect.
+        let baseline = crate::visualizer::SpectrumFrame {
+            bins: vec![0.0; crate::visualizer::BANDS],
+            level: 0.0,
+        };
+        if let Ok(text) = serde_json::to_string(&baseline) {
+            let _ = writer
+                .send(axum::extract::ws::Message::Text(text.into()))
+                .await;
+        }
+
+        loop {
+            match rx.recv().await {
+                Ok(frame) => {
+                    let text = match serde_json::to_string(&frame) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::warn!("visualizer serialize failed: {e}");
+                            continue;
+                        }
+                    };
+                    if writer
+                        .send(axum::extract::ws::Message::Text(text.into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(n)) => {
+                    tracing::debug!("visualizer client lagged, dropped {n} frames");
+                    continue;
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    })
 }
 
 #[derive(Deserialize)]
@@ -96,6 +246,15 @@ async fn library_list(
 
 async fn library_albums(State(s): State<AppState>) -> AppResult<Json<Vec<String>>> {
     Ok(Json(s.db().list_albums()?))
+}
+
+/// Albums paired with the library source folder(s) that produced them. An album
+/// can list more than one source when parent/child sources are both configured
+/// (issue #46).
+async fn library_albums_sources(
+    State(s): State<AppState>,
+) -> AppResult<Json<Vec<(String, Vec<String>)>>> {
+    Ok(Json(s.db().albums_with_sources()?))
 }
 
 async fn library_artists(State(s): State<AppState>) -> AppResult<Json<Vec<String>>> {
@@ -129,9 +288,11 @@ async fn run_scan(s: &AppState, incremental: bool) -> AppResult<u64> {
     let db = s.db().clone();
     let cover_dir = cfg.cover_cache_dir();
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
-    let count = tokio::task::spawn_blocking(move || crate::library::scan(&dirs, &db, &cover_dir))
-        .await
-        .map_err(|e| AppError::Library(e.to_string()))??;
+    let count = tokio::task::spawn_blocking(move || {
+        crate::library::scan(&dirs, &db, &cover_dir, crate::config::CoverOptimization::from_config(&cfg))
+    })
+    .await
+    .map_err(|e| AppError::Library(e.to_string()))??;
     if incremental {
         // Keep MPD's index in sync with the filesystem so every scanned track
         // is playable (a stale MPD db is the usual cause of "No such song" on
@@ -152,6 +313,24 @@ async fn library_scan(State(s): State<AppState>) -> AppResult<Json<serde_json::V
 async fn library_refresh(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
     let count = run_scan(&s, true).await?;
     Ok(Json(serde_json::json!({ "scanned": count })))
+}
+
+/// Backend and frontend build versions, shown on the Settings page.
+async fn version_get() -> AppResult<Json<serde_json::Value>> {
+    let frontend = parse_frontend_version();
+    Ok(Json(serde_json::json!({
+        "backend": env!("CARGO_PKG_VERSION"),
+        "frontend": frontend,
+    })))
+}
+
+/// Frontend version is read at compile time from the built UI manifest.
+fn parse_frontend_version() -> String {
+    let raw = include_str!("../../../frontend/package.json");
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Serialized view of the current config for the Settings UI.
@@ -179,9 +358,14 @@ struct DirBody {
     path: String,
 }
 
-/// Add a music library source folder. Must be an absolute path; duplicates are
-/// ignored. Persists and immediately rescans so the new source is picked up
-/// without a restart.
+/// Add a music library source folder. Must be an absolute path. Persists and
+/// immediately rescans so the new source is picked up without a restart.
+///
+/// Dedupe: a folder already covered by an existing source is rejected — if
+/// `path` is inside an already-added dir (or already added), nothing changes
+/// (`duplicate`). If `path` is a parent of one or more existing sources, those
+/// child sources are dropped (they are now subsumed by `path`) before `path` is
+/// added, so we never scan the same files twice (issue #46).
 async fn config_add_dir(
     State(s): State<AppState>,
     Json(b): Json<DirBody>,
@@ -193,17 +377,29 @@ async fn config_add_dir(
         ));
     }
     let mut cfg = s.config().await;
-    if cfg.library_dirs.iter().any(|d| d == &path) {
+    // Dedupes against existing sources (rejects child-of-existing and exact
+    // duplicates; drops child sources when `path` is their parent).
+    let subsumed = cfg.add_library_dir(path);
+    if subsumed.is_none() {
         return Ok(Json(serde_json::json!({ "scanned": 0, "duplicate": true })));
     }
-    cfg.library_dirs.push(path);
+    let subsumed = subsumed.unwrap();
+    let mut removed_tracks = 0u64;
+    if !subsumed.is_empty() {
+        let db = s.db().clone();
+        for d in &subsumed {
+            removed_tracks += db.delete_by_source(d).map_err(|e| AppError::Library(e.to_string()))?;
+        }
+    }
     s.set_config(cfg).await
         .map_err(|e| AppError::Library(e.to_string()))?;
     let count = run_scan(&s, true).await?;
-    Ok(Json(serde_json::json!({ "scanned": count })))
+    Ok(Json(serde_json::json!({ "scanned": count, "removed": removed_tracks })))
 }
 
-/// Remove a music library source folder by absolute path.
+/// Remove a music library source folder by absolute path. Drops every track
+/// that came from that source so its albums leave the library (issue #46), then
+/// keeps MPD's index in sync.
 async fn config_remove_dir(
     State(s): State<AppState>,
     Json(b): Json<DirBody>,
@@ -217,16 +413,23 @@ async fn config_remove_dir(
     }
     s.set_config(cfg).await
         .map_err(|e| AppError::Library(e.to_string()))?;
+    // Remove tracks produced by this source and resync MPD's index.
+    let db = s.db().clone();
+    let removed = db.delete_by_source(&path).map_err(|e| AppError::Library(e.to_string()))?;
+    tracing::info!("removed {} tracks from deleted source {}", removed, path.display());
+    let _ = s.mpd().rescan().await;
     Ok(StatusCode::OK)
 }
 
 async fn library_rescan_art(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
     let _guard = s.scan_guard().await;
     let db = s.db().clone();
-    let cover_dir = s.config().await.cover_cache_dir();
+    let cfg = s.config().await;
+    let cover_dir = cfg.cover_cache_dir();
+    let opt = crate::config::CoverOptimization::from_config(&cfg);
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
     let with_cover =
-        tokio::task::spawn_blocking(move || crate::library::scanner::rescan_art(&db, &cover_dir))
+        tokio::task::spawn_blocking(move || crate::library::scanner::rescan_art(&db, &cover_dir, opt))
             .await
             .map_err(|e| AppError::Library(e.to_string()))??;
     Ok(Json(serde_json::json!({ "with_cover": with_cover })))
@@ -495,6 +698,7 @@ async fn play_next(State(s): State<AppState>, Json(b): Json<serde_json::Value>) 
     for t in tracks.iter().rev() {
         enqueue(&s, t).await?;
     }
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -517,6 +721,7 @@ async fn clear_play(State(s): State<AppState>, Json(b): Json<serde_json::Value>)
     for t in tracks[1..].iter().rev() {
         enqueue(&s, t).await?;
     }
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -576,6 +781,7 @@ async fn playlist_play(
     s.mpd().play_playlist(&name).await?;
     // Refresh the cached status so the UI reflects the new queue immediately.
     let _ = s.refresh_status().await;
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -628,21 +834,12 @@ async fn playlist_delete(
     Ok(StatusCode::OK)
 }
 
-/// Position of the current song within `entries`, or `None` when nothing is
-/// playing. Uses the cached current song id from the 1s status poller instead
-/// of a second MPD round-trip. `QueueEntry.id` and `current_id` are both MPD
-/// SongIds (not DB track ids), so the comparison is sound.
-async fn current_pos(s: &AppState, entries: &[crate::types::QueueEntry]) -> Option<u32> {
-    match s.status_snapshot().await.current_id {
-        Some(id) => entries.iter().position(|e| e.id == id).map(|p| p as u32),
-        None => None,
-    }
-}
-
 async fn queue(State(s): State<AppState>) -> AppResult<Json<crate::types::QueueResponse>> {
-    let entries = s.mpd().queue().await?;
-    let current_pos = current_pos(&s, &entries).await;
-    Ok(Json(crate::types::QueueResponse { entries, current: current_pos }))
+    // One-off REST fetch (fallback for non-WS clients). The live push is driven
+    // by the broadcast on connect + the queue-mutating endpoints, so this must
+    // NOT broadcast again or a single mutation would emit Queue twice.
+    let resp = s.queue_snapshot().await;
+    Ok(Json(resp))
 }
 
 #[derive(Deserialize)]
@@ -652,6 +849,7 @@ struct ShuffleBody {
 
 async fn shuffle_queue(State(s): State<AppState>, Json(b): Json<ShuffleBody>) -> AppResult<StatusCode> {
     s.mpd().random(b.on).await?;
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -662,6 +860,7 @@ struct JumpBody {
 
 async fn jump(State(s): State<AppState>, Json(b): Json<JumpBody>) -> AppResult<StatusCode> {
     s.mpd().play_position(b.pos).await?;
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -672,6 +871,7 @@ struct RemoveBody {
 
 async fn remove(State(s): State<AppState>, Json(b): Json<RemoveBody>) -> AppResult<StatusCode> {
     s.mpd().delete_position(b.pos).await?;
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
 }
 
@@ -679,7 +879,7 @@ async fn clear_queue(State(s): State<AppState>) -> AppResult<StatusCode> {
     let entries = s.mpd().queue().await?;
     // Skip the currently playing/paused song so playback is uninterrupted.
     // When nothing is current, every entry is removed.
-    let current_pos = current_pos(&s, &entries).await;
+    let current_pos = s.current_pos(&entries).await;
     // Delete from the highest position down so earlier indices stay valid.
     for pos in (0..entries.len() as u32).rev() {
         if Some(pos) == current_pos {
@@ -687,5 +887,60 @@ async fn clear_queue(State(s): State<AppState>) -> AppResult<StatusCode> {
         }
         s.mpd().delete_position(pos).await?;
     }
+    s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::Config;
+    use crate::dsp::DspManager;
+    use crate::library::LibraryDb;
+    use crate::mpd::Mpd;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    async fn test_app() -> axum::Router {
+        let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let dsp = DspManager::new(
+            std::env::temp_dir().join("oxide_test_version_dsp.yaml"),
+            None,
+            "".to_string(),
+            44100,
+            false,
+            None,
+        );
+        let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
+        let visualizer = crate::visualizer::VisualizerAnalyzer::new(&Config::default_config());
+        let state = AppState::new(Config::default_config(), db, dsp, mpd, visualizer, None);
+        super::router(state).await
+    }
+
+    #[tokio::test]
+    async fn version_endpoint_returns_both_versions() {
+        let app = test_app().await;
+        let req = Request::builder()
+            .uri("/api/version")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(
+            v["backend"],
+            env!("CARGO_PKG_VERSION"),
+            "backend version must match CARGO_PKG_VERSION"
+        );
+        assert!(
+            v["frontend"].is_string() && !v["frontend"].as_str().unwrap().is_empty(),
+            "frontend version must be a non-empty string"
+        );
+    }
 }
