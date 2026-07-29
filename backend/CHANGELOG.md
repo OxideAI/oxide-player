@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.3.1...oxide-player-v0.3.2) (2026-07-29)
+
+
+### Bug Fixes
+
+* animate now-playing indicators and fix broken keyframes ([#37](https://github.com/OxideAI/oxide-player/issues/37)) ([#74](https://github.com/OxideAI/oxide-player/issues/74)) ([c57e5e5](https://github.com/OxideAI/oxide-player/commit/c57e5e54586325d08ac1d414be87b3cfbec04d60))
+* handle non-UTF-8 filenames in scanner and warn when mpd_music_directory is unset ([9519e8c](https://github.com/OxideAI/oxide-player/commit/9519e8c89987d11a652b3a463c8d31bbed2e8375))
+
 ## [0.3.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.3.0...oxide-player-v0.3.1) (2026-07-29)
 
 
