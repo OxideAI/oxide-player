@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.3.2...oxide-player-v0.4.0) (2026-07-29)
+
+
+### Features
+
+* add MPD output device config management via config fragments ([#77](https://github.com/OxideAI/oxide-player/issues/77)) ([fb9d31e](https://github.com/OxideAI/oxide-player/commit/fb9d31ee0e63c35f659cd8900224f58f0668e85f))
+
 ## [0.3.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.3.1...oxide-player-v0.3.2) (2026-07-29)
 
 
