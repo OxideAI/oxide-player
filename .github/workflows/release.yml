@@ -53,11 +53,15 @@ jobs:
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             sudo dpkg --add-architecture arm64
             # The runner's Azure/security mirrors do not publish arm64 indexes,
-            # so resolve the arm64 cross sysroot solely from Ubuntu ports
-            # (noble + noble-updates, matching the host's ALSA version).
-            printf 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main\ndeb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main\n' | sudo tee /tmp/arm64.sources.list
-            sudo apt-get update -o Dir::Etc::sourcelist=/tmp/arm64.sources.list -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
-            sudo apt-get install -y -o Dir::Etc::sourcelist=/tmp/arm64.sources.list -o Dir::Etc::sourceparts="-" libasound2-dev:arm64
+            # so add Ubuntu ports as an additional source for arm64 packages.
+            # Using /etc/apt/sources.list.d/ (not -o Dir::Etc::sourcelist=) ensures
+            # amd64 base packages still resolve from Azure mirrors and only the
+            # arm64 ALSA packages come from ports, avoiding multi-arch conflicts
+            # with base system packages (apt:arm64, libc6:arm64, etc.).
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+            sudo apt-get update
+            sudo apt-get install -y libasound2-dev:arm64
             ls /usr/lib/aarch64-linux-gnu/pkgconfig/alsa.pc
           else
             sudo apt-get install -y libasound2-dev
