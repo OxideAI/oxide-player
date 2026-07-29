@@ -169,7 +169,7 @@ impl VisualizerAnalyzer {
 
         let stream_config = StreamConfig {
             channels,
-            sample_rate: cpal::SampleRate(rate),
+            sample_rate: rate,
             buffer_size: BufferSize::Default,
         };
 
@@ -272,12 +272,12 @@ fn pick_device(
     }
     if let Ok(devices) = host.input_devices().map(|d| d.collect::<Vec<_>>()) {
         for d in &devices {
-            if d.name().map(|n| n == name).unwrap_or(false) {
+            if d.description().map(|desc| desc.name() == name).unwrap_or(false) {
                 return Ok(d.clone());
             }
         }
         for d in &devices {
-            if d.name().map(|n| n.contains(name)).unwrap_or(false) {
+            if d.description().map(|desc| desc.name().contains(name)).unwrap_or(false) {
                 return Ok(d.clone());
             }
         }
@@ -321,7 +321,7 @@ where
     let err_tx = err_tx.clone();
     let stream = device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[T], _: &cpal::InputCallbackInfo| {
                 let mut guard = shared.samples.lock().unwrap();
                 // Mix down to mono by averaging channels, then append. Keep only

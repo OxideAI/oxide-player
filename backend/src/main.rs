@@ -1,5 +1,6 @@
 mod api;
 mod config;
+pub mod devices;
 pub mod dsp;
 mod error;
 mod visualizer;
