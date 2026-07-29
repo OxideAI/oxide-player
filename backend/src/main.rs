@@ -34,6 +34,16 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    if config.mpd_music_directory.is_none() && !config.library_dirs.is_empty() {
+        tracing::warn!(
+            "mpd_music_directory is not set. MPD addresses tracks relative to its \
+             own music_directory, but the library scanner stores absolute paths. \
+             Without this setting, play requests will fail with 'Access to local \
+             files via TCP is not allowed'. Set mpd_music_directory in the config \
+             (usually the same path as your library_dirs entry)."
+        );
+    }
+
     std::fs::create_dir_all(&config.data_dir).context("create data dir")?;
     std::fs::create_dir_all(&config.cover_cache_dir()).context("create cover cache dir")?;
 

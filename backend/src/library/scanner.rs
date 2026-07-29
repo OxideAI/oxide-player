@@ -18,7 +18,7 @@ pub const COVER_EXTS: &[&str] = &["jpg", "png", "bin"];
 
 fn is_audio(path: &Path) -> bool {
     path.extension()
-        .and_then(|e| e.to_str())
+        .map(|e| e.to_string_lossy())
         .map(|e| AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
         .unwrap_or(false)
 }
@@ -141,6 +141,21 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>, cues: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let p = entry.path();
         let name = p.file_name().and_then(|n| n.to_str()).map(|n| n.to_string());
+        // Warn when a filename is not valid UTF-8 — the URI stored in the DB
+        // will be mangled (replacement characters), and the play API may fail
+        // to resolve it later. Suggest a fix (the most common culprit is files
+        // copied from macOS with Latin-1 encoded names).
+        if name.is_none() {
+            if let Some(fname) = p.file_name().map(|n| n.to_string_lossy()) {
+                if fname.contains('\u{FFFD}') {
+                    tracing::warn!(
+                        "non-UTF-8 filename: {fname} — scanner will store a \
+                         mangled URI. Fix with: convmv -r --nfc '{}'",
+                        dir.display()
+                    );
+                }
+            }
+        }
         // Use symlink_metadata so we never follow directory symlinks: a symlink
         // loop (or a symlink to elsewhere on disk) would otherwise cause
         // infinite recursion / traversal outside the library.
