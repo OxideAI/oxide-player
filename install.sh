@@ -200,6 +200,20 @@ setup_user_dirs() {
     run useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
   fi
   run usermod -aG audio "$SERVICE_USER" || true
+
+  # Add the service user to the group that owns the music/library directory, so
+  # the scanner can traverse and read the files. Without this, a library dir
+  # inside another user's home (e.g. /home/you/music with mode 750) would be
+  # inaccessible to the service user, resulting in "scanned: 0".
+  for _libdir in "$MPD_MUSIC_DIR"; do
+    if [ -d "$_libdir" ]; then
+      _grp="$(stat -c '%G' "$_libdir" 2>/dev/null || true)"
+      if [ -n "$_grp" ] && [ "$_grp" != "root" ] && ! groups "$SERVICE_USER" | tr ' ' '\n' | grep -qxF "$_grp"; then
+        run usermod -aG "$_grp" "$SERVICE_USER"
+      fi
+    fi
+  done
+
   run mkdir -p "$DATA_DIR/covers" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
   run chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
   run chmod 755 "$DATA_DIR"
@@ -270,6 +284,7 @@ write_oxide_config() {
   "mpd_port": 6600,
   "listen": "$LISTEN",
   "data_dir": "$DATA_DIR",
+  "mpd_music_directory": "$MPD_MUSIC_DIR",
   "library_dirs": $dirs_json,
   "static_dir": "$SHARE_DIR/dist",
   "camilladsp_config_path": "$CAMILLADSP_CONFIG",
