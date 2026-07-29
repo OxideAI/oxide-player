@@ -51,13 +51,21 @@ jobs:
         run: |
           sudo apt-get update
           if [ "${{ matrix.arch }}" = "arm64" ]; then
+            # Pin existing repos to amd64 *before* adding arm64 arch so that
+            # apt-get update does not 404 on repos like security.ubuntu.com
+            # that do not publish arm64 package indexes.
+            # Handle legacy one-line format (source.list / .list files).
+            sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list 2>/dev/null || true
+            for f in /etc/apt/sources.list.d/*.list; do
+              [ -f "$f" ] && sudo sed -i 's/^deb /deb [arch=amd64] /' "$f"
+            done
+            # Handle deb822 format (Ubuntu 24.04+, .sources files).
+            for f in /etc/apt/sources.list.d/*.sources; do
+              [ -f "$f" ] && sudo sed -i '/^Types: deb$/a\Architectures: amd64' "$f" 2>/dev/null || true
+            done
+
             sudo dpkg --add-architecture arm64
-            # The runner's Azure/security mirrors do not publish arm64 indexes,
-            # so add Ubuntu ports as an additional source for arm64 packages.
-            # Using /etc/apt/sources.list.d/ (not -o Dir::Etc::sourcelist=) ensures
-            # amd64 base packages still resolve from Azure mirrors and only the
-            # arm64 ALSA packages come from ports, avoiding multi-arch conflicts
-            # with base system packages (apt:arm64, libc6:arm64, etc.).
+            # Add Ubuntu ports as an additional source for arm64 packages.
             echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
             echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
             sudo apt-get update
