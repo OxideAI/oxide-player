@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::devices::config_fragment::ConfigFragmentManager;
 use crate::dsp::DspManager;
 use crate::library::LibraryDb;
 use crate::mpd::{Mpd, MpdStatus};
@@ -28,6 +29,11 @@ struct Inner {
     /// Serializes library scans so concurrent scan/refresh requests can't stack
     /// blocking-pool tasks and starve the runtime.
     pub scan_lock: tokio::sync::Mutex<()>,
+    /// Manages MPD output device config fragments on disk.
+    pub device_configs: ConfigFragmentManager,
+    /// Whether device config fragments were created/updated/deleted since last
+    /// MPD restart.
+    pub config_restart_pending: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {
@@ -40,10 +46,13 @@ impl AppState {
         config_path: Option<PathBuf>,
     ) -> Self {
         let profiles = config.default_dsp_profiles.clone();
+        let data_dir = config.data_dir.clone();
         // Capacity covers a small backlog so a momentarily-slow WS client
         // doesn't block the sender; lagging receivers resync on their next
         // reconnect rather than replaying every missed frame.
         let (event_tx, _) = broadcast::channel(32);
+        let device_configs = ConfigFragmentManager::new(data_dir.join("mpd-outputs.d"))
+            .expect("create mpd-outputs.d directory");
         let state = AppState {
             inner: Arc::new(Inner {
                 config: RwLock::new(config),
@@ -55,6 +64,8 @@ impl AppState {
                 status: RwLock::new(PlayerStatus::stopped()),
                 event_tx,
                 scan_lock: tokio::sync::Mutex::new(()),
+                device_configs,
+                config_restart_pending: std::sync::atomic::AtomicBool::new(false),
             }),
         };
         let dsp = state.inner.dsp.clone();
@@ -74,6 +85,18 @@ impl AppState {
 
     pub fn mpd(&self) -> &Mpd {
         &self.inner.mpd
+    }
+
+    pub fn device_configs(&self) -> &ConfigFragmentManager {
+        &self.inner.device_configs
+    }
+
+    pub fn config_restart_pending(&self) -> bool {
+        self.inner.config_restart_pending.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_config_restart_pending(&self, pending: bool) {
+        self.inner.config_restart_pending.store(pending, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn visualizer(&self) -> &VisualizerAnalyzer {

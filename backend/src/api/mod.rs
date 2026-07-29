@@ -1,3 +1,6 @@
+use crate::devices::config_fragment::{
+    validate_config, DeviceConfig as DeviceConfigDto,
+};
 use crate::dsp::profile::DspProfile;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -54,6 +57,11 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/playback/remove", post(remove))
         .route("/api/playback/clear-queue", post(clear_queue))
         .route("/api/devices", get(devices))
+        .route("/api/devices/configs", get(list_device_configs))
+        .route("/api/devices/configs", post(create_device_config))
+        .route("/api/devices/configs/{name}", put(update_device_config))
+        .route("/api/devices/configs/{name}", delete(delete_device_config))
+        .route("/api/devices/restart-mpd", post(restart_mpd))
         .route("/api/devices/{id}/enable", post(enable_device))
         .route("/api/devices/{id}/disable", post(disable_device))
         .route("/api/dsp", get(dsp_get))
@@ -542,6 +550,201 @@ async fn disable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppRe
     s.mpd().disable_output(id).await?;
     let _ = s.mpd().clear_error().await;
     Ok(StatusCode::OK)
+}
+
+// ---- Device config fragment CRUD ---- ///
+
+/// Serialized device config for the API.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct DeviceConfigResponse {
+    name: String,
+    output_type: String,
+    device: Option<String>,
+    format: Option<String>,
+    mixer_type: Option<String>,
+    mixer_device: Option<String>,
+    dop: bool,
+    restart_pending: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_warning: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+struct CreateDeviceConfigBody {
+    #[serde(rename = "type")]
+    output_type: String,
+    name: String,
+    #[serde(default)]
+    device: Option<String>,
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    mixer_type: Option<String>,
+    #[serde(default)]
+    mixer_device: Option<String>,
+    #[serde(default)]
+    dop: bool,
+}
+
+/// List all managed device config fragments.
+async fn list_device_configs(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceConfigResponse>>> {
+    let configs = s.device_configs().list();
+    let pending = s.config_restart_pending();
+    let cfg = s.config().await;
+    let include_warning = cfg.mpd_config.is_none();
+    let resp: Vec<DeviceConfigResponse> = configs
+        .into_iter()
+        .map(|c| DeviceConfigResponse {
+            name: c.name,
+            output_type: c.output_type,
+            device: c.device,
+            format: c.format,
+            mixer_type: c.mixer_type,
+            mixer_device: c.mixer_device,
+            dop: c.dop,
+            restart_pending: pending,
+            include_warning: if include_warning { Some(true) } else { None },
+        })
+        .collect();
+    Ok(Json(resp))
+}
+
+/// Create a new device config fragment.
+async fn create_device_config(
+    State(s): State<AppState>,
+    Json(b): Json<CreateDeviceConfigBody>,
+) -> AppResult<Json<DeviceConfigResponse>> {
+    let validation = validate_config(
+        &b.name, &b.output_type,
+        b.device.as_deref(),
+        b.format.as_deref(),
+        b.mixer_type.as_deref(),
+        b.mixer_device.as_deref(),
+        b.dop,
+    );
+    if !validation.is_valid() {
+        return Err(AppError::Unprocessable(validation.into_error_string().unwrap_or_default()));
+    }
+
+    let cfg = DeviceConfigDto {
+        name: b.name.clone(),
+        output_type: b.output_type.clone(),
+        device: b.device.clone(),
+        format: b.format.clone(),
+        mixer_type: b.mixer_type.clone(),
+        mixer_device: b.mixer_device.clone(),
+        dop: b.dop,
+    };
+    s.device_configs().create(&cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    // Mark restart pending and attempt include injection on first write.
+    s.set_config_restart_pending(true);
+    let cfg_data = s.config().await;
+    let include_warning = cfg_data.mpd_config.is_none();
+    if let Some(ref mpd_config_path) = cfg_data.mpd_config {
+        let injector = crate::devices::include_injector::IncludeInjector::new(mpd_config_path.clone());
+        let _ = injector.ensure_include(s.device_configs().dir());
+    }
+
+    Ok(Json(DeviceConfigResponse {
+        name: b.name,
+        output_type: b.output_type,
+        device: b.device,
+        format: b.format,
+        mixer_type: b.mixer_type,
+        mixer_device: b.mixer_device,
+        dop: b.dop,
+        restart_pending: true,
+        include_warning: if include_warning { Some(true) } else { None },
+    }))
+}
+
+/// Update an existing device config fragment.
+async fn update_device_config(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(b): Json<CreateDeviceConfigBody>,
+) -> AppResult<Json<DeviceConfigResponse>> {
+    // Check existence
+    if !s.device_configs().exists(&name) {
+        return Err(AppError::NotFound(format!("device config '{name}'")));
+    }
+
+    let validation = validate_config(
+        &b.name, &b.output_type,
+        b.device.as_deref(),
+        b.format.as_deref(),
+        b.mixer_type.as_deref(),
+        b.mixer_device.as_deref(),
+        b.dop,
+    );
+    if !validation.is_valid() {
+        return Err(AppError::Unprocessable(validation.into_error_string().unwrap_or_default()));
+    }
+
+    let cfg = DeviceConfigDto {
+        name: b.name.clone(),
+        output_type: b.output_type.clone(),
+        device: b.device.clone(),
+        format: b.format.clone(),
+        mixer_type: b.mixer_type.clone(),
+        mixer_device: b.mixer_device.clone(),
+        dop: b.dop,
+    };
+    s.device_configs().update(&name, &cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
+    s.set_config_restart_pending(true);
+
+    Ok(Json(DeviceConfigResponse {
+        name: b.name,
+        output_type: b.output_type,
+        device: b.device,
+        format: b.format,
+        mixer_type: b.mixer_type,
+        mixer_device: b.mixer_device,
+        dop: b.dop,
+        restart_pending: true,
+        include_warning: None,
+    }))
+}
+
+/// Delete a device config fragment.
+async fn delete_device_config(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> AppResult<StatusCode> {
+    s.device_configs().delete(&name).map_err(|_| {
+        AppError::NotFound(format!("device config '{name}'"))
+    })?;
+    s.set_config_restart_pending(true);
+    Ok(StatusCode::OK)
+}
+
+/// Restart MPD (only supported when MPD is running on localhost).
+async fn restart_mpd(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    let cfg = s.config().await;
+    let host = cfg.mpd_host.clone();
+    if !is_localhost(&host) {
+        return Err(AppError::BadRequest(
+            "cannot restart remote MPD — MPD must be running on the same machine as oxide-player".to_string()
+        ));
+    }
+    // Kill MPD
+    s.mpd().raw(mpd_protocol::command::Command::new("kill"))
+        .await?;
+
+    // Wait for MPD to shut down, then restart
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    s.mpd().ensure_running().await?;
+
+    // Clear restart-pending flag
+    s.set_config_restart_pending(false);
+
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+/// True when the host refers to the local machine (not a remote address).
+fn is_localhost(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "::1" | "localhost" | "0.0.0.0")
 }
 
 async fn dsp_get(State(s): State<AppState>) -> AppResult<Json<Vec<DspProfile>>> {

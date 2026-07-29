@@ -1,6 +1,7 @@
 import type {
   AlbumSources,
   Config,
+  DeviceConfig,
   DspProfile,
   OutputDevice,
   PlayerStatus,
@@ -106,6 +107,27 @@ export const api = {
     fetch(`/api/devices/${id}/enable`, { method: 'POST' }).then((r) => json<unknown>(r)),
   disableDevice: (id: number) =>
     fetch(`/api/devices/${id}/disable`, { method: 'POST' }).then((r) => json<unknown>(r)),
+
+  // —— Device config fragments ——
+  deviceConfigs: () => fetch('/api/devices/configs').then((r) => json<DeviceConfig[]>(r)),
+  createDeviceConfig: (cfg: Partial<DeviceConfig>) =>
+    fetch('/api/devices/configs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    }).then((r) => json<DeviceConfig>(r)),
+  updateDeviceConfig: (name: string, cfg: Partial<DeviceConfig>) =>
+    fetch(`/api/devices/configs/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    }).then((r) => json<DeviceConfig>(r)),
+  deleteDeviceConfig: (name: string) =>
+    fetch(`/api/devices/configs/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }).then((r) => json<unknown>(r)),
+  restartMpd: () =>
+    fetch('/api/devices/restart-mpd', { method: 'POST' }).then((r) => json<{ status: string }>(r)),
 
   dsp: () => fetch('/api/dsp').then((r) => json<DspProfile[]>(r)),
   setDsp: (profile: DspProfile) =>

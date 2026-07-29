@@ -15,6 +15,8 @@ pub enum AppError {
     NotFound(String),
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("unprocessable: {0}")]
+    Unprocessable(String),
 }
 
 impl IntoResponse for AppError {
@@ -25,6 +27,7 @@ impl IntoResponse for AppError {
             AppError::Dsp(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
             AppError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            AppError::Unprocessable(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
         };
         (status, Json(json!({ "error": msg }))).into_response()
     }

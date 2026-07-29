@@ -99,6 +99,18 @@ export interface DspProfile {
   eq_bands: EqBand[]
 }
 
+export interface DeviceConfig {
+  name: string
+  output_type: string
+  device: string | null
+  format: string | null
+  mixer_type: string | null
+  mixer_device: string | null
+  dop: boolean
+  restart_pending: boolean
+  include_warning?: boolean
+}
+
 export interface Config {
   mpd_host: string
   mpd_port: number
