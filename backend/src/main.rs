@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("MPD not started: {e}");
     }
 
+    let listen_addr = config.listen.clone();
     let state = state::AppState::new(config, db, dsp, mpd, visualizer, config_path);
     state.spawn_status_poller();
 
@@ -78,8 +79,8 @@ async fn main() -> anyhow::Result<()> {
     // and serve the UI from a different origin.
     let app = api::router(state.clone()).await.layer(CorsLayer::new());
 
-    let listener = tokio::net::TcpListener::bind(&config.listen).await?;
-    tracing::info!("oxide-player listening on http://{}", config.listen);
+    let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
+    tracing::info!("oxide-player listening on http://{}", listen_addr);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(state))
         .await?;
