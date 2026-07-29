@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.3.0...oxide-player-v0.3.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* extract listen_addr before config is moved into AppState ([7b2ef6d](https://github.com/OxideAI/oxide-player/commit/7b2ef6d531e314e1a8490dd25ab8cf84094d5816))
+* use config.listen instead of cli.listen for TCP bind ([fa1c704](https://github.com/OxideAI/oxide-player/commit/fa1c70460c85e828eb44e24e25800766025130a2))
+
 ## [0.3.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.2.0...oxide-player-v0.3.0) (2026-07-18)
 
 
