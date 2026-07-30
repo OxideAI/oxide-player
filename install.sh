@@ -167,6 +167,7 @@ build_backend() {
     return
   fi
   log "Building backend (release)..."
+  ensure_rust
   # backend/ is a workspace member, so cargo places the binary in the
   # workspace root target/ dir, not backend/target/.
   ( cd "$SRC_DIR" && cargo build --release )
