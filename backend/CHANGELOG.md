@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.4.0...oxide-player-v0.5.0) (2026-07-30)
+
+
+### Features
+
+* add default sound ([a2d0099](https://github.com/OxideAI/oxide-player/commit/a2d009942b5059186801136d96b33e7615723ed2))
+
 ## [0.4.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.3.2...oxide-player-v0.4.0) (2026-07-29)
 
 
