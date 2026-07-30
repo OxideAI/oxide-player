@@ -75,9 +75,12 @@ jobs:
             done
 
             sudo dpkg --add-architecture arm64
-            # Add Ubuntu ports as an additional source for arm64 packages.
-            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
-            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+            # Inject arm64 repos matching the runner's Ubuntu release.
+            # shellcheck source=/etc/os-release
+            . /etc/os-release
+            ubuntu_codename="${VERSION_CODENAME:-noble}"
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $ubuntu_codename main" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${ubuntu_codename}-updates main" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
             sudo apt-get update
             sudo apt-get install -y libasound2-dev:arm64
             ls /usr/lib/aarch64-linux-gnu/pkgconfig/alsa.pc
@@ -92,7 +95,12 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build backend (release, cross)
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          echo "host: $(rustc -vV | grep host)"
+          echo "rustc: $(rustc --version)"
+          echo "target: ${{ matrix.target }}"
+          echo "cargo version: $(cargo --version)"
+          cargo build --release --target ${{ matrix.target }}
 
       - name: Install Node
         uses: actions/setup-node@v7
