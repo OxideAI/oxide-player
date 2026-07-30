@@ -3,6 +3,10 @@
     "backend": {
       "release-type": "rust",
       "package-name": "oxide-player"
+    },
+    "frontend": {
+      "release-type": "node",
+      "package-name": "oxide-player-frontend"
     }
   }
 }
