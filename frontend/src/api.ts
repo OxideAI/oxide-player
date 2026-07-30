@@ -110,18 +110,25 @@ export const api = {
 
   // —— Device config fragments ——
   deviceConfigs: () => fetch('/api/devices/configs').then((r) => json<DeviceConfig[]>(r)),
-  createDeviceConfig: (cfg: Partial<DeviceConfig>) =>
-    fetch('/api/devices/configs', {
+  createDeviceConfig: (cfg: Partial<DeviceConfig>) => {
+    // Map frontend output_type → backend 'type' field name
+    const { output_type, ...rest } = cfg
+    const body = { type: output_type, ...rest }
+    return fetch('/api/devices/configs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cfg),
-    }).then((r) => json<DeviceConfig>(r)),
-  updateDeviceConfig: (name: string, cfg: Partial<DeviceConfig>) =>
-    fetch(`/api/devices/configs/${encodeURIComponent(name)}`, {
+      body: JSON.stringify(body),
+    }).then((r) => json<DeviceConfig>(r))
+  },
+  updateDeviceConfig: (name: string, cfg: Partial<DeviceConfig>) => {
+    const { output_type, ...rest } = cfg
+    const body = output_type !== undefined ? { type: output_type, ...rest } : rest
+    return fetch(`/api/devices/configs/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cfg),
-    }).then((r) => json<DeviceConfig>(r)),
+      body: JSON.stringify(body),
+    }).then((r) => json<DeviceConfig>(r))
+  },
   deleteDeviceConfig: (name: string) =>
     fetch(`/api/devices/configs/${encodeURIComponent(name)}`, {
       method: 'DELETE',

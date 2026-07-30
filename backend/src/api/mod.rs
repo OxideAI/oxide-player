@@ -570,6 +570,23 @@ struct DeviceConfigResponse {
 }
 
 #[derive(serde::Deserialize)]
+struct UpdateDeviceConfigBody {
+    #[serde(rename = "type")]
+    output_type: Option<String>,
+    name: Option<String>,
+    #[serde(default)]
+    device: Option<String>,
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    mixer_type: Option<String>,
+    #[serde(default)]
+    mixer_device: Option<String>,
+    #[serde(default)]
+    dop: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
 struct CreateDeviceConfigBody {
     #[serde(rename = "type")]
     output_type: String,
@@ -663,45 +680,52 @@ async fn create_device_config(
 async fn update_device_config(
     State(s): State<AppState>,
     Path(name): Path<String>,
-    Json(b): Json<CreateDeviceConfigBody>,
+    Json(b): Json<UpdateDeviceConfigBody>,
 ) -> AppResult<Json<DeviceConfigResponse>> {
-    // Check existence
-    if !s.device_configs().exists(&name) {
-        return Err(AppError::NotFound(format!("device config '{name}'")));
-    }
+    // Read existing config
+    let existing = s.device_configs().get(&name)
+        .map_err(|_| AppError::NotFound(format!("device config '{name}'")))?;
+
+    let new_name = b.name.unwrap_or_else(|| existing.name.clone());
+    let output_type = b.output_type.unwrap_or_else(|| existing.output_type.clone());
+    let device = b.device.or_else(|| existing.device.clone());
+    let format = b.format.or_else(|| existing.format.clone());
+    let mixer_type = b.mixer_type.or_else(|| existing.mixer_type.clone());
+    let mixer_device = b.mixer_device.or_else(|| existing.mixer_device.clone());
+    let dop = b.dop.unwrap_or(existing.dop);
 
     let validation = validate_config(
-        &b.name, &b.output_type,
-        b.device.as_deref(),
-        b.format.as_deref(),
-        b.mixer_type.as_deref(),
-        b.mixer_device.as_deref(),
-        b.dop,
+        &new_name, &output_type,
+        device.as_deref(),
+        format.as_deref(),
+        mixer_type.as_deref(),
+        mixer_device.as_deref(),
+        dop,
     );
     if !validation.is_valid() {
         return Err(AppError::Unprocessable(validation.into_error_string().unwrap_or_default()));
     }
 
     let cfg = DeviceConfigDto {
-        name: b.name.clone(),
-        output_type: b.output_type.clone(),
-        device: b.device.clone(),
-        format: b.format.clone(),
-        mixer_type: b.mixer_type.clone(),
-        mixer_device: b.mixer_device.clone(),
-        dop: b.dop,
+        name: new_name.clone(),
+        output_type: output_type.clone(),
+        device: device.clone(),
+        format: format.clone(),
+        mixer_type: mixer_type.clone(),
+        mixer_device: mixer_device.clone(),
+        dop,
     };
     s.device_configs().update(&name, &cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
     s.set_config_restart_pending(true);
 
     Ok(Json(DeviceConfigResponse {
-        name: b.name,
-        output_type: b.output_type,
-        device: b.device,
-        format: b.format,
-        mixer_type: b.mixer_type,
-        mixer_device: b.mixer_device,
-        dop: b.dop,
+        name: new_name,
+        output_type,
+        device,
+        format,
+        mixer_type,
+        mixer_device,
+        dop,
         restart_pending: true,
         include_warning: None,
     }))
@@ -728,9 +752,12 @@ async fn restart_mpd(State(s): State<AppState>) -> AppResult<Json<serde_json::Va
             "cannot restart remote MPD — MPD must be running on the same machine as oxide-player".to_string()
         ));
     }
-    // Kill MPD
-    s.mpd().raw(mpd_protocol::command::Command::new("kill"))
-        .await?;
+    // Kill MPD — the connection may close before the response arrives,
+    // so we ignore the error and just wait for the process to exit.
+    match s.mpd().raw(mpd_protocol::command::Command::new("kill")).await {
+        Ok(_) => {},
+        Err(_) => {},
+    }
 
     // Wait for MPD to shut down, then restart
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

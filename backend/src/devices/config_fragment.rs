@@ -281,6 +281,13 @@ impl ConfigFragmentManager {
         Ok(())
     }
 
+    /// Read a device config fragment by name.
+    pub fn get(&self, name: &str) -> io::Result<DeviceConfig> {
+        let filename = Self::filename_for(name);
+        let path = self.dir.join(&filename);
+        Self::parse_fragment(&path)
+    }
+
     /// Check if a fragment file exists for the given name.
     pub fn exists(&self, name: &str) -> bool {
         let filename = Self::filename_for(name);
