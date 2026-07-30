@@ -25,12 +25,14 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # Release Please bumps the version in Cargo.toml and opens/merges a release PR.
-  # When it merges and pushes a tag (release_created), build & publish the
-  # cross-compiled Linux packages and attach them to the GitHub release.
+  # Release Please bumps version in Cargo.toml and frontend/package.json, opens
+  # a release PR, and when it merges (pushes oxide-player-v* tag), build &
+  # publish the cross-compiled Linux packages and attach them to the release.
   package:
     name: Build & publish packages
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     uses: ./.github/workflows/release.yml
+    with:
+      tag_name: ${{ needs.release-please.outputs.tag_name }}
     secrets: inherit

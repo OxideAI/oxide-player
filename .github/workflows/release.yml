@@ -5,7 +5,17 @@ on:
     tags:
       - "oxide-player-v*"
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag name to attach assets to (defaults to push tag)"
+        type: string
+        required: false
   workflow_call:
+    inputs:
+      tag_name:
+        description: "Tag name to attach assets to"
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -167,5 +177,6 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          tag_name: ${{ inputs.tag_name || github.ref_name }}
           files: ${{ steps.pkg.outputs.asset }}
           fail_on_unmatched_files: true

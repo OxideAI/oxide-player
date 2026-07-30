@@ -32,6 +32,37 @@ MUSIC_DIR="${MUSIC_DIR:-${DATA_DIR}/music}"
 MPD_MUSIC_DIR="${MPD_MUSIC_DIR:-${MUSIC_DIR}}"
 BUILD_DIR="${BUILD_DIR:-/tmp/oxide-player-build}"
 
+# ---- CLI / mode ------------------------------------------------------------
+update_mode=false
+
+show_usage() {
+  cat <<'EOF'
+Usage: sudo bash install.sh [OPTIONS]
+
+Install or update oxide-player on a Debian-based system.
+
+Options:
+  --update     Replace binary + frontend only (skip system setup).
+               Fetches the latest prebuilt release package.
+  --help, -h   Show this help.
+
+Environment variables (all optional):
+  REPO_URL, BRANCH, INSTALL_FROM_DIR, BIN_DIR, SHARE_DIR, CONFIG_DIR,
+  DATA_DIR, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
+  CAMILLADSP_WS, SERVICE_USER, BUILD_DIR
+EOF
+  exit 0
+}
+
+while [ $# -gt 0 ]; do
+  case "${1:-}" in
+    --update) update_mode=true ;;
+    --help|-h) show_usage ;;
+    *) warn "Unknown option: $1 (try --help)" ;;
+  esac
+  shift
+done
+
 # ---- helpers ----------------------------------------------------------------
 log()  { printf '\033[1;34m[oxide]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[oxide]\033[0m %s\n' "$*" >&2; }
@@ -556,6 +587,19 @@ check_linux() {
   esac
 }
 
+do_update() {
+  need_root
+  check_linux
+  detect_os
+  fetch_source
+  build_backend
+  build_frontend
+  run systemctl daemon-reload
+  run systemctl restart camilladsp oxide-player || true
+  log "Update complete."
+  finish
+}
+
 check_dependencies() {
   # These must already be present; the installer relies on them at runtime.
   local missing=()
@@ -571,6 +615,10 @@ check_dependencies() {
 }
 
 main() {
+  if $update_mode; then
+    do_update
+    return
+  fi
   need_root
   check_linux
   detect_os
@@ -592,4 +640,4 @@ main() {
   finish
 }
 
-main "$@"
+main
