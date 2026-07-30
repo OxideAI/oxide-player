@@ -2,25 +2,40 @@ use crate::dsp::profile::{DspMode, DspProfile, EqBandType, ResamplePreset};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// CamillaDSP v4.1.3 config structure.
+///
+/// Key differences from earlier versions:
+/// - `samplerate`, `chunksize`, `queuelimit`, `capture_samplerate`, `resampler`
+///   are all inside the `devices` block (not at the top level).
+/// - Device types use `Alsa` (not `Raw`), format uses `S32_LE` (not `S32LE`).
+/// - Pipeline steps are `Filter` (named references) or `Mixer`, not inline
+///   Resampler/Biquad steps.
+/// - Resampling is configured via `devices.resampler` and `devices.capture_samplerate`
+///   rather than a pipeline filter step.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CamillaConfig {
     pub devices: Devices,
-    pub samplerate: u32,
-    /// Capture device rate. Required whenever a resampler is present, otherwise
-    /// CamillaDSP assumes capture == output rate and rejects the config with a
-    /// "capture rate mismatch" error on reload.
-    #[serde(rename = "capture_samplerate", skip_serializing_if = "Option::is_none")]
-    pub capture_samplerate: Option<u32>,
-    pub channels: u32,
     #[serde(default)]
     pub mixers: HashMap<String, serde_yaml::Value>,
     #[serde(default)]
-    pub filters: HashMap<String, serde_yaml::Value>,
+    pub filters: HashMap<String, FilterDef>,
+    #[serde(default)]
     pub pipeline: Vec<PipelineStep>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Devices {
+    pub samplerate: u32,
+    pub chunksize: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queuelimit: Option<u32>,
+    /// Capture samplerate — set when resampling is active so CamillaDSP knows
+    /// the incoming rate differs from the target `samplerate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_samplerate: Option<u32>,
+    /// Resampler config — present only in Resample mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resampler: Option<ResamplerConfig>,
     pub capture: Device,
     pub playback: Device,
 }
@@ -34,63 +49,50 @@ pub struct Device {
     pub format: String,
 }
 
+/// v4 AsyncSinc resampler configuration.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ResamplerConfig {
+    #[serde(rename = "type")]
+    pub resampler_type: String,
+    pub profile: String,
+}
+
+/// A named filter definition referenced from pipeline steps.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FilterDef {
+    #[serde(rename = "type")]
+    pub filter_type: String,
+    pub parameters: FilterParameters,
+}
+
+/// Biquad filter parameters.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FilterParameters {
+    #[serde(rename = "type")]
+    pub param_type: String,
+    pub freq: f64,
+    pub gain: f64,
+    pub q: f64,
+}
+
+/// Pipeline step — v4.1.3 uses `Filter` (named refs) and `Mixer` (named ref).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 pub enum PipelineStep {
-    Resampler { resampler: Resampler },
-    Biquad { channel: u32, filter: BiquadFilter },
+    Filter { channels: Vec<u32>, names: Vec<String> },
+    Mixer { name: String },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Resampler {
-    #[serde(rename = "type")]
-    pub resampler_type: String,
-    pub srate: u32,
-    pub quality: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type")]
-pub enum BiquadFilter {
-    Peaking { freq: f64, gain: f64, q: f64 },
-    LowShelf { freq: f64, gain: f64, q: f64 },
-    HighShelf { freq: f64, gain: f64, q: f64 },
-}
-
-fn biquad_filter(band: &crate::dsp::profile::EqBand) -> BiquadFilter {
-    match band.band_type {
-        EqBandType::Peaking => BiquadFilter::Peaking {
-            freq: band.freq,
-            gain: band.gain,
-            q: band.q,
-        },
-        EqBandType::LowShelf => BiquadFilter::LowShelf {
-            freq: band.freq,
-            gain: band.gain,
-            q: band.q,
-        },
-        EqBandType::HighShelf => BiquadFilter::HighShelf {
-            freq: band.freq,
-            gain: band.gain,
-            q: band.q,
-        },
-    }
-}
-
-fn quality_name(preset: ResamplePreset) -> &'static str {
-    match preset {
-        ResamplePreset::Balanced => "Medium",
-        ResamplePreset::High => "High",
-        ResamplePreset::Extreme => "VeryHigh",
-    }
-}
-
-/// Render a CamillaDSP YAML config for the effective profile.
+/// Render a CamillaDSP v4.1.3 YAML config for the effective profile.
 ///
-/// `capture_rate` is the ALSA loopback sample rate MPD emits at. Bit-perfect
-/// mode keeps this rate with no resampler but still applies any EQ bands as a
-/// biquad-only pipeline; resample mode adds a Soxr resampler targeting
-/// `profile.target_rate` followed by the EQ biquads.
+/// `capture_rate` is the ALSA loopback sample rate MPD emits at.
+///
+/// - **BitPerfect** mode: same rate capture→playback, no resampler.
+///   EQ bands are rendered as named `Biquad` filters in the `filters` section
+///   and applied via `Filter` pipeline steps.
+/// - **Resample** mode: adds a `resampler` block under `devices` and sets
+///   `capture_samplerate` so CamillaDSP knows the incoming rate.  EQ bands
+///   are appended after the resampler as filter steps.
 pub fn render_camilladsp_config(
     profile: &DspProfile,
     capture_device: &str,
@@ -99,51 +101,82 @@ pub fn render_camilladsp_config(
 ) -> CamillaConfig {
     let profile = profile.effective();
     let channels = 2u32;
-    let (samplerate, capture_samplerate, mut pipeline) = match profile.mode {
-        DspMode::BitPerfect => (capture_rate, None, Vec::new()),
+
+    // --- devices-level fields ---
+    let (samplerate, capture_samplerate, resampler) = match profile.mode {
+        DspMode::BitPerfect => (capture_rate, None, None),
         DspMode::Resample => {
             let target = profile.target_rate.unwrap_or(capture_rate);
-            let step = PipelineStep::Resampler {
-                resampler: Resampler {
-                    resampler_type: "Soxr".to_string(),
-                    srate: target,
-                    quality: quality_name(profile.preset).to_string(),
-                },
+            let cfg = ResamplerConfig {
+                resampler_type: "AsyncSinc".to_string(),
+                profile: resample_profile_name(profile.preset).to_string(),
             };
-            (target, Some(capture_rate), vec![step])
+            (target, Some(capture_rate), Some(cfg))
         }
     };
 
-    for band in &profile.eq_bands {
-        for ch in 0..channels {
-            pipeline.push(PipelineStep::Biquad {
-                channel: ch,
-                filter: biquad_filter(band),
-            });
-        }
+    // --- filters & pipeline ---
+    let mut filters: HashMap<String, FilterDef> = HashMap::new();
+    let mut pipeline: Vec<PipelineStep> = Vec::new();
+
+    for (band_idx, band) in profile.eq_bands.iter().enumerate() {
+        let (biquad_type, freq, gain, q) = match band.band_type {
+            EqBandType::Peaking => ("Peaking", band.freq, band.gain, band.q),
+            EqBandType::LowShelf => ("Lowshelf", band.freq, band.gain, band.q),
+            EqBandType::HighShelf => ("Highshelf", band.freq, band.gain, band.q),
+        };
+
+        // Create one filter per band (applied to both channels).
+        let name = format!("eq_band_{band_idx}");
+        filters.insert(
+            name.clone(),
+            FilterDef {
+                filter_type: "Biquad".to_string(),
+                parameters: FilterParameters {
+                    param_type: biquad_type.to_string(),
+                    freq,
+                    gain,
+                    q,
+                },
+            },
+        );
+        pipeline.push(PipelineStep::Filter {
+            channels: (0..channels).collect(),
+            names: vec![name],
+        });
     }
 
     CamillaConfig {
         devices: Devices {
+            samplerate,
+            chunksize: 1024,
+            queuelimit: Some(4),
+            capture_samplerate,
+            resampler,
             capture: Device {
-                dev_type: "Raw".to_string(),
+                dev_type: "Alsa".to_string(),
                 channels,
                 device: capture_device.to_string(),
-                format: "S32LE".to_string(),
+                format: "S32_LE".to_string(),
             },
             playback: Device {
-                dev_type: "Raw".to_string(),
+                dev_type: "Alsa".to_string(),
                 channels,
                 device: playback_device.to_string(),
-                format: "S32LE".to_string(),
+                format: "S32_LE".to_string(),
             },
         },
-        samplerate,
-        capture_samplerate,
-        channels,
         mixers: HashMap::new(),
-        filters: HashMap::new(),
+        filters,
         pipeline,
+    }
+}
+
+fn resample_profile_name(preset: ResamplePreset) -> &'static str {
+    match preset {
+        ResamplePreset::Balanced => "Balanced",
+        ResamplePreset::High => "Accurate",
+        ResamplePreset::Extreme => "Accurate",
     }
 }
 
@@ -162,95 +195,114 @@ mod tests {
         }
     }
 
+    // ---- device-level fields ----
+
     #[test]
-    fn bit_perfect_has_empty_pipeline() {
+    fn bit_perfect_uses_capture_rate_no_resampler() {
         let p = base_profile();
-        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
-        assert!(cfg.pipeline.is_empty());
-        assert_eq!(cfg.samplerate, 44100);
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+        assert_eq!(cfg.devices.samplerate, 44100);
+        assert!(cfg.devices.capture_samplerate.is_none());
+        assert!(cfg.devices.resampler.is_none());
     }
 
     #[test]
-    fn resample_adds_resampler_step() {
+    fn resample_sets_capture_samplerate_and_resampler() {
         let mut p = base_profile();
         p.mode = DspMode::Resample;
         p.target_rate = Some(96000);
-        p.preset = ResamplePreset::High;
-        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
-        assert_eq!(cfg.samplerate, 96000);
-        assert_eq!(cfg.capture_samplerate, Some(44100));
-        assert_eq!(cfg.pipeline.len(), 1);
-        match &cfg.pipeline[0] {
-            PipelineStep::Resampler { resampler } => {
-                assert_eq!(resampler.srate, 96000);
-                assert_eq!(resampler.quality, "High");
-            }
-            _ => panic!("expected resampler"),
-        }
+        p.preset = ResamplePreset::Balanced;
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+        assert_eq!(cfg.devices.samplerate, 96000);
+        assert_eq!(cfg.devices.capture_samplerate, Some(44100));
+        let resamp = cfg.devices.resampler.expect("resampler should be present");
+        assert_eq!(resamp.resampler_type, "AsyncSinc");
+        assert_eq!(resamp.profile, "Balanced");
     }
 
     #[test]
-    fn bit_perfect_omits_capture_samplerate() {
-        let p = base_profile();
-        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
-        assert_eq!(cfg.capture_samplerate, None);
-        assert_eq!(cfg.samplerate, 44100);
-    }
-
-    #[test]
-    fn eq_adds_biquad_per_channel() {
+    fn resample_without_target_rate_defaults_to_capture_rate() {
         let mut p = base_profile();
         p.mode = DspMode::Resample;
-        p.target_rate = Some(48000);
-        p.eq_bands = vec![EqBand {
-            band_type: EqBandType::Peaking,
-            freq: 1000.0,
-            gain: 3.0,
-            q: 1.0,
-        }];
-        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
-        assert_eq!(cfg.pipeline.len(), 3);
-        assert!(matches!(cfg.pipeline[1], PipelineStep::Biquad { channel: 0, .. }));
-        assert!(matches!(cfg.pipeline[2], PipelineStep::Biquad { channel: 1, .. }));
+        p.target_rate = None;
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+        assert_eq!(cfg.devices.samplerate, 44100);
+        assert_eq!(cfg.devices.capture_samplerate, Some(44100));
+        let resamp = cfg.devices.resampler.expect("resampler should be present");
+        assert_eq!(resamp.profile, "Balanced");
+    }
+
+    // ---- device types and formats ----
+
+    #[test]
+    fn devices_use_alsa_type_and_underscore_format() {
+        let p = base_profile();
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+        assert_eq!(cfg.devices.capture.dev_type, "Alsa");
+        assert_eq!(cfg.devices.capture.format, "S32_LE");
+        assert_eq!(cfg.devices.playback.dev_type, "Alsa");
+        assert_eq!(cfg.devices.playback.format, "S32_LE");
     }
 
     #[test]
-    fn bit_perfect_keeps_eq_without_resampler() {
+    fn devices_have_chunksize_and_queuelimit() {
+        let p = base_profile();
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+        assert_eq!(cfg.devices.chunksize, 1024);
+        assert_eq!(cfg.devices.queuelimit, Some(4));
+    }
+
+    // ---- pipeline and filters ----
+
+    #[test]
+    fn bit_perfect_no_eq_has_empty_pipeline_and_filters() {
+        let p = base_profile();
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+        assert!(cfg.pipeline.is_empty());
+        assert!(cfg.filters.is_empty());
+    }
+
+    #[test]
+    fn eq_adds_one_filter_per_band_applied_to_both_channels() {
         let mut p = base_profile();
-        p.mode = DspMode::BitPerfect;
-        p.eq_bands = vec![EqBand {
-            band_type: EqBandType::Peaking,
-            freq: 1000.0,
-            gain: 3.0,
-            q: 1.0,
-        }];
-        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
-        // EQ applies as a biquad-only pipeline; no resampler, rate stays capture rate.
+        p.eq_bands = vec![
+            EqBand {
+                band_type: EqBandType::Peaking,
+                freq: 1000.0,
+                gain: 3.0,
+                q: 1.0,
+            },
+            EqBand {
+                band_type: EqBandType::LowShelf,
+                freq: 200.0,
+                gain: -2.0,
+                q: 0.7,
+            },
+        ];
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+        assert_eq!(cfg.filters.len(), 2);
         assert_eq!(cfg.pipeline.len(), 2);
-        assert!(matches!(cfg.pipeline[0], PipelineStep::Biquad { channel: 0, .. }));
-        assert!(matches!(cfg.pipeline[1], PipelineStep::Biquad { channel: 1, .. }));
-        assert_eq!(cfg.samplerate, 44100);
-        assert_eq!(cfg.capture_samplerate, None);
-    }
 
-    #[test]
-    fn every_preset_maps_to_valid_quality() {
-        for (preset, expected) in [
-            (ResamplePreset::Balanced, "Medium"),
-            (ResamplePreset::High, "High"),
-            (ResamplePreset::Extreme, "VeryHigh"),
-        ] {
-            let mut p = base_profile();
-            p.mode = DspMode::Resample;
-            p.target_rate = Some(96000);
-            p.preset = preset;
-            let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
-            match &cfg.pipeline[0] {
-                PipelineStep::Resampler { resampler } => {
-                    assert_eq!(resampler.quality, expected, "preset {preset:?}");
-                }
-                _ => panic!("expected resampler"),
+        // First filter is a Peaking biquad
+        let f0 = &cfg.filters["eq_band_0"];
+        assert_eq!(f0.filter_type, "Biquad");
+        assert_eq!(f0.parameters.param_type, "Peaking");
+        assert_eq!(f0.parameters.freq, 1000.0);
+        assert_eq!(f0.parameters.gain, 3.0);
+
+        // Second filter is a Lowshelf biquad
+        let f1 = &cfg.filters["eq_band_1"];
+        assert_eq!(f1.parameters.param_type, "Lowshelf");
+        assert_eq!(f1.parameters.freq, 200.0);
+        assert_eq!(f1.parameters.gain, -2.0);
+
+        // Pipeline references both bands on channels [0, 1]
+        match &cfg.pipeline[0] {
+            PipelineStep::Filter { channels, names } => {
+                assert_eq!(channels, &vec![0u32, 1]);
+                assert_eq!(names, &vec!["eq_band_0".to_string()]);
             }
+            _ => panic!("expected Filter step"),
         }
     }
 
@@ -258,29 +310,58 @@ mod tests {
     fn every_eq_band_type_renders() {
         for band_type in [EqBandType::Peaking, EqBandType::LowShelf, EqBandType::HighShelf] {
             let mut p = base_profile();
-            p.mode = DspMode::Resample;
-            p.target_rate = Some(48000);
             p.eq_bands = vec![EqBand {
                 band_type,
                 freq: 500.0,
                 gain: -1.5,
                 q: 0.9,
             }];
-            let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
-            // pipeline = [resampler, biquad ch0, biquad ch1]
-            assert!(matches!(cfg.pipeline[1], PipelineStep::Biquad { channel: 0, .. }));
-            assert!(matches!(cfg.pipeline[2], PipelineStep::Biquad { channel: 1, .. }));
+            let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+            assert_eq!(cfg.filters.len(), 1);
+            assert_eq!(cfg.pipeline.len(), 1);
         }
     }
 
     #[test]
-    fn resample_without_target_is_noop_passthrough() {
+    fn every_resample_preset_maps_to_valid_v4_profile() {
+        for (preset, expected) in [
+            (ResamplePreset::Balanced, "Balanced"),
+            (ResamplePreset::High, "Accurate"),
+            (ResamplePreset::Extreme, "Accurate"),
+        ] {
+            let mut p = base_profile();
+            p.mode = DspMode::Resample;
+            p.target_rate = Some(96000);
+            p.preset = preset;
+            let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+            let resamp = cfg.devices.resampler.as_ref().expect("resampler");
+            assert_eq!(resamp.profile, expected, "preset {preset:?}");
+        }
+    }
+
+    // ---- serialisation smoke ----
+
+    #[test]
+    fn serde_roundtrip() {
         let mut p = base_profile();
         p.mode = DspMode::Resample;
-        p.target_rate = None;
-        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:DAC", 44100);
-        assert_eq!(cfg.samplerate, 44100);
-        assert_eq!(cfg.capture_samplerate, Some(44100));
-        assert_eq!(cfg.pipeline.len(), 1);
+        p.target_rate = Some(96000);
+        p.preset = ResamplePreset::High;
+        p.eq_bands = vec![EqBand {
+            band_type: EqBandType::Peaking,
+            freq: 1000.0,
+            gain: 3.0,
+            q: 1.0,
+        }];
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+        let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+        // Re-deserialise and verify it's structurally valid
+        let _: CamillaConfig = serde_yaml::from_str(&yaml).expect("deserialize");
+        // Quick sanity checks on the YAML output
+        assert!(yaml.contains("type: Alsa"), "should use Alsa not Raw:\n{yaml}");
+        assert!(yaml.contains("S32_LE"), "should use S32_LE:\n{yaml}");
+        assert!(yaml.contains("AsyncSinc"), "should use AsyncSinc:\n{yaml}");
+        assert!(yaml.contains("chunksize: 1024"), "should have chunksize:\n{yaml}");
+        assert!(yaml.contains("queuelimit:"), "should have queuelimit:\n{yaml}");
     }
 }

@@ -297,9 +297,10 @@ mod tests {
 
         let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
         let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(parsed.samplerate, 96000);
-        assert_eq!(parsed.capture_samplerate, Some(44100));
-        assert_eq!(parsed.pipeline.len(), 3); // resampler + 2 biquad channels
+        assert_eq!(parsed.devices.samplerate, 96000);
+        assert_eq!(parsed.devices.capture_samplerate, Some(44100));
+        // Resample + 1 EQ band = 1 filter pipeline step (on both channels)
+        assert_eq!(parsed.pipeline.len(), 1);
         println!("--- resample config ---\n{yaml}");
     }
 
@@ -325,8 +326,8 @@ mod tests {
         let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
         let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
         assert!(parsed.pipeline.is_empty());
-        assert_eq!(parsed.samplerate, 44100);
-        assert_eq!(parsed.capture_samplerate, None);
+        assert_eq!(parsed.devices.samplerate, 44100);
+        assert!(parsed.devices.capture_samplerate.is_none());
         println!("--- bitperfect config ---\n{yaml}");
     }
 
@@ -346,11 +347,17 @@ mod tests {
 
         let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
         let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
-        // No resampler, but EQ biquads are applied per channel.
-        assert_eq!(parsed.pipeline.len(), 2);
-        assert!(matches!(parsed.pipeline[0], PipelineStep::Biquad { channel: 0, .. }));
-        assert_eq!(parsed.samplerate, 44100);
-        assert_eq!(parsed.capture_samplerate, None);
+        // No resampler, 1 EQ band = 1 filter step (applied to both channels)
+        assert_eq!(parsed.pipeline.len(), 1);
+        match &parsed.pipeline[0] {
+            PipelineStep::Filter { channels, names } => {
+                assert_eq!(channels, &vec![0u32, 1]);
+                assert_eq!(names.len(), 1);
+            }
+            _ => panic!("expected Filter step"),
+        }
+        assert_eq!(parsed.devices.samplerate, 44100);
+        assert!(parsed.devices.capture_samplerate.is_none());
         println!("--- bitperfect+eq config ---\n{yaml}");
     }
 
@@ -378,10 +385,11 @@ mod tests {
 
         let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
         let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
-        // samplerate falls back to capture_rate; resampler is a no-op passthrough
-        assert_eq!(parsed.samplerate, 44100);
-        assert_eq!(parsed.capture_samplerate, Some(44100));
-        assert_eq!(parsed.pipeline.len(), 1); // one no-op resampler, no EQ
+        // samplerate falls back to capture_rate; resampler present but target = capture
+        assert_eq!(parsed.devices.samplerate, 44100);
+        assert_eq!(parsed.devices.capture_samplerate, Some(44100));
+        assert!(parsed.devices.resampler.is_some());
+        assert!(parsed.pipeline.is_empty()); // no EQ, no pipeline steps
         println!("--- resample no-target config ---\n{yaml}");
     }
 }

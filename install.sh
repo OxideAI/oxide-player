@@ -219,6 +219,71 @@ setup_user_dirs() {
   run chmod 755 "$DATA_DIR"
 }
 
+setup_asound() {
+  # Detect the default audio output device (skip the snd-aloop loopback)
+  # and write /etc/asound.conf so ALSA's "default" device points to the
+  # first real playback card found.
+  #
+  # When no hardware is detected (headless / no sound driver) the file is
+  # skipped and CamillaDSP falls back to hw:DAC (user must configure).
+  local conf=/etc/asound.conf
+
+  if ! command -v aplay >/dev/null 2>&1; then
+    warn "aplay not found — skipping ALSA default config."
+    warn "Install alsa-utils and run 'aplay -l' to find your device."
+    return
+  fi
+
+  # Parse aplay -l, find first non-Loopback playback card
+  local card="" dev="" name=""
+  while IFS= read -r line; do
+    if [[ $line =~ ^card[[:space:]]+([0-9]+):[[:space:]]([A-Za-z].+),[[:space:]]+device[[:space:]]+([0-9]+):[[:space:]](.+) ]]; then
+      local c="${BASH_REMATCH[1]}"
+      local cname="${BASH_REMATCH[2]}"
+      local d="${BASH_REMATCH[3]}"
+      local dname="${BASH_REMATCH[4]}"
+      # skip the loopback module
+      if [[ $cname != *Loopback* ]] && [[ $cname != *loopback* ]]; then
+        card="$c"
+        dev="$d"
+        name="$cname — $dname"
+        break
+      fi
+    fi
+  done < <(aplay -l 2>/dev/null || true)
+
+  if [ -z "$card" ]; then
+    warn "No audio hardware detected (only loopback found)."
+    warn "CamillaDSP will use 'hw:DAC'. Edit /etc/asound.conf manually."
+    return
+  fi
+
+  log "Detected audio output: card $card ($name)"
+  log "Writing ALSA default config ($conf)"
+  cat > "$conf" <<ASOUNDEOF
+# oxide-player: default audio output → card $card, device $dev
+# Auto-detected during install. Edit this file to change the default.
+#
+# To list available devices:
+#   aplay -l
+#
+# Override per-session via the ALSA_PCM environment variable:
+#   ALSA_PCM=hw:1,0  mplayer track.flac
+
+pcm.!default {
+    type hw
+    card $card
+    device $dev
+}
+
+ctl.!default {
+    type hw
+    card $card
+}
+ASOUNDEOF
+  log "ALSA default → card $card, device $dev"
+}
+
 write_mpd_config() {
   local conf=/etc/mpd.conf
   if [ -f "$conf" ] && [ ! -f "$conf.pre-oxide" ]; then
@@ -253,17 +318,18 @@ write_camilladsp_config() {
   cat > "$CAMILLADSP_CONFIG" <<'EOF'
 devices:
   capture:
-    type: Raw
+    type: Alsa
     channels: 2
     device: hw:Loopback,1
-    format: S32LE
+    format: S32_LE
   playback:
-    type: Raw
+    type: Alsa
     channels: 2
-    device: hw:DAC
-    format: S32LE
-samplerate: 44100
-channels: 2
+    device: default
+    format: S32_LE
+  samplerate: 44100
+  chunksize: 1024
+  queuelimit: 4
 mixers: {}
 filters: {}
 pipeline: []
@@ -297,6 +363,9 @@ EOF
 
 install_units() {
   log "Installing systemd units"
+  local _cam_host="${CAMILLADSP_WS#ws://}"
+  _cam_host="${_cam_host%:*}"
+  local _cam_port="${CAMILLADSP_WS##*:}"
   cat > /etc/systemd/system/camilladsp.service <<EOF
 [Unit]
 Description=CamillaDSP audio processor
@@ -306,7 +375,7 @@ Wants=sound.target
 [Service]
 Type=simple
 User=$SERVICE_USER
-ExecStart=$BIN_DIR/camilladsp --config $CAMILLADSP_CONFIG --wsurl $CAMILLADSP_WS
+ExecStart=$BIN_DIR/camilladsp $CAMILLADSP_CONFIG -a $_cam_host -p $_cam_port
 Restart=on-failure
 
 [Install]
@@ -384,6 +453,7 @@ main() {
   build_backend
   build_frontend
   setup_user_dirs
+  setup_asound
   write_mpd_config
   write_camilladsp_config
   write_oxide_config
