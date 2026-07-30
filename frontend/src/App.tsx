@@ -151,7 +151,8 @@ export function App() {
     if (status?.volume && status.volume > 0) prevVolume.current = status.volume
   }, [status?.volume])
   const toggleMute = useCallback(() => {
-    const cur = status?.volume ?? 0
+    if (status?.volume === null || status?.volume === undefined) return
+    const cur = status.volume
     if (cur > 0) {
       prevVolume.current = cur
       void setVolume(0)

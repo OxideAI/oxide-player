@@ -38,6 +38,7 @@ export function KioskView({
   const { elapsed: smoothElapsed, reset: resetElapsed } = useSmoothElapsed(status, duration)
   const seek = useDragValue(smoothElapsed, onSeek)
   const vol = useDragValue(status?.volume ?? 0, onVolume)
+  const volumeAvailable = status?.volume !== null && status?.volume !== undefined
 
   // Whether the real FFT visualizer is enabled server-side. When off we pass
   // `enabled=false` so the hook stays disconnected (zero cost).
@@ -189,24 +190,28 @@ export function KioskView({
         </div>
 
         <div className={styles.volume}>
-          <span className={styles.volIcon} aria-hidden>
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8 8 0 0 1 0 12" />
-            </svg>
-          </span>
-          <input
-            className={styles.volRange}
-            type="range"
-            min={0}
-            max={100}
-            value={vol.local}
-            style={{ ['--val' as string]: vol.local }}
-            onPointerDown={vol.begin}
-            onChange={(e) => vol.move(Number(e.target.value))}
-            onPointerUp={vol.end}
-            onPointerCancel={vol.end}
-            aria-label="Volume"
-          />
+          {volumeAvailable && (
+            <>
+              <span className={styles.volIcon} aria-hidden>
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8 8 0 0 1 0 12" />
+                </svg>
+              </span>
+              <input
+                className={styles.volRange}
+                type="range"
+                min={0}
+                max={100}
+                value={vol.local}
+                style={{ ['--val' as string]: vol.local }}
+                onPointerDown={vol.begin}
+                onChange={(e) => vol.move(Number(e.target.value))}
+                onPointerUp={vol.end}
+                onPointerCancel={vol.end}
+                aria-label="Volume"
+              />
+            </>
+          )}
         </div>
       </div>
     </div>

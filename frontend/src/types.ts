@@ -64,7 +64,7 @@ export type PlaybackState = 'playing' | 'paused' | 'stopped'
 
 export interface PlayerStatus {
   state: PlaybackState
-  volume: number
+  volume: number | null
   elapsed: number
   duration: number
   outputs: OutputDevice[]
