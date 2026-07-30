@@ -68,7 +68,7 @@ impl BluetoothManager {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no Bluetooth adapter found"))?;
 
-        let adapter = session.adapter(&adapter_name).await
+        let adapter = session.adapter(&adapter_name)
             .with_context(|| format!("get adapter '{adapter_name}'"))?;
 
         if !adapter.is_powered().await.unwrap_or(false) {
@@ -123,7 +123,7 @@ impl BluetoothManager {
             .ok_or_else(|| anyhow::anyhow!("Bluetooth session not initialised"))?;
         let name = self.inner.adapter_name.read().await.clone()
             .ok_or_else(|| anyhow::anyhow!("no Bluetooth adapter configured"))?;
-        session.adapter(&name).await
+        session.adapter(&name)
             .with_context(|| format!("get adapter '{name}'"))
     }
 
