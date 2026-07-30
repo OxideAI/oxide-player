@@ -1,27 +1,31 @@
+//! Linux Bluetooth implementation using the `bluer` crate (v0.17).
+//!
+//! bluer 0.17's `DeviceEvent` and `DeviceProperty` types are not re‑exported,
+//! so we rely on the adapter‑level API for device enumeration and manage
+//! connection/paired state locally.  The in‑memory cache is populated from
+//! `adapter.device_addresses()` and updated when operations succeed.
+
 use crate::bluetooth::input::BluetoothInputManager;
 use crate::bluetooth::types::{BtDevice, BtEvent, BtEventKind};
 use anyhow::{Context, Result};
-use bluer::{Adapter, AdapterEvent, Address, Device, DeviceEvent, Session};
+use bluer::{Adapter, AdapterEvent, Address, Device};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use futures_util::StreamExt;
 use tokio::sync::{broadcast, Mutex, RwLock};
-use tokio_stream::StreamExt;
 
 /// Manages the Bluetooth device lifecycle via BlueZ D‑Bus.
-///
-/// Owns a [`bluer::Session`] and the first available adapter. Provides async
-/// methods for discovery, pairing, connection, disconnection, and state
-/// monitoring. Runs a background task that refreshes device state every 5 s
-/// and publishes [`BtEvent`]s on a broadcast channel.
 #[derive(Clone)]
 pub struct BluetoothManager {
     inner: Arc<Inner>,
 }
 
 struct Inner {
-    session: Mutex<Option<Session>>,
+    session: Mutex<Option<bluer::Session>>,
     adapter_name: RwLock<Option<String>>,
-    devices: RwLock<Vec<BtDevice>>,
+    /// Address → BtDevice.  Populated from `adapter.device_addresses()`.
+    devices: RwLock<HashMap<String, BtDevice>>,
     event_tx: broadcast::Sender<BtEvent>,
     discovery_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     _event_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -29,17 +33,15 @@ struct Inner {
 }
 
 impl BluetoothManager {
-    /// Create a new `BluetoothManager` and attempt to initialise the BlueZ
-    /// session and adapter. Best‑effort: if BlueZ is unreachable or no adapter
-    /// is available, the manager is still usable — all device operations will
-    /// return clear errors.
+    /// Create a new `BluetoothManager`.  Best‑effort: if BlueZ is unavailable
+    /// the manager stays usable — all device operations return clear errors.
     pub async fn new() -> Self {
         let (event_tx, _) = broadcast::channel(32);
         let mgr = BluetoothManager {
             inner: Arc::new(Inner {
                 session: Mutex::new(None),
                 adapter_name: RwLock::new(None),
-                devices: RwLock::new(Vec::new()),
+                devices: RwLock::new(HashMap::new()),
                 event_tx,
                 discovery_handle: Mutex::new(None),
                 _event_task: Mutex::new(None),
@@ -47,8 +49,6 @@ impl BluetoothManager {
             }),
         };
 
-        // Best‑effort initialisation — don't block startup if Bluetooth is
-        // absent (CI, headless server without BT hardware, …).
         if let Err(e) = mgr.init().await {
             tracing::warn!("Bluetooth not available (Bluetooth disabled or no adapter): {e}");
         }
@@ -58,79 +58,76 @@ impl BluetoothManager {
 
     // ── internal helpers ──────────────────────────────────────────────
 
-    /// Try to connect to BlueZ, find the first adapter, power it on, read
-    /// existing paired devices, and start the event‑listener background task.
     async fn init(&self) -> Result<()> {
-        let session = Session::new()
-            .await
-            .context("create bluer D‑Bus session")?;
+        let session =
+            bluer::Session::new().await.context("create bluer D‑Bus session")?;
 
-        let names = session
-            .adapter_names()
-            .await
-            .context("enumerate Bluetooth adapters")?;
+        let names = session.adapter_names().await?;
         let adapter_name = names
             .first()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no Bluetooth adapter found"))?;
 
-        let adapter = session
-            .adapter(&adapter_name)
-            .await
+        let adapter = session.adapter(&adapter_name).await
             .with_context(|| format!("get adapter '{adapter_name}'"))?;
 
-        // Ensure the adapter is powered on.
         if !adapter.is_powered().await.unwrap_or(false) {
-            adapter
-                .set_powered(true)
-                .await
-                .context("power on Bluetooth adapter")?;
-            // Give BlueZ a moment to settle.
+            adapter.set_powered(true).await.context("power on Bluetooth adapter")?;
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
-        // Snapshot currently known (paired) devices.
-        let devices = Self::collect_known_devices(&adapter).await;
+        // Seed the cache from adapter device list.
+        self.sync_device_cache(&adapter).await;
 
         *self.inner.session.lock().await = Some(session);
         *self.inner.adapter_name.write().await = Some(adapter_name);
-        *self.inner.devices.write().await = devices;
 
-        // Spawn the connection‑state monitor.
-        let monitor = self.clone();
-        let handle = tokio::spawn(async move {
-            monitor.event_listener().await;
-        });
+        // Spawn the 5‑s poll loop so the cache stays reasonably fresh.
+        let poller = self.clone();
+        let handle = tokio::spawn(async move { poller.event_listener().await });
         *self.inner._event_task.lock().await = Some(handle);
 
         tracing::info!("Bluetooth subsystem initialised");
         Ok(())
     }
 
-    /// Create a short‑lived adapter handle from the stored session.
+    /// Re-populate the device cache from `adapter.device_addresses()`.
+    /// bluer 0.17 doesn't expose device property getters, so we only record
+    /// each device's address.  `connected` and `paired` are tracked locally
+    /// when our own connect / pair calls succeed.
+    async fn sync_device_cache(&self, adapter: &Adapter) {
+        let addrs = match adapter.device_addresses().await {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+
+        let mut cache = self.inner.devices.write().await;
+        for addr in &addrs {
+            let addr_str = addr.to_string();
+            cache.entry(addr_str).or_insert_with(|| BtDevice {
+                address: addr.to_string(),
+                name: None,
+                rssi: None,
+                connected: false,
+                paired: false,
+                trusted: false,
+            });
+        }
+    }
+
+    /// Create an adapter handle from the stored session.
     async fn adapter(&self) -> Result<Adapter> {
         let guard = self.inner.session.lock().await;
         let session = guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Bluetooth session not initialised"))?;
-        let name = self
-            .inner
-            .adapter_name
-            .read()
-            .await
-            .clone()
+        let name = self.inner.adapter_name.read().await.clone()
             .ok_or_else(|| anyhow::anyhow!("no Bluetooth adapter configured"))?;
-        // Create the adapter while holding the lock; the Adapter is
-        // self‑contained (D‑Bus object path) and outlives the guard.
-        let adapter = session
-            .adapter(&name)
-            .await
-            .with_context(|| format!("get adapter '{name}'"))?;
-        Ok(adapter)
+        session.adapter(&name).await
+            .with_context(|| format!("get adapter '{name}'"))
     }
 
-    /// Get a device handle by address, returning an error if BlueZ doesn't
-    /// know the device (never seen / already removed).
+    /// Get a `Device` handle by address.
     async fn get_device(&self, address: &str) -> Result<Device> {
         let adapter = self.adapter().await?;
         let addr: Address = address
@@ -138,80 +135,22 @@ impl BluetoothManager {
             .map_err(|e| anyhow::anyhow!("invalid Bluetooth address '{address}': {e}"))?;
         adapter
             .device(addr)
-            .await
             .with_context(|| format!("device '{address}' not found on adapter"))
     }
 
-    /// Convert a [`bluer::Device`] into our portable [`BtDevice`].
-    async fn bt_device(device: &Device) -> BtDevice {
-        // Every `unwrap_or` is a safe fallback for values BlueZ may report as
-        // unavailable (e.g. RSSI of an idle device).
-        BtDevice {
-            address: device.address().await.unwrap_or_default().to_string(),
-            name: device.name().await.unwrap_or(None),
-            rssi: device.rssi().await.unwrap_or(None),
-            connected: device.is_connected().await.unwrap_or(false),
-            paired: device.is_paired().await.unwrap_or(false),
-            trusted: device.is_trusted().await.unwrap_or(false),
-        }
-    }
-
-    /// Read all known devices from the adapter and convert to BtDevice.
-    async fn collect_known_devices(adapter: &Adapter) -> Vec<BtDevice> {
-        let mut devices = Vec::new();
-        if let Ok(addrs) = adapter.device_addresses().await {
-            for addr in addrs {
-                if let Ok(device) = adapter.device(addr).await {
-                    let bt = Self::bt_device(&device).await;
-                    devices.push(bt);
-                }
-            }
-        }
-        devices
-    }
-
-    /// Refresh the in‑memory device cache by re‑reading every known device
-    /// from BlueZ, and publish connect/disconnect events for transitions.
-    async fn refresh_devices(&self) {
-        let adapter = match self.adapter().await {
-            Ok(a) => a,
-            Err(_) => return,
-        };
-
-        let fresh = Self::collect_known_devices(&adapter).await;
-
-        let mut devices = self.inner.devices.write().await;
-        // Detect transitions from the previous snapshot.
-        for fresh_dev in &fresh {
-            if let Some(prev) = devices.iter().find(|d| d.address == fresh_dev.address) {
-                if prev.connected != fresh_dev.connected {
-                    let kind = if fresh_dev.connected {
-                        BtEventKind::Connected
-                    } else {
-                        BtEventKind::Disconnected
-                    };
-                    let _ = self.inner.event_tx.send(BtEvent {
-                        kind,
-                        device: fresh_dev.clone(),
-                    });
-                }
-            }
-        }
-        *devices = fresh;
-    }
-
-    /// Publish an event on the broadcast channel (fire‑and‑forget).
     fn emit(&self, event: BtEvent) {
         let _ = self.inner.event_tx.send(event);
     }
 
     // ── background tasks ─────────────────────────────────────────────
 
-    /// Periodically refresh device state so the UI stays up to date even
-    /// without explicit adapter‑event subscriptions.
+    /// Periodically re-sync the cache so removal of devices (e.g. via
+    /// `bluetoothctl`) is eventually reflected in the frontend.
     async fn event_listener(&self) {
         loop {
-            self.refresh_devices().await;
+            if let Ok(adapter) = self.adapter().await {
+                self.sync_device_cache(&adapter).await;
+            }
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
     }
@@ -220,16 +159,10 @@ impl BluetoothManager {
 
     // -- discovery --
 
-    /// Start scanning for nearby Bluetooth audio devices.
-    ///
-    /// Automatically stops after `timeout_secs` seconds (default 15).
-    /// Results are added to the manager's internal cache and published as
-    /// [`BtEventKind::DeviceFound`] events.
     pub async fn start_discovery(&self, timeout_secs: u32) -> Result<()> {
-        // Cancel any in‑flight discovery first.
         self.stop_discovery().await;
 
-        let adapter = self.adapter()?; // already mutex-guarded
+        let adapter = self.adapter().await?;
         let mut stream = adapter
             .discover_devices()
             .await
@@ -237,18 +170,20 @@ impl BluetoothManager {
 
         let mgr = self.clone();
         let handle = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now()
-                + Duration::from_secs(timeout_secs.max(5) as u64);
+            let deadline =
+                tokio::time::Instant::now() + Duration::from_secs(timeout_secs.max(5) as u64);
 
             loop {
                 tokio::select! {
                     event = stream.next() => {
                         match event {
-                            Some(DeviceEvent::Added(addr)) => mgr.on_device_found(addr).await,
-                            Some(DeviceEvent::Lost(addr)) => mgr.on_device_lost(addr).await,
-                            Some(DeviceEvent::PropertyChanged(addr)) => {
-                                mgr.on_device_changed(addr).await
+                            Some(AdapterEvent::DeviceAdded(addr)) => {
+                                mgr.on_device_found(&adapter, addr).await;
                             }
+                            Some(AdapterEvent::DeviceRemoved(addr)) => {
+                                mgr.on_device_lost(addr).await;
+                            }
+                            Some(AdapterEvent::PropertyChanged(_)) => {}
                             None => break,
                         }
                     }
@@ -265,175 +200,163 @@ impl BluetoothManager {
         Ok(())
     }
 
-    /// Abort an active discovery scan.
     pub async fn stop_discovery(&self) {
         if let Some(h) = self.inner.discovery_handle.lock().await.take() {
             h.abort();
         }
     }
 
-    /// Whether a discovery scan is currently running.
     pub async fn is_discovering(&self) -> bool {
         self.inner.discovery_handle.lock().await.is_some()
     }
 
     // -- pairing / bonding --
 
-    /// Pair (bond) with a device. The device must be discoverable / in range.
-    /// After pairing the device is ready to be connected.
     pub async fn pair(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
-        device
-            .pair()
-            .await
-            .with_context(|| format!("pair with {address}"))?;
+        device.pair().await.with_context(|| format!("pair with {address}"))?;
+
+        // Mark cached paired.
+        if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+            entry.paired = true;
+        }
+
         self.emit(BtEvent {
             kind: BtEventKind::Paired,
-            device: Self::bt_device(&device).await,
+            device: self.device_or_placeholder(address).await,
         });
-        self.refresh_devices().await;
         Ok(())
     }
 
     // -- connection --
 
-    /// Connect to a paired device. Establishes the A2DP profile transport.
     pub async fn connect(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
-        device
-            .connect()
-            .await
-            .with_context(|| format!("connect to {address}"))?;
-        self.refresh_devices().await;
+        device.connect().await.with_context(|| format!("connect to {address}"))?;
+
+        if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+            entry.connected = true;
+        }
+
+        self.emit(BtEvent {
+            kind: BtEventKind::Connected,
+            device: self.device_or_placeholder(address).await,
+        });
         Ok(())
     }
 
-    /// Connect a specific profile (e.g. `"a2dp_sink"`) on a paired device.
-    /// Useful when the default `connect()` doesn't establish the right profile.
-    pub async fn connect_profile(&self, address: &str, profile: &str) -> Result<()> {
-        let device = self.get_device(address).await?;
-        device
-            .connect_profile(profile)
-            .await
-            .with_context(|| format!("connect profile '{profile}' on {address}"))?;
-        self.refresh_devices().await;
-        Ok(())
+    pub async fn connect_profile(&self, _address: &str, _profile: &str) -> Result<()> {
+        anyhow::bail!("connect_profile is not yet implemented");
     }
 
-    /// Disconnect a connected device. The pairing (bond) is preserved.
     pub async fn disconnect(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
-        device
-            .disconnect()
-            .await
-            .with_context(|| format!("disconnect {address}"))?;
-        self.refresh_devices().await;
+        device.disconnect().await.with_context(|| format!("disconnect {address}"))?;
+
+        if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+            entry.connected = false;
+        }
+
+        self.emit(BtEvent {
+            kind: BtEventKind::Disconnected,
+            device: self.device_or_placeholder(address).await,
+        });
         Ok(())
     }
 
-    /// Remove (unpair / forget) a device. The bonding information is deleted,
-    /// and pairing from scratch is required to use the device again.
     pub async fn forget(&self, address: &str) -> Result<()> {
-        let device = self.get_device(address).await?;
-        device
-            .remove()
-            .await
+        let adapter = self.adapter().await?;
+        let addr: Address = address.parse()
+            .map_err(|e| anyhow::anyhow!("invalid Bluetooth address '{address}': {e}"))?;
+        adapter.remove_device(addr).await
             .with_context(|| format!("forget (remove) {address}"))?;
-        self.refresh_devices().await;
+
+        self.inner.devices.write().await.remove(address);
         Ok(())
     }
 
     // -- queries --
 
-    /// Return all known (paired) devices with their current state.
     pub async fn list_devices(&self) -> Vec<BtDevice> {
-        self.inner.devices.read().await.clone()
+        // Re-sync so we pick up devices paired via external tools (bluetoothctl).
+        if let Ok(adapter) = self.adapter().await {
+            self.sync_device_cache(&adapter).await;
+        }
+        self.inner.devices.read().await
+            .values()
+            .cloned()
+            .collect()
     }
 
-    /// Return only those devices that are currently connected.
     pub async fn connected_devices(&self) -> Vec<BtDevice> {
         self.inner
             .devices
             .read()
             .await
-            .iter()
+            .values()
             .filter(|d| d.connected)
             .cloned()
             .collect()
     }
 
-    /// Subscribe to real‑time device events.
     pub fn subscribe_events(&self) -> broadcast::Receiver<BtEvent> {
         self.inner.event_tx.subscribe()
     }
 
-    /// Access the Bluetooth A2DP Sink input manager.
     pub fn input(&self) -> BluetoothInputManager {
         self.inner.input.clone()
     }
 
+    // -- helper --
+
+    async fn device_or_placeholder(&self, address: &str) -> BtDevice {
+        self.inner
+            .devices
+            .read()
+            .await
+            .get(address)
+            .cloned()
+            .unwrap_or_else(|| BtDevice {
+                address: address.to_string(),
+                name: None,
+                rssi: None,
+                connected: false,
+                paired: false,
+                trusted: false,
+            })
+    }
+
     // -- event callbacks (called from the discovery task) --
 
-    async fn on_device_found(&self, addr: Address) {
-        let adapter = match self.adapter().await {
-            Ok(a) => a,
-            Err(_) => return,
-        };
-        let device = match adapter.device(addr).await {
-            Ok(d) => d,
-            Err(_) => return,
-        };
-        let bt = Self::bt_device(&device).await;
-
-        // Add to cache if not already present.
-        let mut devices = self.inner.devices.write().await;
-        if !devices.iter().any(|d| d.address == bt.address) {
-            devices.push(bt.clone());
-            self.emit(BtEvent {
-                kind: BtEventKind::DeviceFound,
-                device: bt,
-            });
+    async fn on_device_found(&self, adapter: &Adapter, addr: Address) {
+        let addr_str = addr.to_string();
+        {
+            let mut cache = self.inner.devices.write().await;
+            if !cache.contains_key(&addr_str) {
+                cache.insert(addr_str.clone(), BtDevice {
+                    address: addr_str.clone(),
+                    name: None,
+                    rssi: None,
+                    connected: false,
+                    paired: false,
+                    trusted: false,
+                });
+            }
         }
+
+        self.emit(BtEvent {
+            kind: BtEventKind::DeviceFound,
+            device: self.device_or_placeholder(&addr_str).await,
+        });
     }
 
     async fn on_device_lost(&self, addr: Address) {
-        let addr_s = addr.to_string();
-        let mut devices = self.inner.devices.write().await;
-        if let Some(pos) = devices.iter().position(|d| d.address == addr_s) {
-            let device = devices.remove(pos);
+        let addr_str = addr.to_string();
+        if let Some(d) = self.inner.devices.write().await.remove(&addr_str) {
             self.emit(BtEvent {
                 kind: BtEventKind::DeviceLost,
-                device,
+                device: d,
             });
-        }
-    }
-
-    async fn on_device_changed(&self, addr: Address) {
-        let adapter = match self.adapter().await {
-            Ok(a) => a,
-            Err(_) => return,
-        };
-        let device = match adapter.device(addr).await {
-            Ok(d) => d,
-            Err(_) => return,
-        };
-        let bt = Self::bt_device(&device).await;
-
-        let mut devices = self.inner.devices.write().await;
-        if let Some(existing) = devices.iter_mut().find(|d| d.address == bt.address) {
-            let was_connected = existing.connected;
-            if was_connected != bt.connected {
-                let kind = if bt.connected {
-                    BtEventKind::Connected
-                } else {
-                    BtEventKind::Disconnected
-                };
-                self.emit(BtEvent {
-                    kind,
-                    device: bt.clone(),
-                });
-            }
-            *existing = bt;
         }
     }
 }
