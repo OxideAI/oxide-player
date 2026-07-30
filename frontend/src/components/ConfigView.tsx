@@ -13,7 +13,7 @@ export function ConfigView() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [restartNeeded, setRestartNeeded] = useState(false)
-  const [version, setVersion] = useState<{ backend: string; frontend: string } | null>(null)
+  const [version, setVersion] = useState<{ version: string } | null>(null)
 
   const [newDir, setNewDir] = useState('')
   const [scanning, setScanning] = useState(false)
@@ -285,7 +285,7 @@ export function ConfigView() {
 
       {version && (
         <p className={styles.dim}>
-          App versions — Backend {version.backend} · Frontend {version.frontend}
+          Version {version.version}
         </p>
       )}
     </div>

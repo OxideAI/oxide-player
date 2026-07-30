@@ -326,22 +326,11 @@ async fn library_refresh(State(s): State<AppState>) -> AppResult<Json<serde_json
     Ok(Json(serde_json::json!({ "scanned": count })))
 }
 
-/// Backend and frontend build versions, shown on the Settings page.
+/// Single app version (backend + frontend always in lockstep via release-please).
 async fn version_get() -> AppResult<Json<serde_json::Value>> {
-    let frontend = parse_frontend_version();
     Ok(Json(serde_json::json!({
-        "backend": env!("CARGO_PKG_VERSION"),
-        "frontend": frontend,
+        "version": env!("CARGO_PKG_VERSION"),
     })))
-}
-
-/// Frontend version is read at compile time from the built UI manifest.
-fn parse_frontend_version() -> String {
-    let raw = include_str!("../../../frontend/package.json");
-    serde_json::from_str::<serde_json::Value>(raw)
-        .ok()
-        .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()))
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Serialized view of the current config for the Settings UI.
@@ -1154,7 +1143,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn version_endpoint_returns_both_versions() {
+    async fn version_endpoint_returns_single_version() {
         let app = test_app().await;
         let req = Request::builder()
             .uri("/api/version")
@@ -1168,13 +1157,9 @@ mod tests {
             .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
         assert_eq!(
-            v["backend"],
+            v["version"],
             env!("CARGO_PKG_VERSION"),
-            "backend version must match CARGO_PKG_VERSION"
-        );
-        assert!(
-            v["frontend"].is_string() && !v["frontend"].as_str().unwrap().is_empty(),
-            "frontend version must be a non-empty string"
+            "version must match CARGO_PKG_VERSION"
         );
     }
 }

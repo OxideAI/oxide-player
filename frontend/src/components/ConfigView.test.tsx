@@ -14,20 +14,18 @@ vi.mock('../api', () => ({
       data_dir: '/tmp',
       static_dir: '/tmp',
     }),
-    version: vi.fn().mockResolvedValue({ backend: '0.1.0', frontend: '0.1.0' }),
+    version: vi.fn().mockResolvedValue({ version: '0.1.0' }),
   },
 }))
 
 vi.mock('./DevicesView', () => ({ DevicesView: () => null }))
 vi.mock('./DspView', () => ({ DspView: () => null }))
 
-describe('ConfigView versions', () => {
-  it('shows backend and frontend versions at the bottom of settings', async () => {
+describe('ConfigView version', () => {
+  it('shows the app version at the bottom of settings', async () => {
     render(<ConfigView />)
     await waitFor(() => {
-      expect(screen.getByText(/App versions/i)).toBeTruthy()
+      expect(screen.getByText(/Version 0\.1\.0/i)).toBeTruthy()
     })
-    expect(screen.getByText(/Backend 0\.1\.0/i)).toBeTruthy()
-    expect(screen.getByText(/Frontend 0\.1\.0/i)).toBeTruthy()
   })
 })
