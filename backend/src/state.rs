@@ -448,7 +448,7 @@ mod tests {
         // in-memory active_track cache is empty (user hasn't clicked play).
         let ms = MpdStatus {
             state: PlaybackState::Playing,
-            volume: 80,
+            volume: Some(80),
             elapsed: 120.0,
             duration: 180.0,
             error: None,
@@ -510,7 +510,7 @@ mod tests {
         // music_directory segment (`MyMusic/...`) and active_track is empty.
         let ms = MpdStatus {
             state: PlaybackState::Playing,
-            volume: 49,
+            volume: Some(49),
             elapsed: 10.0,
             duration: 237.0,
             error: None,

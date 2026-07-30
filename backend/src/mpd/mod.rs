@@ -3,7 +3,7 @@ use crate::types::{OutputDevice, PlaybackState, QueueEntry};
 use mpd_client::client::Connection as MpdConnection;
 use mpd_client::commands::definitions::{
     ClearQueue, CurrentSong, DeletePlaylist, GetPlaylist, LoadPlaylist, Play, Queue,
-    RemoveFromPlaylist, RenamePlaylist, Status,
+    RemoveFromPlaylist, RenamePlaylist,
 };
 use mpd_client::commands::SongPosition;
 use mpd_client::tag::Tag;
@@ -39,7 +39,7 @@ struct MpdInner {
 
 pub struct MpdStatus {
     pub state: PlaybackState,
-    pub volume: u8,
+    pub volume: Option<u8>,
     pub elapsed: f64,
     pub duration: f64,
     pub error: Option<String>,
@@ -202,40 +202,69 @@ impl Mpd {
 
     pub async fn status(&self) -> AppResult<MpdStatus> {
         let client = self.client().await?;
-        let status = client
-            .command(Status)
+
+        // Use raw_command so we can detect when MPD omits the volume field
+        // (mixer disabled → volume n/a). The typed Status::from_frame is
+        // pub(crate) within the mpd_client crate, so we parse the fields we
+        // need from the raw frame directly.
+        let mut frame = client
+            .raw_command(Command::new("status"))
             .await
             .map_err(|e| AppError::Mpd(format!("status: {e}")))?;
 
-        let state = match status.state {
-            mpd_client::responses::PlayState::Playing => PlaybackState::Playing,
-            mpd_client::responses::PlayState::Paused => PlaybackState::Paused,
-            mpd_client::responses::PlayState::Stopped => PlaybackState::Stopped,
+        let volume: Option<u8> = frame
+            .get("volume")
+            .and_then(|v| v.parse::<u8>().ok());
+
+        let state = match frame.get("state").as_deref() {
+            Some("play") => PlaybackState::Playing,
+            Some("pause") => PlaybackState::Paused,
+            _ => PlaybackState::Stopped,
         };
 
-        let (current_uri, current_track, current_id) = match status.current_song {
-            Some(_) => match client.command(CurrentSong).await.ok().flatten() {
-                Some(s) => {
-                    let (_, track) = s.song.number();
-                    let track = if track == 0 { None } else { Some(track as u32) };
-                    (Some(s.song.url), track, Some(s.id.0))
+        let elapsed: f64 = frame
+            .get("elapsed")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        let duration: f64 = frame
+            .get("duration")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        let error: Option<String> = frame.get("error");
+        let random = frame.get("random").as_deref() == Some("1");
+
+        let (current_uri, current_track, current_id) = {
+            // Check if current-song fields exist in the status frame
+            let has_current = frame.get("song").is_some();
+            drop(frame); // release ownership so we can borrow client again
+
+            if has_current {
+                match client.command(CurrentSong).await.ok().flatten() {
+                    Some(s) => {
+                        let (_, track) = s.song.number();
+                        let track = if track == 0 { None } else { Some(track as u32) };
+                        (Some(s.song.url), track, Some(s.id.0))
+                    }
+                    None => (None, None, None),
                 }
-                None => (None, None, None),
-            },
-            None => (None, None, None),
+            } else {
+                (None, None, None)
+            }
         };
-        tracing::debug!(has_current = status.current_song.is_some(), ?current_uri, "mpd status");
+        tracing::debug!(has_current = current_uri.is_some(), ?current_uri, "mpd status");
 
         Ok(MpdStatus {
             state,
-            volume: status.volume,
-            elapsed: status.elapsed.map(|d| d.as_secs_f64()).unwrap_or(0.0),
-            duration: status.duration.map(|d| d.as_secs_f64()).unwrap_or(0.0),
-            error: status.error,
+            volume,
+            elapsed,
+            duration,
+            error,
             current_uri,
             current_track,
             current_id,
-            random: status.random,
+            random,
         })
     }
 

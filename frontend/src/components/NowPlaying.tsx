@@ -35,6 +35,7 @@ export function NowPlaying({
   const { elapsed: smoothElapsed, reset: resetElapsed } = useSmoothElapsed(status, duration)
   const seek = useDragValue(smoothElapsed, onSeek)
   const vol = useDragValue(status?.volume ?? 0, onVolume)
+  const volumeAvailable = status?.volume !== null && status?.volume !== undefined
   const displayElapsed = seek.isDragging() ? seek.local : smoothElapsed
   const fraction = duration > 0 ? Math.min(1, seek.local / duration) : 0
 
@@ -199,22 +200,26 @@ export function NowPlaying({
           >
             <Glyph name="queue" />
           </button>
-          <span className={styles.volIcon} aria-hidden>
-            <Glyph name="vol" />
-          </span>
-          <input
-            className={styles.volRange}
-            type="range"
-            min={0}
-            max={100}
-            value={vol.local}
-            style={{ ['--val' as string]: vol.local }}
-            onPointerDown={vol.begin}
-            onChange={(e) => vol.move(Number(e.target.value))}
-            onPointerUp={vol.end}
-            onPointerCancel={vol.end}
-            aria-label="Volume"
-          />
+          {volumeAvailable && (
+            <>
+              <span className={styles.volIcon} aria-hidden>
+                <Glyph name="vol" />
+              </span>
+              <input
+                className={styles.volRange}
+                type="range"
+                min={0}
+                max={100}
+                value={vol.local}
+                style={{ ['--val' as string]: vol.local }}
+                onPointerDown={vol.begin}
+                onChange={(e) => vol.move(Number(e.target.value))}
+                onPointerUp={vol.end}
+                onPointerCancel={vol.end}
+                aria-label="Volume"
+              />
+            </>
+          )}
         </div>
       </div>
     </footer>

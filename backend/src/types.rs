@@ -93,7 +93,7 @@ pub struct TrackRef {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerStatus {
     pub state: PlaybackState,
-    pub volume: u8,
+    pub volume: Option<u8>,
     pub current_song: Option<TrackRef>,
     /// MPD's current song id (a queue entry id, not a DB track id). Cached so
     /// the queue endpoint can locate the playing position without a second MPD
@@ -121,7 +121,7 @@ impl PlayerStatus {
     pub fn stopped() -> Self {
         Self {
             state: PlaybackState::Stopped,
-            volume: 0,
+            volume: None,
             current_song: None,
             current_id: None,
             elapsed: 0.0,

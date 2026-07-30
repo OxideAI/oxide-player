@@ -56,7 +56,8 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
           return
         case 'volumeUp':
         case 'volumeDown': {
-          const cur = status?.volume ?? 0
+          if (status?.volume === null || status?.volume === undefined) return
+          const cur = status.volume
           const v = Math.max(0, Math.min(100, cur + (action === 'volumeUp' ? VOLUME_STEP : -VOLUME_STEP)))
           fire(action, () => h.onVolume(v), `Volume ${v}%`)
           return
@@ -81,7 +82,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
           fire('toggleShuffle', h.onToggleShuffle, status?.random ? 'Shuffle off' : 'Shuffle on')
           return
         case 'toggleMute':
-          fire('toggleMute', h.onToggleMute, status?.volume === 0 ? 'Unmuted' : 'Muted')
+          fire('toggleMute', h.onToggleMute, status?.volume != null && status.volume === 0 ? 'Unmuted' : 'Muted')
           return
         case 'help':
           fire('help', h.onHelp, undefined)
