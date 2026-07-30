@@ -14,6 +14,8 @@ use axum::{Json, Router};
 use tower_http::services::ServeDir;
 use serde::Deserialize;
 
+mod bluetooth;
+
 const DEFAULT_INDEX_HTML: &str = "<!doctype html><html><head><meta charset=utf-8>\
 <title>Oxide</title></head><body><h1>Oxide</h1>\
 <p>Backend is running. Build the frontend into the static directory to use the UI.</p></body></html>";
@@ -82,6 +84,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/config", put(config_put))
         .route("/api/config/library-dirs", post(config_add_dir))
         .route("/api/config/library-dirs", delete(config_remove_dir))
+        .merge(bluetooth::router())
         .fallback_service(
             ServeDir::new(static_dir.clone())
                 .append_index_html_on_directories(false)
@@ -1145,7 +1148,8 @@ mod tests {
         );
         let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
         let visualizer = crate::visualizer::VisualizerAnalyzer::new(&Config::default_config());
-        let state = AppState::new(Config::default_config(), db, dsp, mpd, visualizer, None);
+        let bt = crate::bluetooth::BluetoothManager::new().await;
+        let state = AppState::new(Config::default_config(), db, dsp, mpd, visualizer, bt, None);
         super::router(state).await
     }
 

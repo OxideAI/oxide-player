@@ -316,3 +316,52 @@
   gap: 0.6rem;
   justify-content: flex-end;
 }
+
+/* ---- Bluetooth section ---- */
+
+.btBadge {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--r-pill);
+  margin-left: 0.5rem;
+  vertical-align: middle;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid rgba(110, 231, 183, 0.3);
+}
+
+.btActions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.btInputRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  margin-top: 0.8rem;
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--hairline);
+}
+
+.btInputRow h4 {
+  margin: 0 0 0.2rem;
+}
+
+.btNote {
+  font-size: 0.82rem;
+  color: var(--accent);
+  padding: 0.5rem 0.9rem;
+  background: rgba(110, 231, 183, 0.06);
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(110, 231, 183, 0.2);
+}

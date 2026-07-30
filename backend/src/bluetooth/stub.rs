@@ -1,0 +1,99 @@
+use crate::bluetooth::input::BluetoothInputManager;
+use crate::bluetooth::types::{BtDevice, BtEvent, BtEventKind};
+use anyhow::{bail, Result};
+use std::sync::Arc;
+use tokio::sync::broadcast;
+
+/// Stub [`BluetoothManager`] for non‑Linux platforms.
+///
+/// Every operation returns `"Bluetooth not supported on this platform"`.
+/// The empty broadcast channel allows code that subscribes to events to
+/// compile and run without panicking.
+#[derive(Clone)]
+pub struct BluetoothManager {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    event_tx: broadcast::Sender<BtEvent>,
+    input: BluetoothInputManager,
+}
+
+impl BluetoothManager {
+    /// Create a disabled stub manager.
+    pub async fn new() -> Self {
+        let (event_tx, _) = broadcast::channel(32);
+        BluetoothManager {
+            inner: Arc::new(Inner {
+                event_tx,
+                input: BluetoothInputManager::new(),
+            }),
+        }
+    }
+
+    // -- discovery --
+
+    /// Not supported on this platform.
+    pub async fn start_discovery(&self, _timeout_secs: u32) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
+    }
+
+    /// No‑op.
+    pub async fn stop_discovery(&self) {}
+
+    /// Always `false`.
+    pub async fn is_discovering(&self) -> bool {
+        false
+    }
+
+    // -- pairing / bonding --
+
+    /// Not supported on this platform.
+    pub async fn pair(&self, _address: &str) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
+    }
+
+    // -- connection --
+
+    /// Not supported on this platform.
+    pub async fn connect(&self, _address: &str) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
+    }
+
+    /// Not supported on this platform.
+    pub async fn connect_profile(&self, _address: &str, _profile: &str) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
+    }
+
+    /// Not supported on this platform.
+    pub async fn disconnect(&self, _address: &str) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
+    }
+
+    /// Not supported on this platform.
+    pub async fn forget(&self, _address: &str) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
+    }
+
+    // -- queries --
+
+    /// Always returns an empty list.
+    pub async fn list_devices(&self) -> Vec<BtDevice> {
+        Vec::new()
+    }
+
+    /// Always returns an empty list.
+    pub async fn connected_devices(&self) -> Vec<BtDevice> {
+        Vec::new()
+    }
+
+    /// Subscribe to device events (no events will ever be sent).
+    pub fn subscribe_events(&self) -> broadcast::Receiver<BtEvent> {
+        self.inner.event_tx.subscribe()
+    }
+
+    /// Access the Bluetooth A2DP Sink input manager.
+    pub fn input(&self) -> BluetoothInputManager {
+        self.inner.input.clone()
+    }
+}
