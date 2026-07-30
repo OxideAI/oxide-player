@@ -77,6 +77,11 @@ impl BluetoothManager {
 
     // -- queries --
 
+    /// Always fails — Bluetooth is not available on this platform.
+    pub async fn check_available(&self) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
+    }
+
     /// Always returns an empty list.
     pub async fn list_devices(&self) -> Vec<BtDevice> {
         Vec::new()
@@ -85,6 +90,16 @@ impl BluetoothManager {
     /// Always returns an empty list.
     pub async fn connected_devices(&self) -> Vec<BtDevice> {
         Vec::new()
+    }
+
+    /// Not supported on this platform.
+    pub async fn set_alias(&self, _address: &str, _name: &str) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
+    }
+
+    /// Not supported on this platform.
+    pub async fn test_connectivity(&self, _address: &str) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
     }
 
     /// Subscribe to device events (no events will ever be sent).

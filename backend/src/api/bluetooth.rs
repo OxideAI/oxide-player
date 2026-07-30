@@ -12,6 +12,7 @@ use serde::Deserialize;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/bluetooth/devices", get(bluetooth_devices))
+        .route("/api/bluetooth/devices/audio", get(bluetooth_audio_devices))
         .route("/api/bluetooth/scan", post(bluetooth_scan))
         .route("/api/bluetooth/scan/stop", post(bluetooth_scan_stop))
         .route("/api/bluetooth/scan/results", get(bluetooth_scan_results))
@@ -20,6 +21,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/bluetooth/disconnect", post(bluetooth_disconnect))
         .route("/api/bluetooth/forget", post(bluetooth_forget))
         .route("/api/bluetooth/remove-output", post(bluetooth_remove_output))
+        .route("/api/bluetooth/rename", post(bluetooth_rename))
+        .route("/api/bluetooth/test-connect", post(bluetooth_test_connect))
         .route("/api/bluetooth/input/enable", post(bluetooth_input_enable))
         .route("/api/bluetooth/input/disable", post(bluetooth_input_disable))
         .route("/api/bluetooth/input/status", get(bluetooth_input_status))
@@ -54,6 +57,26 @@ struct AddressBody {
     address: String,
 }
 
+/// Request body for renaming a Bluetooth device.
+#[derive(Deserialize)]
+struct RenameBody {
+    address: String,
+    name: String,
+}
+
+/// Request body for testing connectivity to a Bluetooth device.
+#[derive(Deserialize)]
+struct TestConnectBody {
+    address: String,
+}
+
+/// Response for test connectivity.
+#[derive(serde::Serialize)]
+struct TestConnectResponse {
+    success: bool,
+    message: String,
+}
+
 /// Summarises the current scan state and found devices.
 #[derive(serde::Serialize)]
 struct ScanResultsResponse {
@@ -74,7 +97,12 @@ struct InputStatusResponse {
 // ── handlers ───────────────────────────────────────────────────────
 
 /// `GET /api/bluetooth/devices` — list all known (paired) BT devices.
+///
+/// Returns 503 when Bluetooth is not available (no adapter, no BlueZ, stub
+/// platform). The frontend uses this to hide the Bluetooth section entirely
+/// instead of showing a misleading "loading…" state.
 async fn bluetooth_devices(State(s): State<AppState>) -> AppResult<Json<Vec<BtDevice>>> {
+    bt_available(s.bluetooth().check_available().await)?;
     Ok(Json(s.bluetooth().list_devices().await))
 }
 
@@ -222,4 +250,47 @@ async fn bluetooth_input_status(State(s): State<AppState>) -> Json<InputStatusRe
         enabled: input.is_enabled(),
         streaming: input.is_streaming(),
     })
+}
+
+/// `GET /api/bluetooth/devices/audio` — list only audio output devices
+/// (speakers, headphones, headsets, etc.).
+async fn bluetooth_audio_devices(State(s): State<AppState>) -> AppResult<Json<Vec<BtDevice>>> {
+    bt_available(s.bluetooth().check_available().await)?;
+    // The linux implementation has list_audio_devices, but the trait doesn't.
+    // We'll filter on the frontend for now, or we can add it to the stub.
+    // For now, return all devices and let the frontend filter.
+    // TODO: Add list_audio_devices to the BluetoothManager trait.
+    Ok(Json(s.bluetooth().list_devices().await))
+}
+
+/// `POST /api/bluetooth/rename` — set a user-friendly name (alias) for a paired device.
+///
+/// Body: `{ "address": "XX:XX:XX:XX:XX:XX", "name": "My Speaker" }`.
+async fn bluetooth_rename(
+    State(s): State<AppState>,
+    Json(body): Json<RenameBody>,
+) -> AppResult<StatusCode> {
+    bt_available(s.bluetooth().set_alias(&body.address, &body.name).await)?;
+    Ok(StatusCode::OK)
+}
+
+/// `POST /api/bluetooth/test-connect` — test connectivity to a device.
+///
+/// Attempts to connect and then disconnect to verify the device is reachable.
+/// Body: `{ "address": "XX:XX:XX:XX:XX:XX" }`.
+async fn bluetooth_test_connect(
+    State(s): State<AppState>,
+    Json(body): Json<TestConnectBody>,
+) -> AppResult<Json<TestConnectResponse>> {
+    bt_available(s.bluetooth().check_available().await)?;
+    match s.bluetooth().test_connectivity(&body.address).await {
+        Ok(()) => Ok(Json(TestConnectResponse {
+            success: true,
+            message: "Successfully connected and disconnected".to_string(),
+        })),
+        Err(e) => Ok(Json(TestConnectResponse {
+            success: false,
+            message: format!("Connection test failed: {}", e),
+        })),
+    }
 }

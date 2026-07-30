@@ -103,10 +103,49 @@ export interface DspProfile {
 export interface BtDevice {
   address: string
   name: string | null
+  alias: string | null
+  class: number | null
+  icon: string | null
   rssi: number | null
   connected: boolean
   paired: boolean
   trusted: boolean
+}
+
+/** Returns the best display name: alias > name > address */
+export function btDisplayName(d: BtDevice): string {
+  return d.alias ?? d.name ?? d.address
+}
+
+/** Returns true if this device is an audio output device (speaker/headphone) */
+export function btIsAudioOutput(d: BtDevice): boolean {
+  if (!d.class) return false
+  const major = (d.class >>> 8) & 0x1f
+  const minor = (d.class >>> 2) & 0x3f
+  if (major !== 0x04) return false // Audio/Video major class
+  // Minor classes for audio output:
+  // 0x04 = Headset, 0x08 = Hands-free, 0x14 = Loudspeaker,
+  // 0x18 = Headphones, 0x1c = Portable Audio, 0x20 = Car Audio, 0x28 = HiFi Audio
+  return [0x04, 0x08, 0x14, 0x18, 0x1c, 0x20, 0x28].includes(minor)
+}
+
+/** Returns a human-readable device type string based on Bluetooth class */
+export function btDeviceType(d: BtDevice): string | null {
+  if (!d.class) return null
+  const major = (d.class >>> 8) & 0x1f
+  const minor = (d.class >>> 2) & 0x3f
+  if (major !== 0x04) return null
+  switch (minor) {
+    case 0x04: return 'Headset'
+    case 0x08: return 'Hands-free'
+    case 0x10: return 'Microphone'
+    case 0x14: return 'Speaker'
+    case 0x18: return 'Headphones'
+    case 0x1c: return 'Portable Audio'
+    case 0x20: return 'Car Audio'
+    case 0x28: return 'HiFi Audio'
+    default: return 'Audio Device'
+  }
 }
 
 /// Response from `GET /api/bluetooth/scan/results`.

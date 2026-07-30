@@ -92,9 +92,7 @@ impl BluetoothManager {
     }
 
     /// Re-populate the device cache from `adapter.device_addresses()`.
-    /// bluer 0.17 doesn't expose device property getters, so we only record
-    /// each device's address.  `connected` and `paired` are tracked locally
-    /// when our own connect / pair calls succeed.
+    /// Fetches device properties (name, alias, class, icon, RSSI) for each device.
     async fn sync_device_cache(&self, adapter: &Adapter) {
         let addrs = match adapter.device_addresses().await {
             Ok(a) => a,
@@ -104,10 +102,45 @@ impl BluetoothManager {
         let mut cache = self.inner.devices.write().await;
         for addr in &addrs {
             let addr_str = addr.to_string();
-            cache.entry(addr_str).or_insert_with(|| BtDevice {
+            // Get device handle to fetch properties
+            let device = match adapter.device(*addr) {
+                Ok(d) => d,
+                Err(_) => {
+                    cache.entry(addr_str).or_insert_with(|| BtDevice {
+                        address: addr.to_string(),
+                        name: None,
+                        alias: None,
+                        class: None,
+                        icon: None,
+                        rssi: None,
+                        connected: false,
+                        paired: false,
+                        trusted: false,
+                    });
+                    continue;
+                }
+            };
+
+            // Fetch all relevant properties
+            let name = device.name().await.ok().flatten();
+            let alias = device.alias().await.ok().flatten();
+            let class = device.class().await.ok().flatten();
+            let icon = device.icon().await.ok().flatten();
+            let rssi = device.rssi().await.ok().flatten();
+
+            cache.entry(addr_str).and_modify(|d| {
+                d.name = name.clone();
+                d.alias = alias.clone();
+                d.class = class;
+                d.icon = icon.clone();
+                d.rssi = rssi;
+            }).or_insert(BtDevice {
                 address: addr.to_string(),
-                name: None,
-                rssi: None,
+                name,
+                alias,
+                class,
+                icon,
+                rssi,
                 connected: false,
                 paired: false,
                 trusted: false,
@@ -275,7 +308,63 @@ impl BluetoothManager {
         Ok(())
     }
 
+    // -- device management --
+
+    /// Set a user-friendly alias (name) for a paired device.
+    pub async fn set_alias(&self, address: &str, name: &str) -> Result<()> {
+        let device = self.get_device(address).await?;
+        device.set_alias(name).await
+            .with_context(|| format!("set alias for {address}"))?;
+
+        // Update cache
+        if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+            entry.alias = Some(name.to_string());
+        }
+
+        self.emit(BtEvent {
+            kind: BtEventKind::Paired, // Reuse Paired event for cache update
+            device: self.device_or_placeholder(address).await,
+        });
+        Ok(())
+    }
+
+    /// Test connectivity to a device by connecting and then disconnecting.
+    pub async fn test_connectivity(&self, address: &str) -> Result<()> {
+        let device = self.get_device(address).await?;
+        
+        // Try to connect
+        device.connect().await
+            .with_context(|| format!("test connect to {address}"))?;
+        
+        // Update cache temporarily
+        if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+            entry.connected = true;
+        }
+        
+        // Brief pause to let connection stabilize
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        
+        // Disconnect
+        device.disconnect().await
+            .with_context(|| format!("test disconnect from {address}"))?;
+        
+        // Update cache
+        if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+            entry.connected = false;
+        }
+        
+        Ok(())
+    }
+
     // -- queries --
+
+    /// Check whether Bluetooth is available (adapter reachable).
+    /// Returns `Ok(())` if the adapter can be accessed, or an error
+    /// describing why Bluetooth is unavailable.
+    pub async fn check_available(&self) -> Result<()> {
+        self.adapter().await?;
+        Ok(())
+    }
 
     pub async fn list_devices(&self) -> Vec<BtDevice> {
         // Re-sync so we pick up devices paired via external tools (bluetoothctl).
@@ -319,6 +408,9 @@ impl BluetoothManager {
             .unwrap_or_else(|| BtDevice {
                 address: address.to_string(),
                 name: None,
+                alias: None,
+                class: None,
+                icon: None,
                 rssi: None,
                 connected: false,
                 paired: false,
@@ -333,10 +425,42 @@ impl BluetoothManager {
         {
             let mut cache = self.inner.devices.write().await;
             if !cache.contains_key(&addr_str) {
+                // Fetch device properties for newly discovered device
+                let device = match adapter.device(addr) {
+                    Ok(d) => d,
+                    Err(_) => {
+                        cache.insert(addr_str.clone(), BtDevice {
+                            address: addr_str.clone(),
+                            name: None,
+                            alias: None,
+                            class: None,
+                            icon: None,
+                            rssi: None,
+                            connected: false,
+                            paired: false,
+                            trusted: false,
+                        });
+                        self.emit(BtEvent {
+                            kind: BtEventKind::DeviceFound,
+                            device: self.device_or_placeholder(&addr_str).await,
+                        });
+                        return;
+                    }
+                };
+
+                let name = device.name().await.ok().flatten();
+                let alias = device.alias().await.ok().flatten();
+                let class = device.class().await.ok().flatten();
+                let icon = device.icon().await.ok().flatten();
+                let rssi = device.rssi().await.ok().flatten();
+
                 cache.insert(addr_str.clone(), BtDevice {
                     address: addr_str.clone(),
-                    name: None,
-                    rssi: None,
+                    name,
+                    alias,
+                    class,
+                    icon,
+                    rssi,
                     connected: false,
                     paired: false,
                     trusted: false,
@@ -358,5 +482,56 @@ impl BluetoothManager {
                 device: d,
             });
         }
+    }
+
+    // -- new public API methods --
+
+    /// Set a user-friendly alias (name) for a paired device.
+    /// This name will be stored in BlueZ and persist across reboots.
+    pub async fn set_alias(&self, address: &str, alias: &str) -> Result<()> {
+        let device = self.get_device(address).await?;
+        device
+            .set_alias(alias.to_string())
+            .await
+            .with_context(|| format!("set alias for {address}"))?;
+
+        // Update cache
+        if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+            entry.alias = Some(alias.to_string());
+        }
+
+        self.emit(BtEvent {
+            kind: BtEventKind::DeviceFound,
+            device: self.device_or_placeholder(address).await,
+        });
+        Ok(())
+    }
+
+    /// Test connectivity to a device by attempting to connect and then disconnect.
+    /// Returns Ok(()) if the device can be connected to successfully.
+    pub async fn test_connectivity(&self, address: &str) -> Result<()> {
+        // Try to connect
+        self.connect(address).await?;
+        // Give it a moment to establish
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Disconnect
+        self.disconnect(address).await?;
+        Ok(())
+    }
+
+    /// List only audio output devices (speakers, headphones, headsets, etc.).
+    /// Filters by Bluetooth Class of Device major class 0x04 (Audio/Video).
+    pub async fn list_audio_devices(&self) -> Vec<BtDevice> {
+        if let Ok(adapter) = self.adapter().await {
+            self.sync_device_cache(&adapter).await;
+        }
+        self.inner
+            .devices
+            .read()
+            .await
+            .values()
+            .filter(|d| d.is_audio_output())
+            .cloned()
+            .collect()
     }
 }

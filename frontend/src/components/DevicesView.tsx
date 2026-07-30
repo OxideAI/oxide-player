@@ -430,22 +430,33 @@ const SCAN_POLL_MS = 2000
 function BluetoothSection() {
   const [btDevices, setBtDevices] = useState<BtDevice[]>([])
   const [btError, setBtError] = useState<string | null>(null)
+  const [btLoaded, setBtLoaded] = useState(false)
+  const [btUnavailable, setBtUnavailable] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [scanResults, setScanResults] = useState<BtDevice[]>([])
   const [busyAddr, setBusyAddr] = useState<string | null>(null)
   const [inputStatus, setInputStatus] = useState<InputStatusResponse | null>(null)
   const [inputBusy, setInputBusy] = useState(false)
+  const [renamingAddr, setRenamingAddr] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [testingAddr, setTestingAddr] = useState<string | null>(null)
+  const [showAudioOnly, setShowAudioOnly] = useState(true)
 
   const loadDevices = useCallback(async () => {
     try {
       const devices = await api.btDevices()
       setBtDevices(devices)
       setBtError(null)
+      setBtUnavailable(false)
     } catch (e) {
-      // 503 = Bluetooth unavailable, which is expected on non-Linux platforms
-      if (e instanceof Error && !e.message.includes('503')) {
-        setBtError(e.message)
+      // 503 = Bluetooth unavailable (no BlueZ, stub platform, init failure)
+      const is503 = e instanceof Error && e.message.includes('503')
+      setBtUnavailable(is503)
+      if (!is503) {
+        setBtError(e instanceof Error ? e.message : String(e))
       }
+    } finally {
+      setBtLoaded(true)
     }
   }, [])
 
@@ -561,6 +572,37 @@ function BluetoothSection() {
       setBtError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusyAddr(null)
+    }
+  }, [])
+
+  // Rename device (set alias)
+  const handleRename = useCallback(async (address: string, newName: string) => {
+    setBusyAddr(address)
+    setBtError(null)
+    try {
+      await api.btRename(address, newName)
+      await loadDevices()
+      setRenamingAddr(null)
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyAddr(null)
+    }
+  }, [loadDevices])
+
+  // Test connectivity to device
+  const handleTestConnect = useCallback(async (address: string) => {
+    setTestingAddr(address)
+    setBtError(null)
+    try {
+      const result = await api.btTestConnect(address)
+      setBtError(result.success 
+        ? `Test passed: ${result.message}` 
+        : `Test failed: ${result.message}`)
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setTestingAddr(null)
     }
   }, [])
 

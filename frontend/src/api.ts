@@ -257,6 +257,8 @@ export const api = {
   // —— Bluetooth ——
   btDevices: () =>
     fetch('/api/bluetooth/devices').then((r) => json<BtDevice[]>(r)),
+  btAudioDevices: () =>
+    fetch('/api/bluetooth/devices/audio').then((r) => json<BtDevice[]>(r)),
   btScan: (timeout = 15) =>
     fetch('/api/bluetooth/scan', {
       method: 'POST',
@@ -297,6 +299,18 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ address }),
     }).then((r) => json<unknown>(r)),
+  btRename: (address: string, name: string) =>
+    fetch('/api/bluetooth/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, name }),
+    }).then((r) => json<unknown>(r)),
+  btTestConnect: (address: string) =>
+    fetch('/api/bluetooth/test-connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    }).then((r) => json<{ success: boolean; message: string }>(r)),
   btInputEnable: () =>
     fetch('/api/bluetooth/input/enable', { method: 'POST' }).then((r) =>
       json<unknown>(r),

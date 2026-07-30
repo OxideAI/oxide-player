@@ -365,6 +365,31 @@ AVAHIEOF
   log "Avahi services registered — reachable as http://oxide-player.local:${LISTEN##*:}/"
 }
 
+setup_bluetooth() {
+  log "Enabling Bluetooth stack"
+
+  # Enable and start the BlueZ service so the Bluetooth adapter is usable.
+  run systemctl enable bluetooth || true
+  run systemctl start bluetooth || warn "bluetooth.service start failed — is there a BT adapter?"
+
+  # Advertise A2DP Sink and AVRCP via Avahi so phones/tablets can discover
+  # this system as a Bluetooth audio receiver.
+  cat > /etc/avahi/services/oxide-bt.service <<BTAVAHIEOF
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name>Oxide Player (Bluetooth)</name>
+  <service>
+    <type>_a2dp-sink._sub._music._tcp</type>
+    <port>0</port>
+    <txt-record>name=Oxide Player</txt-record>
+  </service>
+</service-group>
+BTAVAHIEOF
+  run systemctl restart avahi-daemon || true
+  log "Bluetooth stack enabled — A2DP Sink advertised via Avahi"
+}
+
 setup_asound() {
   # Detect the default audio output device (skip the snd-aloop loopback)
   # and write /etc/asound.conf so ALSA's "default" device points to the
@@ -623,7 +648,7 @@ main() {
   check_linux
   detect_os
   apt_install curl jq git build-essential pkg-config libssl-dev \
-              libasound2-dev alsa-utils mpd mpc ffmpeg samba avahi-daemon
+              libasound2-dev alsa-utils mpd mpc ffmpeg samba avahi-daemon bluez
   check_dependencies
   ensure_camilladsp
   fetch_source
@@ -633,6 +658,7 @@ main() {
   setup_asound
   setup_samba
   setup_avahi
+  setup_bluetooth
   write_mpd_config
   write_camilladsp_config
   write_oxide_config
