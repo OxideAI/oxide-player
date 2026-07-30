@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.5.0...oxide-player-v0.5.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* hide volume slider when MPD mixer is disabled ([#83](https://github.com/OxideAI/oxide-player/issues/83)) ([3b6884c](https://github.com/OxideAI/oxide-player/commit/3b6884cb6510ce65d6fd4d0b7e9716eab1056f02))
+
 ## [0.5.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.4.0...oxide-player-v0.5.0) (2026-07-30)
 
 
