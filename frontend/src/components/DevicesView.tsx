@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { DeviceConfig, OutputDevice } from '../types'
+import type { BtDevice, DeviceConfig, InputStatusResponse, OutputDevice } from '../types'
 import { api } from '../api'
 import styles from './DevicesView.module.css'
 
@@ -413,6 +413,318 @@ export function DevicesView() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ════════ Bluetooth section ════════ */}
+      <BluetoothSection />
+    </div>
+  )
+}
+
+// ── Bluetooth Section ──────────────────────────────────────────────────
+
+/** Polling interval for scan results while a scan is active (ms). */
+const SCAN_POLL_MS = 2000
+
+function BluetoothSection() {
+  const [btDevices, setBtDevices] = useState<BtDevice[]>([])
+  const [btError, setBtError] = useState<string | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [scanResults, setScanResults] = useState<BtDevice[]>([])
+  const [busyAddr, setBusyAddr] = useState<string | null>(null)
+  const [inputStatus, setInputStatus] = useState<InputStatusResponse | null>(null)
+  const [inputBusy, setInputBusy] = useState(false)
+
+  const loadDevices = useCallback(async () => {
+    try {
+      const devices = await api.btDevices()
+      setBtDevices(devices)
+      setBtError(null)
+    } catch (e) {
+      // 503 = Bluetooth unavailable, which is expected on non-Linux platforms
+      if (e instanceof Error && !e.message.includes('503')) {
+        setBtError(e.message)
+      }
+    }
+  }, [])
+
+  const loadInputStatus = useCallback(async () => {
+    try {
+      const status = await api.btInputStatus()
+      setInputStatus(status)
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  // Initial load
+  useEffect(() => {
+    loadDevices()
+    loadInputStatus()
+  }, [loadDevices, loadInputStatus])
+
+  // Start scanning
+  const startScan = useCallback(async () => {
+    setScanning(true)
+    setBtError(null)
+    try {
+      await api.btScan(15)
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+      setScanning(false)
+    }
+  }, [])
+
+  // Poll scan results while scanning
+  useEffect(() => {
+    if (!scanning) return
+    const poll = setInterval(async () => {
+      try {
+        const res = await api.btScanResults()
+        setScanResults(res.devices)
+        if (!res.active) {
+          setScanning(false)
+        }
+      } catch {
+        setScanning(false)
+      }
+    }, SCAN_POLL_MS)
+    return () => clearInterval(poll)
+  }, [scanning])
+
+  const stopScan = useCallback(async () => {
+    try {
+      await api.btScanStop()
+    } catch { /* ignore */ }
+    setScanning(false)
+  }, [])
+
+  const handlePair = useCallback(async (address: string) => {
+    setBusyAddr(address)
+    setBtError(null)
+    try {
+      await api.btPair(address)
+      await loadDevices()
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyAddr(null)
+    }
+  }, [loadDevices])
+
+  const handleConnect = useCallback(async (address: string) => {
+    setBusyAddr(address)
+    setBtError(null)
+    try {
+      await api.btConnect(address)
+      await loadDevices()
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyAddr(null)
+    }
+  }, [loadDevices])
+
+  const handleDisconnect = useCallback(async (address: string) => {
+    setBusyAddr(address)
+    setBtError(null)
+    try {
+      await api.btDisconnect(address)
+      await loadDevices()
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyAddr(null)
+    }
+  }, [loadDevices])
+
+  const handleForget = useCallback(async (address: string) => {
+    setBusyAddr(address)
+    setBtError(null)
+    try {
+      await api.btForget(address)
+      await loadDevices()
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyAddr(null)
+    }
+  }, [loadDevices])
+
+  const handleRemoveOutput = useCallback(async (address: string) => {
+    setBusyAddr(address)
+    setBtError(null)
+    try {
+      await api.btRemoveOutput(address)
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyAddr(null)
+    }
+  }, [])
+
+  const handleToggleInput = useCallback(async () => {
+    setInputBusy(true)
+    setBtError(null)
+    try {
+      if (inputStatus?.enabled) {
+        await api.btInputDisable()
+      } else {
+        await api.btInputEnable()
+      }
+      await loadInputStatus()
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setInputBusy(false)
+    }
+  }, [inputStatus, loadInputStatus])
+
+  // Combine known paired devices with scan results (dedup by address)
+  const knownAddrs = new Set(btDevices.map((d) => d.address))
+  const discoveredInScan = scanResults.filter((d) => !knownAddrs.has(d.address))
+  const allDevices = [...btDevices, ...discoveredInScan]
+
+  // If the backend returned 503, don't render the BT section at all
+  // (non-Linux platform). We detect this by checking whether any paired
+  // devices were returned after the initial load.
+  if (btDevices.length === 0 && scanResults.length === 0 && btError === null) {
+    // Still loading — show a placeholder
+    return (
+      <div className={styles.cfgSection}>
+        <div>
+          <span className={styles.eyebrow}>Bluetooth</span>
+          <h3 className={styles.h}>Devices</h3>
+        </div>
+        <p className={styles.dim}>loading…</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className={styles.cfgSection}>
+      <div>
+        <span className={styles.eyebrow}>Bluetooth</span>
+        <h3 className={styles.h}>Devices</h3>
+      </div>
+
+      {btError && <div className={styles.error}>{btError}</div>}
+
+      {/* Scan controls */}
+      <div className={styles.cfgToolbar}>
+        {scanning ? (
+          <>
+            <span className={styles.dim}>Scanning…</span>
+            <button className={styles.btnGhost} onClick={stopScan}>
+              Stop scan
+            </button>
+          </>
+        ) : (
+          <button className={styles.addBtn} onClick={startScan}>
+            Scan for devices
+          </button>
+        )}
+      </div>
+
+      {/* BT device list */}
+      {allDevices.length === 0 && (
+        <p className={styles.dim}>
+          {scanning ? 'No devices found yet…' : 'No Bluetooth devices paired or discovered. Start a scan to find nearby speakers and headphones.'}
+        </p>
+      )}
+      <ul className={styles.list}>
+        {allDevices.map((d) => {
+          const isBusy = busyAddr === d.address
+          return (
+            <li key={d.address} className={d.connected ? styles.rowOn : styles.rowOff}>
+              <div>
+                <div className={styles.name}>
+                  {d.name ?? d.address}
+                  {d.connected && <span className={styles.btBadge}>connected</span>}
+                  {!d.connected && d.paired && <span className={styles.btBadge}>paired</span>}
+                </div>
+                <div className={styles.id}>
+                  {d.address}
+                  {d.rssi != null && <span> RSSI: {d.rssi}</span>}
+                </div>
+              </div>
+              <div className={styles.btActions}>
+                {d.connected ? (
+                  <>
+                    <button
+                      className={styles.btnGhost}
+                      disabled={isBusy}
+                      onClick={() => handleDisconnect(d.address)}
+                    >
+                      {isBusy ? '…' : 'Disconnect'}
+                    </button>
+                    <button
+                      className={styles.btnGhost}
+                      disabled={isBusy}
+                      onClick={() => handleRemoveOutput(d.address)}
+                    >
+                      Remove output
+                    </button>
+                  </>
+                ) : d.paired ? (
+                  <>
+                    <button
+                      className={styles.off}
+                      disabled={isBusy}
+                      onClick={() => handleConnect(d.address)}
+                    >
+                      {isBusy ? '…' : 'Connect'}
+                    </button>
+                    <button
+                      className={styles.btnGhost}
+                      disabled={isBusy}
+                      onClick={() => handleForget(d.address)}
+                    >
+                      Forget
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className={styles.on}
+                    disabled={isBusy}
+                    onClick={() => handlePair(d.address)}
+                  >
+                    {isBusy ? '…' : 'Pair'}
+                  </button>
+                )}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+
+      {/* A2DP Sink input toggle */}
+      <div className={styles.btInputRow}>
+        <div>
+          <span className={styles.eyebrow}>Input</span>
+          <h4 className={styles.h}>A2DP Sink</h4>
+          <p className={styles.dim}>
+            Allow phones and tablets to stream audio to this system.
+          </p>
+        </div>
+        <button
+          className={inputStatus?.enabled ? styles.on : styles.off}
+          disabled={inputBusy}
+          onClick={handleToggleInput}
+        >
+          {inputBusy
+            ? '…'
+            : inputStatus?.enabled
+              ? inputStatus?.streaming
+                ? 'Streaming'
+                : 'Enabled'
+              : 'Disabled'}
+        </button>
+      </div>
+      {inputStatus?.streaming && (
+        <div className={styles.btNote}>
+          Audio is being streamed from a phone or tablet.
         </div>
       )}
     </div>

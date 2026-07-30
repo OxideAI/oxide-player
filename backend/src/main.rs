@@ -1,4 +1,5 @@
 mod api;
+mod bluetooth;
 mod config;
 pub mod devices;
 pub mod dsp;
@@ -81,7 +82,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let listen_addr = config.listen.clone();
-    let state = state::AppState::new(config, db, dsp, mpd, visualizer, config_path);
+    let bt = bluetooth::BluetoothManager::new().await;
+    let state = state::AppState::new(config, db, dsp, mpd, visualizer, bt, config_path);
     state.spawn_status_poller();
 
     // The frontend is served from this same origin, so no cross-origin access

@@ -1,12 +1,15 @@
 import type {
   AlbumSources,
+  BtDevice,
   Config,
   DeviceConfig,
   DspProfile,
+  InputStatusResponse,
   OutputDevice,
   PlayerStatus,
   QueueItem,
   QueueResponse,
+  ScanResultsResponse,
   Track,
 } from './types'
 
@@ -250,4 +253,58 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
     }).then((r) => json<unknown>(r)),
+
+  // —— Bluetooth ——
+  btDevices: () =>
+    fetch('/api/bluetooth/devices').then((r) => json<BtDevice[]>(r)),
+  btScan: (timeout = 15) =>
+    fetch('/api/bluetooth/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timeout }),
+    }).then((r) => json<unknown>(r)),
+  btScanStop: () =>
+    fetch('/api/bluetooth/scan/stop', { method: 'POST' }).then((r) => json<unknown>(r)),
+  btScanResults: () =>
+    fetch('/api/bluetooth/scan/results').then((r) => json<ScanResultsResponse>(r)),
+  btPair: (address: string) =>
+    fetch('/api/bluetooth/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    }).then((r) => json<unknown>(r)),
+  btConnect: (address: string) =>
+    fetch('/api/bluetooth/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    }).then((r) => json<unknown>(r)),
+  btDisconnect: (address: string) =>
+    fetch('/api/bluetooth/disconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    }).then((r) => json<unknown>(r)),
+  btForget: (address: string) =>
+    fetch('/api/bluetooth/forget', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    }).then((r) => json<unknown>(r)),
+  btRemoveOutput: (address: string) =>
+    fetch('/api/bluetooth/remove-output', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    }).then((r) => json<unknown>(r)),
+  btInputEnable: () =>
+    fetch('/api/bluetooth/input/enable', { method: 'POST' }).then((r) =>
+      json<unknown>(r),
+    ),
+  btInputDisable: () =>
+    fetch('/api/bluetooth/input/disable', { method: 'POST' }).then((r) =>
+      json<unknown>(r),
+    ),
+  btInputStatus: () =>
+    fetch('/api/bluetooth/input/status').then((r) => json<InputStatusResponse>(r)),
 }

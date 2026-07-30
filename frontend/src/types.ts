@@ -99,6 +99,28 @@ export interface DspProfile {
   eq_bands: EqBand[]
 }
 
+/// A Bluetooth device as returned by the backend.
+export interface BtDevice {
+  address: string
+  name: string | null
+  rssi: number | null
+  connected: boolean
+  paired: boolean
+  trusted: boolean
+}
+
+/// Response from `GET /api/bluetooth/scan/results`.
+export interface ScanResultsResponse {
+  active: boolean
+  devices: BtDevice[]
+}
+
+/// Response from `GET /api/bluetooth/input/status`.
+export interface InputStatusResponse {
+  enabled: boolean
+  streaming: boolean
+}
+
 export interface DeviceConfig {
   name: string
   output_type: string

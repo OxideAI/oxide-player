@@ -1,3 +1,4 @@
+use crate::bluetooth::BluetoothManager;
 use crate::config::Config;
 use crate::devices::config_fragment::ConfigFragmentManager;
 use crate::dsp::DspManager;
@@ -20,6 +21,7 @@ struct Inner {
     pub db: LibraryDb,
     pub dsp: DspManager,
     pub mpd: Mpd,
+    pub bluetooth: BluetoothManager,
     pub visualizer: VisualizerAnalyzer,
     pub status: RwLock<PlayerStatus>,
     /// Push channel carrying player-status and queue changes to WebSocket
@@ -43,6 +45,7 @@ impl AppState {
         dsp: DspManager,
         mpd: Mpd,
         visualizer: VisualizerAnalyzer,
+        bluetooth: BluetoothManager,
         config_path: Option<PathBuf>,
     ) -> Self {
         let profiles = config.default_dsp_profiles.clone();
@@ -60,6 +63,7 @@ impl AppState {
                 db,
                 dsp,
                 mpd,
+                bluetooth,
                 visualizer,
                 status: RwLock::new(PlayerStatus::stopped()),
                 event_tx,
@@ -85,6 +89,10 @@ impl AppState {
 
     pub fn mpd(&self) -> &Mpd {
         &self.inner.mpd
+    }
+
+    pub fn bluetooth(&self) -> &BluetoothManager {
+        &self.inner.bluetooth
     }
 
     pub fn device_configs(&self) -> &ConfigFragmentManager {
@@ -384,12 +392,13 @@ fn missing_path_from_error(err: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bluetooth::BluetoothManager;
     use crate::config::Config;
     use crate::dsp::DspManager;
     use crate::mpd::{Mpd, MpdStatus};
     use std::path::Path;
 
-    fn test_state() -> (AppState, LibraryDb) {
+    async fn test_state() -> (AppState, LibraryDb) {
         let db = LibraryDb::open(Path::new(":memory:")).unwrap();
         db.migrate().unwrap();
         let cfg = Config::default_config();
@@ -403,7 +412,8 @@ mod tests {
         );
         let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
         let visualizer = VisualizerAnalyzer::new(&cfg);
-        (AppState::new(cfg, db.clone(), dsp, mpd, visualizer, None), db)
+        let bt = BluetoothManager::new().await;
+        (AppState::new(cfg, db.clone(), dsp, mpd, visualizer, bt, None), db)
     }
 
     /// Regression: after a restart MPD resumes at the CUE address URI
@@ -411,11 +421,9 @@ mod tests {
     /// URI. The now-playing resolver must map it back to the split track so the
     /// UI shows the real title/cover and highlights the album row — not a
     /// fallback "track0005" entry with id 0 and no cover.
-    #[test]
-    fn resolve_current_song_maps_cue_address_after_restart() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-        let (state, db) = test_state();
+    #[tokio::test]
+    async fn resolve_current_song_maps_cue_address_after_restart() {
+        let (state, db) = test_state().await;
 
         // CUE split keyed by the *audio file* URI, with cover metadata.
         let id = db
@@ -466,7 +474,6 @@ mod tests {
         assert!(song.has_cover, "cover metadata must survive resolution");
         assert_eq!(song.cover_key.as_deref(), Some("al_coverkey"));
         assert_eq!(song.cue_start, Some(100.0));
-        });
     }
 
     /// Regression: MPD reports URIs relative to its `music_directory`, while the
@@ -474,11 +481,9 @@ mod tests {
     /// in-memory active-track cache is empty, so the resolver must match the
     /// MPD URI against the DB URI by suffix (e.g. MPD `MyMusic/A/09.flac` vs DB
     /// `A/09.flac`) and recover title/artist/album/cover — not a fallback.
-    #[test]
-    fn resolve_current_song_matches_mpd_uri_by_suffix_after_restart() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-        let (state, db) = test_state();
+    #[tokio::test]
+    async fn resolve_current_song_matches_mpd_uri_by_suffix_after_restart() {
+        let (state, db) = test_state().await;
 
         let id = db
             .insert_track(
@@ -531,39 +536,35 @@ mod tests {
         assert_eq!(song.album.as_deref(), Some("Cesaria Evora &"));
         assert!(song.has_cover);
         assert_eq!(song.cover_key.as_deref(), Some("al_coverkey"));
-        });
     }
 
     /// Regression for #3: a freshly subscribed broadcast receiver must receive
     /// a `Status` event after `refresh_status` writes a new snapshot. This is
     /// the mechanism the `/api/ws` handler relies on to push live updates.
-    #[test]
-    fn refresh_status_broadcasts_status_event() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let (state, _db) = test_state();
-            let mut rx = state.subscribe_events();
+    #[tokio::test]
+    async fn refresh_status_broadcasts_status_event() {
+        let (state, _db) = test_state().await;
+        let mut rx = state.subscribe_events();
 
-            // `refresh_status` will fail to reach MPD (no server) and mark the
-            // status stopped — but it must still broadcast that change.
-            state.refresh_status().await;
+        // `refresh_status` will fail to reach MPD (no server) and mark the
+        // status stopped — but it must still broadcast that change.
+        state.refresh_status().await;
 
-            // The receiver should get at least one Status event.
-            let mut got_status = false;
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-            while tokio::time::Instant::now() < deadline {
-                match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
-                    Ok(Ok(crate::types::StatusEvent::Status(_))) => {
-                        got_status = true;
-                        break;
-                    }
-                    Ok(Ok(_)) => continue,
-                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-                    Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
-                    Err(_) => continue,
+        // The receiver should get at least one Status event.
+        let mut got_status = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(crate::types::StatusEvent::Status(_))) => {
+                    got_status = true;
+                    break;
                 }
+                Ok(Ok(_)) => continue,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+                Err(_) => continue,
             }
-            assert!(got_status, "refresh_status must broadcast a Status event");
-        });
+        }
+        assert!(got_status, "refresh_status must broadcast a Status event");
     }
 }
