@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.9.0...oxide-player-v0.10.0) (2026-07-30)
+
+
+### Features
+
+* **bluetooth:** add full Bluetooth audio support ([c675eeb](https://github.com/OxideAI/oxide-player/commit/c675eebb7b2390ff4965b72ca1d680e10976b49e))
+
 ## [0.6.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.5.1...oxide-player-v0.6.0) (2026-07-30)
 
 
