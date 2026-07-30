@@ -57,17 +57,16 @@ jobs:
           echo "PKG_CONFIG_aarch64_unknown_linux_gnu_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_SYSROOT_DIR=/" >> "$GITHUB_ENV"
 
-      - name: Install ALSA dev libraries
+      - name: Install system libraries (ALSA + D-Bus)
         run: |
           sudo apt-get update
           if [ "${{ matrix.arch }}" = "arm64" ]; then
-            # Pin existing repos to amd64 *before* adding arm64 arch so that
-            # apt-get update does not 404 on repos like security.ubuntu.com
-            # that do not publish arm64 package indexes.
-            # Handle legacy one-line format (source.list / .list files).
-            sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list 2>/dev/null || true
+            # Restrict existing repos to amd64 *before* adding arm64 arch.
+            # Only touch lines that don't already have an arch spec.
+            sudo sed -i '/^deb /{/\[arch=/!s/^deb /deb [arch=amd64] /}' /etc/apt/sources.list 2>/dev/null || true
             for f in /etc/apt/sources.list.d/*.list; do
-              [ -f "$f" ] && sudo sed -i 's/^deb /deb [arch=amd64] /' "$f"
+              [ -f "$f" ] || continue
+              sudo sed -i '/^deb /{/\[arch=/!s/^deb /deb [arch=amd64] /}' "$f" 2>/dev/null || true
             done
             # Handle deb822 format (Ubuntu 24.04+, .sources files).
             for f in /etc/apt/sources.list.d/*.sources; do
@@ -82,10 +81,10 @@ jobs:
             echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $ubuntu_codename main" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
             echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${ubuntu_codename}-updates main" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
             sudo apt-get update
-            sudo apt-get install -y libasound2-dev:arm64
+            sudo apt-get install -y libasound2-dev:arm64 libdbus-1-dev:arm64
             ls /usr/lib/aarch64-linux-gnu/pkgconfig/alsa.pc
           else
-            sudo apt-get install -y libasound2-dev
+            sudo apt-get install -y libasound2-dev libdbus-1-dev
           fi
 
       - name: Cache cargo
