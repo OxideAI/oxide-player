@@ -59,6 +59,47 @@ Logs: `journalctl -u oxide-player -f`
 Install knobs can be overridden via environment variables — see `install.sh` for the full
 list (e.g. `MPD_MUSIC_DIR`, `LISTEN`, `BIN_DIR`, `DATA_DIR`).
 
+### Upgrade
+
+The installer is idempotent — re-running it updates Oxide in place while preserving your
+config, library, and DSP settings.
+
+**Quick upgrade (re-run installer):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh | sudo bash
+```
+
+**From source (manual build):**
+
+```bash
+cd oxide-player
+git pull
+git fetch --tags
+tag="$(git describe --tags $(git rev-list --tags --max-count=1))"
+git checkout "$tag"
+cargo build --release
+sudo install -m0755 target/release/oxide-player /usr/local/bin/oxide-player
+cd frontend
+npm ci
+npm run build
+sudo systemctl restart oxide-player
+```
+
+**Prebuilt binary (skip source build):**
+
+Fetch the latest release archive for your architecture from the
+[releases page](https://github.com/OxideAI/oxide-player/releases), then:
+
+```bash
+sudo systemctl stop oxide-player
+sudo install -m0755 oxide-player /usr/local/bin/oxide-player  # or $BIN_DIR
+sudo systemctl restart oxide-player
+```
+
+> The frontend `dist/` is bundled inside the release archive so you only need to replace
+the binary.
+
 ## Quick start (from source)
 
 Requires Rust (stable), Node 18+, MPD, and CamillaDSP.
