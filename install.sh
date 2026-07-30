@@ -21,8 +21,15 @@ DATA_DIR="${DATA_DIR:-/var/lib/oxide-player}"
 CAMILLADSP_CONFIG="${CAMILLADSP_CONFIG:-/etc/camilladsp/config.yml}"
 CAMILLADSP_WS="${CAMILLADSP_WS:-ws://127.0.0.1:1234}"
 SERVICE_USER="${SERVICE_USER:-oxide}"
-LISTEN="${LISTEN:-0.0.0.0:8000}"
-MPD_MUSIC_DIR="${MPD_MUSIC_DIR:-/var/lib/mpd/music}"
+# oxide-player binds on port 80 by default so the web UI is reachable at
+# http://oxide-player/ or http://oxide-player.local/ without a port number.
+# Ports below 1024 need CAP_NET_BIND_SERVICE (set up automatically in the
+# systemd unit). Override with LISTEN if you need a different address.
+LISTEN="${LISTEN:-0.0.0.0:80}"
+# Location of the music library folder. Shared over SMB and served by MPD.
+# Override with MPD_MUSIC_DIR if you need a different path.
+MUSIC_DIR="${MUSIC_DIR:-${DATA_DIR}/music}"
+MPD_MUSIC_DIR="${MPD_MUSIC_DIR:-${MUSIC_DIR}}"
 BUILD_DIR="${BUILD_DIR:-/tmp/oxide-player-build}"
 
 # ---- helpers ----------------------------------------------------------------
@@ -214,9 +221,116 @@ setup_user_dirs() {
     fi
   done
 
+  # Ensure music directory exists (will be shared over SMB)
+  run mkdir -p "$MPD_MUSIC_DIR"
+
   run mkdir -p "$DATA_DIR/covers" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
   run chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
+  run chown -R "$SERVICE_USER:$SERVICE_USER" "$MPD_MUSIC_DIR"
   run chmod 755 "$DATA_DIR"
+}
+
+setup_hostname() {
+  local hostname="oxide-player"
+  local current
+  current="$(hostname -s 2>/dev/null || echo '')"
+  if [ "$current" != "$hostname" ]; then
+    log "Setting hostname to $hostname"
+    run hostnamectl set-hostname "$hostname"
+    # Ensure /etc/hosts has the new hostname mapped to 127.0.0.1
+    # so tools like \`hostname -s\` and Avahi resolve correctly.
+    if grep -qi "$hostname" /etc/hosts 2>/dev/null; then
+      sed -i "s/\\b$current\\b/$hostname/gi" /etc/hosts 2>/dev/null || true
+    else
+      sed -i "s/^127\\.0\\.0\\.1.*/& $hostname/" /etc/hosts 2>/dev/null || true
+    fi
+    log "Hostname set to $hostname — accessible as http://${hostname}.local/"
+  else
+    log "Hostname already $hostname"
+  fi
+}
+
+setup_samba() {
+  local share_name="Music"
+  local share_path="$MPD_MUSIC_DIR"
+
+  apt_install samba
+
+  # Backup existing smb.conf
+  if [ -f /etc/samba/smb.conf ] && [ ! -f /etc/samba/smb.conf.pre-oxide ]; then
+    run cp /etc/samba/smb.conf /etc/samba/smb.conf.pre-oxide
+    warn "Backed up existing smb.conf to smb.conf.pre-oxide"
+  fi
+
+  log "Writing Samba config"
+  cat > /etc/samba/smb.conf <<SAMBAEOF
+[global]
+   workgroup = WORKGROUP
+   server string = oxide-player
+   netbios name = OXIDE-PLAYER
+   security = user
+   map to guest = Bad User
+   guest account = nobody
+
+[Music]
+   path = $share_path
+   browseable = yes
+   read only = no
+   guest ok = yes
+   force user = $SERVICE_USER
+   force group = $SERVICE_USER
+   create mask = 0644
+   directory mask = 0755
+SAMBAEOF
+
+  # Ensure the music dir exists with correct ownership
+  run mkdir -p "$share_path"
+  run chown -R "$SERVICE_USER:$SERVICE_USER" "$share_path"
+  run chmod 755 "$share_path"
+
+  # Enable and restart smbd
+  run systemctl enable smbd || true
+  run systemctl restart smbd || warn "smbd restart failed — check samba config"
+  log "Samba share 'Music' → $share_path (guest writable, force-user=$SERVICE_USER)"
+}
+
+setup_avahi() {
+  apt_install avahi-daemon
+
+  # Ensure avahi runs
+  run systemctl enable avahi-daemon || true
+
+  log "Installing Avahi service definitions"
+  mkdir -p /etc/avahi/services
+
+  # Advertise the oxide-player web UI on the LAN via mDNS/Bonjour
+  cat > /etc/avahi/services/oxide-player.service <<AVAHIEOF
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name>Oxide Player on %h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>${LISTEN##*:}</port>
+    <txt-record>path=/</txt-record>
+  </service>
+  <service>
+    <type>_musicplayer._sub._http._tcp</type>
+    <port>${LISTEN##*:}</port>
+  </service>
+  <service>
+    <type>_smb._tcp</type>
+    <port>445</port>
+  </service>
+</service-group>
+AVAHIEOF
+
+  # Also advertise the Music share via Samba's native mDNS
+  # by ensuring samba registers its shares via Avahi
+  mkdir -p /etc/avahi/services
+
+  run systemctl restart avahi-daemon || warn "avahi-daemon restart failed"
+  log "Avahi services registered — reachable as http://oxide-player.local:${LISTEN##*:}/"
 }
 
 setup_asound() {
@@ -399,6 +513,9 @@ ExecStart=$BIN_DIR/oxide-player -c $CONFIG_DIR/config.json
 Nice=-5
 Restart=on-failure
 RestartSec=3
+# Allow binding to port 80 (privileged port) as non-root user
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
@@ -413,11 +530,22 @@ EOF
 }
 
 finish() {
+  local _ip="$(hostname -I | awk '{print $1}')"
+  local _hostname="$(hostname -s | tr '[:upper:]' '[:lower:]')"
+  local _port="${LISTEN##*:}"
+  local _port_suffix=""
+  [ "$_port" != "80" ] && _port_suffix=":$_port"
   log "Done."
-  log "Web UI:        http://$(hostname -I | awk '{print $1}'):${LISTEN##*:}/"
-  log "Kiosk view:    http://$(hostname -I | awk '{print $1}'):${LISTEN##*:}/kiosk"
+  log "Web UI:        http://$_ip${_port_suffix}/"
+  log "  mDNS:        http://${_hostname}.local${_port_suffix}/"
+  log "Kiosk view:    http://$_ip${_port_suffix}/kiosk"
+  log "Music share:   smb://$_ip/Music"
+  log "  mDNS:        smb://${_hostname}.local/Music"
   log "Edit config:   $CONFIG_DIR/config.json"
   log "Logs:          journalctl -u oxide-player -f"
+  log ""
+  log "Copy your music files into the shared Music folder, then scan in the web UI:"
+  log "  Settings → Music library sources → Rescan library"
 }
 
 check_linux() {
@@ -446,7 +574,7 @@ main() {
   check_linux
   detect_os
   apt_install curl jq git build-essential pkg-config libssl-dev \
-              libasound2-dev alsa-utils mpd ffmpeg
+              libasound2-dev alsa-utils mpd mpc ffmpeg samba avahi-daemon
   check_dependencies
   ensure_camilladsp
   fetch_source
@@ -454,6 +582,8 @@ main() {
   build_frontend
   setup_user_dirs
   setup_asound
+  setup_samba
+  setup_avahi
   write_mpd_config
   write_camilladsp_config
   write_oxide_config
