@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.11.1...oxide-player-v0.12.0) (2026-07-31)
+
+
+### Features
+
+* radio ([6dd7532](https://github.com/OxideAI/oxide-player/commit/6dd7532cd164fb2f4c9bd2fb301d4a75e7348c92))
+
 ## [0.11.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.11.0...oxide-player-v0.11.1) (2026-07-31)
 
 
