@@ -123,7 +123,7 @@ impl BluetoothManager {
 
             // Fetch all relevant properties
             let name = device.name().await.ok().flatten();
-            let alias = device.alias().await.ok().flatten();
+            let alias = device.alias().await.ok().and_then(|s| Some(s));
             let class = device.class().await.ok().flatten();
             let icon = device.icon().await.ok().flatten();
             let rssi = device.rssi().await.ok().flatten();
@@ -313,7 +313,7 @@ impl BluetoothManager {
     /// Set a user-friendly alias (name) for a paired device.
     pub async fn set_alias(&self, address: &str, name: &str) -> Result<()> {
         let device = self.get_device(address).await?;
-        device.set_alias(name).await
+        device.set_alias(name.to_string()).await
             .with_context(|| format!("set alias for {address}"))?;
 
         // Update cache
@@ -449,7 +449,7 @@ impl BluetoothManager {
                 };
 
                 let name = device.name().await.ok().flatten();
-                let alias = device.alias().await.ok().flatten();
+                let alias = device.alias().await.ok().and_then(|s| Some(s));
                 let class = device.class().await.ok().flatten();
                 let icon = device.icon().await.ok().flatten();
                 let rssi = device.rssi().await.ok().flatten();
