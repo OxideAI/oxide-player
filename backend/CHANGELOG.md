@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.10.0...oxide-player-v0.11.0) (2026-07-31)
+
+
+### Features
+
+* **bluetooth:** add wake & connect for sleeping speakers ([d5dbf4c](https://github.com/OxideAI/oxide-player/commit/d5dbf4c40ab49e194484ca8f3e629e11b8b4e92b))
+
+
+### Bug Fixes
+
+* surface unreadable library dirs + add install --fix-perms ([dac2a36](https://github.com/OxideAI/oxide-player/commit/dac2a36e1b7190d615e3803152057588c9ab0b41))
+
 ## [0.10.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.9.0...oxide-player-v0.10.0) (2026-07-31)
 
 
