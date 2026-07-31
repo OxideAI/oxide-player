@@ -131,12 +131,30 @@ fn is_ignored(name: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| matches_glob(name, p))
 }
 
-fn walk(dir: &Path, files: &mut Vec<PathBuf>, cues: &mut Vec<PathBuf>) {
+/// Recursively collect audio files and CUE sheets under `dir`, honouring
+/// `.mpdignore`. Directories that cannot be read (permissions, I/O errors) are
+/// pushed into `unreadable` instead of being silently skipped, so a broken
+/// library tree never presents as an empty library with no diagnostics.
+fn walk(
+    dir: &Path,
+    files: &mut Vec<PathBuf>,
+    cues: &mut Vec<PathBuf>,
+    unreadable: &mut Vec<PathBuf>,
+) {
     let patterns = load_mpdignore(dir);
 
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(e) => {
+            tracing::warn!(
+                "cannot read library directory {}: {e} — tracks under it will \
+                 be missing; check ownership/permissions (service user must \
+                 be able to read the library)",
+                dir.display()
+            );
+            unreadable.push(dir.to_path_buf());
+            return;
+        }
     };
     for entry in entries.flatten() {
         let p = entry.path();
@@ -180,7 +198,7 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>, cues: &mut Vec<PathBuf>) {
             if meta.file_type().is_symlink() {
                 continue;
             }
-            walk(&p, files, cues);
+            walk(&p, files, cues, unreadable);
         } else if is_audio(&p) {
             files.push(p);
         } else if is_cue(&p) {
@@ -362,12 +380,21 @@ pub fn scan(
 ) -> AppResult<u64> {
     let mut files = Vec::new();
     let mut cues = Vec::new();
+    let mut unreadable = Vec::new();
     for d in dirs {
         if d.exists() {
-            walk(d, &mut files, &mut cues);
+            walk(d, &mut files, &mut cues, &mut unreadable);
         } else {
             tracing::warn!("library dir does not exist: {}", d.display());
         }
+    }
+    if !unreadable.is_empty() {
+        tracing::warn!(
+            "scanned with {} unreadable director{} — fix permissions and rescan \
+             to bring those tracks in",
+            unreadable.len(),
+            if unreadable.len() == 1 { "y" } else { "ies" }
+        );
     }
 
     let seen: HashSet<PathBuf> = files.iter().cloned().collect();
@@ -990,11 +1017,62 @@ mod tests {
 
         let mut files = Vec::new();
         let mut cues = Vec::new();
-        walk(&dir, &mut files, &mut cues);
+        let mut unreadable = Vec::new();
+        walk(&dir, &mut files, &mut cues, &mut unreadable);
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|p| p.ends_with("track.flac")));
         assert!(files.iter().any(|p| p.ends_with("deep.flac")));
+        assert!(unreadable.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Repro for the "empty library" bug: an album folder the scanner cannot
+    /// read (e.g. mode 700 owned by root after a sudo copy — the oxide service
+    /// user and MPD can't enter it) used to be silently skipped, so a full
+    /// music folder scanned as 0 tracks with no warning at all. The scanner
+    /// must surface unreadable directories so the operator can see the cause.
+    #[test]
+    fn walk_reports_unreadable_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("blocked/sub")).unwrap();
+        std::fs::write(dir.path().join("blocked/sub/hidden.flac"), b"").unwrap();
+        std::fs::write(dir.path().join("visible.flac"), b"").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                dir.path().join("blocked"),
+                std::fs::Permissions::from_mode(0o000),
+            )
+            .unwrap();
+        }
+
+        let mut files = Vec::new();
+        let mut cues = Vec::new();
+        let mut unreadable = Vec::new();
+        walk(dir.path(), &mut files, &mut cues, &mut unreadable);
+
+        // Readable siblings always scan.
+        assert!(files.iter().any(|p| p.ends_with("visible.flac")));
+
+        // When permissions are enforced (not running as root), the unreadable
+        // folder must be reported instead of silently skipped, and its tracks
+        // must not appear.
+        if std::fs::read_dir(dir.path().join("blocked")).is_err() {
+            assert_eq!(unreadable, vec![dir.path().join("blocked")]);
+            assert!(!files.iter().any(|p| p.ends_with("hidden.flac")));
+        }
+
+        // Restore perms so tempdir cleanup can remove the tree.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                dir.path().join("blocked"),
+                std::fs::Permissions::from_mode(0o755),
+            );
+        }
     }
 
     #[test]
@@ -1011,10 +1089,12 @@ mod tests {
 
         let mut files = Vec::new();
         let mut cues = Vec::new();
-        walk(&dir, &mut files, &mut cues);
+        let mut unreadable = Vec::new();
+        walk(&dir, &mut files, &mut cues, &mut unreadable);
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|p| p.ends_with("track.flac")));
         assert!(files.iter().any(|p| p.ends_with("deep.flac")));
+        assert!(unreadable.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

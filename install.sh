@@ -34,6 +34,7 @@ BUILD_DIR="${BUILD_DIR:-/tmp/oxide-player-build}"
 
 # ---- CLI / mode ------------------------------------------------------------
 update_mode=false
+fix_perms_mode=false
 
 show_usage() {
   cat <<'EOF'
@@ -44,6 +45,9 @@ Install or update oxide-player on a Debian-based system.
 Options:
   --update     Replace binary + frontend only (skip system setup).
                Fetches the latest prebuilt release package.
+  --fix-perms  Repair music library ownership/permissions so the service
+               user and MPD can read it (fixes a silently empty library
+               after music was copied with root ownership, e.g. sudo).
   --help, -h   Show this help.
 
 Environment variables (all optional):
@@ -57,6 +61,7 @@ EOF
 while [ $# -gt 0 ]; do
   case "${1:-}" in
     --update) update_mode=true ;;
+    --fix-perms) fix_perms_mode=true ;;
     --help|-h) show_usage ;;
     *) warn "Unknown option: $1 (try --help)" ;;
   esac
@@ -259,6 +264,13 @@ setup_user_dirs() {
   run mkdir -p "$DATA_DIR/covers" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
   run chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
   run chown -R "$SERVICE_USER:$SERVICE_USER" "$MPD_MUSIC_DIR"
+  # Normalize the music tree so the service user AND MPD (a separate `mpd`
+  # system user) can traverse and read it. Non-destructive — only adds
+  # read/traverse bits — but repairs trees copied with root ownership and
+  # mode 700, which would otherwise scan as an empty library (the scanner
+  # reports those as "cannot read library directory" warnings in the log).
+  run chmod -R u+rwX,go+rX "$MPD_MUSIC_DIR" 2>/dev/null || \
+    warn "could not normalize permissions on $MPD_MUSIC_DIR"
   run chmod 755 "$DATA_DIR"
 }
 
@@ -603,6 +615,25 @@ finish() {
   log ""
   log "Copy your music files into the shared Music folder, then scan in the web UI:"
   log "  Settings → Music library sources → Rescan library"
+  log ""
+  log "If the library ever looks empty despite music being present, check:"
+  log "  journalctl -u oxide-player | grep 'cannot read library directory'"
+  log "That means files were copied with root ownership. Fix with:"
+  log "  sudo bash install.sh --fix-perms   (then rescan)"
+}
+
+# Repair the music library tree so the service user and MPD can read it. This
+# is the exact fix for a library that silently scans as empty because albums
+# were copied as root (mode 700). Safe to run at any time — chown + a
+# non-destructive chmod that only adds read/traverse bits.
+fix_music_perms() {
+  need_root
+  check_linux
+  [ -d "$MPD_MUSIC_DIR" ] || die "Music dir $MPD_MUSIC_DIR does not exist — nothing to fix."
+  log "Repairing music library permissions at $MPD_MUSIC_DIR"
+  run chown -R "$SERVICE_USER:$SERVICE_USER" "$MPD_MUSIC_DIR"
+  run chmod -R u+rwX,go+rX "$MPD_MUSIC_DIR"
+  log "Done. Rescan the library in the web UI (Settings → Music library sources → Rescan)"
 }
 
 check_linux() {
@@ -642,6 +673,10 @@ check_dependencies() {
 main() {
   if $update_mode; then
     do_update
+    return
+  fi
+  if $fix_perms_mode; then
+    fix_music_perms
     return
   fi
   need_root
