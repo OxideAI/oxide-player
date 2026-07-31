@@ -147,6 +147,16 @@ Minimum fields:
 - **Settings / DSP:** edit the CamillaDSP profile and toggle output devices.
 - **Kiosk:** open `/kiosk` (or provision the optional systemd kiosk service).
 
+## Development
+
+- **Cargo workspace** — `cargo build` / `cargo test` work from the repo root **or** `backend/`.
+  The binary lands at `target/debug/oxide-player` (repo root).
+- **No Tailwind / no UI framework** — frontend uses **CSS Modules only**.
+- **Bug rule** — for every bug, first write a test that reproduces it, then fix. The test
+  must be added to the suite that runs before pushing to `main`.
+- **MPD gotchas** (see ARCHITECTURE.md): MPD 0.24 has no `playid` (use 0-based position),
+  shuffle = MPD `random` mode toggle, queue remove = `delete <pos>`, CUE albums share one URI.
+
 ## Documentation
 
 Technical and developer documentation lives in [`ARCHITECTURE.md`](ARCHITECTURE.md):
