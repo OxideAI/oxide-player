@@ -4,6 +4,7 @@ import { usePlayerStatus } from './ws'
 import { NowPlaying } from './components/NowPlaying'
 import { KioskView } from './components/KioskView'
 import { LibraryView } from './components/LibraryView'
+import { RadioView } from './components/RadioView'
 import { ConfigView } from './components/ConfigView'
 import { PlaylistsView } from './components/PlaylistsView'
 import { Reveal } from './components/Reveal'
@@ -16,11 +17,12 @@ import { SearchBar } from './components/SearchBar'
 import { SearchView } from './components/SearchView'
 import styles from './App.module.css'
 
-type Tab = 'library' | 'playlists' | 'settings'
+type Tab = 'library' | 'playlists' | 'settings' | 'radio'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'library', label: 'Library' },
   { id: 'playlists', label: 'Playlists' },
+  { id: 'radio', label: 'Radio' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -29,7 +31,7 @@ interface Route {
   album: string | null
 }
 
-function parsePath(): Route {
+export function parsePath(): Route {
   const raw = window.location.pathname.replace(/^\/+/, '')
   const parts = raw.split('/').filter(Boolean)
   const head = parts[0] as Tab | undefined
@@ -46,7 +48,7 @@ function parsePath(): Route {
   return { tab: 'library', album: null }
 }
 
-function buildPath(route: Route): string {
+export function buildPath(route: Route): string {
   if (route.tab === 'library' && route.album) return `/library/${encodeURIComponent(route.album)}`
   return `/${route.tab}`
 }
@@ -316,6 +318,12 @@ export function App() {
           />
         )}
         {tab === 'playlists' && <PlaylistsView onOpenAlbum={openAlbum} />}
+        {tab === 'radio' && (
+          <RadioView
+            nowPlayingUri={status?.current_song?.uri ?? null}
+            isPlaying={status?.state === 'playing'}
+          />
+        )}
         {tab === 'settings' && <ConfigView />}
         {searchQuery && (
           <SearchView

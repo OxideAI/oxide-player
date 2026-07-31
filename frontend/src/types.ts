@@ -172,6 +172,14 @@ export interface DeviceConfig {
   include_warning?: boolean
 }
 
+/** A user-managed internet radio station (persisted on the server). */
+export interface RadioStation {
+  id: string
+  name: string
+  url: string
+  homepage: string | null
+}
+
 export interface Config {
   mpd_host: string
   mpd_port: number

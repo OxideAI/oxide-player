@@ -44,6 +44,9 @@ pub struct MpdStatus {
     pub duration: f64,
     pub error: Option<String>,
     pub current_uri: Option<String>,
+    /// The `Title` tag of the current song. For http(s) streams MPD fills this
+    /// from the stream's icy-metadata, i.e. the live "now playing" track name.
+    pub current_title: Option<String>,
     pub current_track: Option<u32>,
     pub current_id: Option<u64>,
     pub random: bool,
@@ -235,7 +238,7 @@ impl Mpd {
         let error: Option<String> = frame.get("error");
         let random = frame.get("random").as_deref() == Some("1");
 
-        let (current_uri, current_track, current_id) = {
+        let (current_uri, current_track, current_id, current_title) = {
             // Check if current-song fields exist in the status frame
             let has_current = frame.get("song").is_some();
             drop(frame); // release ownership so we can borrow client again
@@ -245,12 +248,14 @@ impl Mpd {
                     Some(s) => {
                         let (_, track) = s.song.number();
                         let track = if track == 0 { None } else { Some(track as u32) };
-                        (Some(s.song.url), track, Some(s.id.0))
+                        // Capture before the partial move of `s.song.url` below.
+                        let current_title = s.song.title().map(|t| t.to_string());
+                        (Some(s.song.url), track, Some(s.id.0), current_title)
                     }
-                    None => (None, None, None),
+                    None => (None, None, None, None),
                 }
             } else {
-                (None, None, None)
+                (None, None, None, None)
             }
         };
         tracing::debug!(has_current = current_uri.is_some(), ?current_uri, "mpd status");
@@ -264,6 +269,7 @@ impl Mpd {
             current_uri,
             current_track,
             current_id,
+            current_title,
             random,
         })
     }

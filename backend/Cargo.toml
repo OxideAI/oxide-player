@@ -26,6 +26,7 @@ anyhow = "1"
 image = "0.25"
 rustfft = "6"
 cpal = "0.18"
+uuid = { version = "1", features = ["v4", "serde"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17", features = ["bluetoothd", "serde"] }
 

@@ -7,6 +7,7 @@ mod error;
 mod visualizer;
 mod library;
 mod mpd;
+mod radio;
 mod state;
 mod types;
 

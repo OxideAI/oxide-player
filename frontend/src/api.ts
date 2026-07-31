@@ -9,6 +9,7 @@ import type {
   PlayerStatus,
   QueueItem,
   QueueResponse,
+  RadioStation,
   ScanResultsResponse,
   Track,
 } from './types'
@@ -176,6 +177,23 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     }).then((r) => json<unknown>(r)),
+
+  // —— Radio stations ——
+  listRadio: () => fetch('/api/radio').then((r) => json<RadioStation[]>(r)),
+  addRadio: (name: string, url: string) =>
+    fetch('/api/radio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, url }),
+    }).then((r) => json<RadioStation>(r)),
+  deleteRadio: (id: string) =>
+    fetch(`/api/radio/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) =>
+      json<unknown>(r),
+    ),
+  playRadio: (id: string) =>
+    fetch(`/api/radio/${encodeURIComponent(id)}/play`, { method: 'POST' }).then((r) =>
+      json<unknown>(r),
+    ),
 
   // `tracks` is one or more `PlayRef` envelopes (a single track or a whole
   // album), wrapped in `{ tracks }` to match the add-to-playlist envelope.

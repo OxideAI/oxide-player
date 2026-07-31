@@ -1,0 +1,218 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+  max-width: 600px;
+}
+
+.h {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.eyebrow {
+  display: inline-block;
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+
+.dim {
+  color: var(--text-dim);
+  font-size: 0.92rem;
+}
+
+.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--r-sm);
+  font-size: 0.9rem;
+  border: 1px solid var(--danger);
+}
+
+.addRow {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.input {
+  flex: 1;
+  min-width: 200px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  padding: 0.65rem 1rem;
+  color: var(--text);
+  font-size: 0.92rem;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.06);
+  transition: border-color 0.45s var(--ease), background 0.45s var(--ease);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.save {
+  background: conic-gradient(from 180deg, var(--accent), var(--accent-2), var(--accent));
+  color: var(--bg);
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 0.65rem 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: var(--glow-accent);
+  transition: transform 0.5s var(--ease), box-shadow 0.5s var(--ease);
+}
+.save:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 20px 50px -16px rgba(110, 231, 183, 0.6);
+}
+.save:active {
+  transform: scale(0.97);
+}
+.save:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.8rem 1rem;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-glow);
+  font-size: 0.95rem;
+  transition: border-color 0.45s var(--ease), transform 0.45s var(--ease),
+    background 0.45s var(--ease);
+}
+.row:hover {
+  border-color: var(--hairline-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+.rowPlaying {
+  border-color: var(--accent);
+}
+
+.ident {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.nameBtn {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  padding: 0;
+}
+.nameBtn:hover {
+  color: var(--accent);
+}
+
+.url {
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 0.35rem;
+  animation: oxPulse 1.6s var(--ease) infinite;
+}
+
+.actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.iconBtn,
+.iconBtnDanger {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  border-radius: var(--r-pill);
+  padding: 0.4rem 0.9rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color 0.45s var(--ease), color 0.45s var(--ease),
+    background 0.45s var(--ease);
+}
+.iconBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.iconBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  border-color: var(--hairline);
+  color: var(--text-dim);
+}
+.iconBtnDanger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+@keyframes oxPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liveDot {
+    animation: none;
+  }
+}

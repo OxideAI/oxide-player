@@ -1,6 +1,7 @@
 use crate::devices::config_fragment::{
     validate_config, DeviceConfig as DeviceConfigDto,
 };
+use crate::radio::RadioStation;
 use crate::dsp::profile::DspProfile;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -66,6 +67,10 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/devices/restart-mpd", post(restart_mpd))
         .route("/api/devices/{id}/enable", post(enable_device))
         .route("/api/devices/{id}/disable", post(disable_device))
+        .route("/api/radio", get(radio_list))
+        .route("/api/radio", post(radio_add))
+        .route("/api/radio/{id}", delete(radio_delete))
+        .route("/api/radio/{id}/play", post(radio_play))
         .route("/api/dsp", get(dsp_get))
         .route("/api/dsp", put(dsp_set))
         .route("/api/playlists", get(playlists))
@@ -1111,6 +1116,53 @@ async fn clear_queue(State(s): State<AppState>) -> AppResult<StatusCode> {
     }
     s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
+}
+
+// ---- Radio stations ---- ///
+
+#[derive(Deserialize)]
+struct AddRadioBody {
+    name: String,
+    url: String,
+    homepage: Option<String>,
+}
+
+/// List all user-managed radio stations.
+async fn radio_list(State(s): State<AppState>) -> AppResult<Json<Vec<RadioStation>>> {
+    Ok(Json(s.radio().list()))
+}
+
+/// Add a radio station (validated: non-empty name, http(s) URL, no dupes).
+async fn radio_add(
+    State(s): State<AppState>,
+    Json(b): Json<AddRadioBody>,
+) -> AppResult<(StatusCode, Json<RadioStation>)> {
+    let station = s.radio().add(&b.name, &b.url, b.homepage)?;
+    Ok((StatusCode::CREATED, Json(station)))
+}
+
+/// Remove a radio station by id.
+async fn radio_delete(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    s.radio().remove(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Replace the play queue with the station's stream and start playing it.
+/// Mirrors `clear_play` (clear → add → play) but the station URL is the MPD
+/// URI itself, so `resolve_play_uri` is bypassed.
+async fn radio_play(State(s): State<AppState>, Path(id): Path<String>) -> AppResult<StatusCode> {
+    let station = s
+        .radio()
+        .get(&id)
+        .ok_or_else(|| AppError::NotFound(format!("radio station {id}")))?;
+    s.mpd().clear().await?;
+    s.mpd().play_uri(&station.url).await?;
+    s.mpd().set_active_track(None).await;
+    s.broadcast_queue_now().await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

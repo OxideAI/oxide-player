@@ -4,6 +4,7 @@ use crate::devices::config_fragment::ConfigFragmentManager;
 use crate::dsp::DspManager;
 use crate::library::LibraryDb;
 use crate::mpd::{Mpd, MpdStatus};
+use crate::radio::RadioManager;
 use crate::types::{PlaybackState, PlayerStatus, QueueResponse, StatusEvent};
 use crate::visualizer::VisualizerAnalyzer;
 use std::path::PathBuf;
@@ -23,6 +24,7 @@ struct Inner {
     pub mpd: Mpd,
     pub bluetooth: BluetoothManager,
     pub visualizer: VisualizerAnalyzer,
+    pub radio: RadioManager,
     pub status: RwLock<PlayerStatus>,
     /// Push channel carrying player-status and queue changes to WebSocket
     /// clients. A late-joining client receives the current snapshot on connect
@@ -56,6 +58,7 @@ impl AppState {
         let (event_tx, _) = broadcast::channel(32);
         let device_configs = ConfigFragmentManager::new(data_dir.join("mpd-outputs.d"))
             .expect("create mpd-outputs.d directory");
+        let radio = RadioManager::load(&data_dir);
         let state = AppState {
             inner: Arc::new(Inner {
                 config: RwLock::new(config),
@@ -65,6 +68,7 @@ impl AppState {
                 mpd,
                 bluetooth,
                 visualizer,
+                radio,
                 status: RwLock::new(PlayerStatus::stopped()),
                 event_tx,
                 scan_lock: tokio::sync::Mutex::new(()),
@@ -109,6 +113,10 @@ impl AppState {
 
     pub fn visualizer(&self) -> &VisualizerAnalyzer {
         &self.inner.visualizer
+    }
+
+    pub fn radio(&self) -> &RadioManager {
+        &self.inner.radio
     }
 
     pub async fn config(&self) -> Config {
@@ -345,20 +353,32 @@ impl AppState {
         // Fallback: MPD is playing a song but we couldn't resolve it from the
         // library DB — still return a minimal TrackRef so the UI doesn't show
         // "Nothing playing" for a song that is clearly audible.
-        track.or_else(|| uri.map(|u| crate::types::TrackRef {
-            id: 0,
-            uri: u,
-            title: None,
-            artist: None,
-            album: None,
-            has_cover: false,
-            cover_key: None,
-            format: None,
-            sample_rate: None,
-            bit_depth: None,
-            channels: None,
-            duration: None,
-            cue_start: None,
+        track.or_else(|| uri.map(|u| {
+            // Streams (http(s) URLs) never resolve from the library DB. Surface
+            // the live icy-metadata title MPD reports and the station name as
+            // artist so NowPlaying shows something meaningful instead of a
+            // bare URL.
+            let (title, artist) = if u.starts_with("http://") || u.starts_with("https://") {
+                let station = self.inner.radio.by_url(&u);
+                (ms.current_title.clone(), station.map(|s| s.name))
+            } else {
+                (None, None)
+            };
+            crate::types::TrackRef {
+                id: 0,
+                uri: u,
+                title,
+                artist,
+                album: None,
+                has_cover: false,
+                cover_key: None,
+                format: None,
+                sample_rate: None,
+                bit_depth: None,
+                channels: None,
+                duration: None,
+                cue_start: None,
+            }
         }))
     }
 
@@ -463,6 +483,7 @@ mod tests {
             current_uri: Some("Music/Album.cue/track0002".to_string()),
             current_track: None,
             current_id: Some(42),
+            current_title: None,
             random: false,
         };
 
@@ -524,6 +545,7 @@ mod tests {
             ),
             current_track: Some(9),
             current_id: Some(19),
+            current_title: None,
             random: false,
         };
 
@@ -536,6 +558,41 @@ mod tests {
         assert_eq!(song.album.as_deref(), Some("Cesaria Evora &"));
         assert!(song.has_cover);
         assert_eq!(song.cover_key.as_deref(), Some("al_coverkey"));
+    }
+
+    /// Streams (http(s) URLs) never resolve from the library DB. The fallback
+    /// TrackRef must carry the icy-metadata title MPD reports and the matched
+    /// station's name as artist so NowPlaying shows a meaningful row.
+    #[tokio::test]
+    async fn resolve_current_song_stream_falls_back_to_station() {
+        let (state, _db) = test_state().await;
+
+        // The default-config radio store is seeded with JFK Ibiza, whose URL
+        // is exactly this one.
+        let ms = MpdStatus {
+            state: PlaybackState::Playing,
+            volume: Some(80),
+            elapsed: 0.0,
+            duration: 0.0,
+            error: None,
+            current_uri: Some("https://stream.aiir.com/7dsjltmny8cvv".to_string()),
+            current_track: None,
+            current_id: Some(7),
+            current_title: Some("Kool Tune - Some Artist".to_string()),
+            random: false,
+        };
+
+        let song = state
+            .resolve_current_song(&ms)
+            .await
+            .expect("stream URI must resolve to a fallback TrackRef");
+
+        assert_eq!(song.id, 0, "streams are not DB tracks");
+        assert_eq!(song.uri, "https://stream.aiir.com/7dsjltmny8cvv");
+        assert_eq!(song.title.as_deref(), Some("Kool Tune - Some Artist"));
+        assert_eq!(song.artist.as_deref(), Some("JFK Ibiza"));
+        assert_eq!(song.duration, None, "streams have no duration");
+        assert!(!song.has_cover);
     }
 
     /// Regression for #3: a freshly subscribed broadcast receiver must receive

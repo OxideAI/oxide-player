@@ -160,6 +160,9 @@ export function NowPlaying({
             onPointerUp={onScrubUp}
             onPointerCancel={onScrubUp}
             onKeyDown={(e) => {
+              // Streams (duration 0) can't seek; sending seekcur against one
+              // raises an MPD error that surfaces as a status banner.
+              if (duration <= 0) return
               if (e.key === 'ArrowRight') onSeek(Math.min(duration, displayElapsed + 5))
               if (e.key === 'ArrowLeft') onSeek(Math.max(0, displayElapsed - 5))
             }}
@@ -167,7 +170,11 @@ export function NowPlaying({
             <div className={styles.progressFill} />
             <div className={styles.progressThumb} />
           </div>
-          <span className={styles.time}>{fmtTime(duration)}</span>
+          {duration > 0 ? (
+            <span className={styles.time}>{fmtTime(duration)}</span>
+          ) : (
+            <span className={styles.live}>LIVE</span>
+          )}
         </div>
       </div>
 
