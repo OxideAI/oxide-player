@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.11.0...oxide-player-v0.11.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **bluetooth:** dedupe MPD output fragments by MAC ([2b9fb27](https://github.com/OxideAI/oxide-player/commit/2b9fb2716bfccf4ee9e1606fe17bbb6d6a6e1f59))
+
 ## [0.11.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.10.0...oxide-player-v0.11.0) (2026-07-31)
 
 
