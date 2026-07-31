@@ -356,6 +356,73 @@ impl BluetoothManager {
         Ok(())
     }
 
+    /// Wake and connect to a paired Bluetooth device that may be in sleep/standby mode.
+    /// 
+    /// Many Bluetooth speakers go into deep sleep after being idle. This method
+    /// attempts to connect with retry logic and delays to give the device time
+    /// to wake up and respond.
+    /// 
+    /// The algorithm:
+    /// 1. First attempt to connect immediately (may wake the device)
+    /// 2. If that fails, wait 2 seconds and retry (device may be waking up)
+    /// 3. If that fails, wait 5 seconds and retry one more time
+    /// 4. On success, update the cache and emit Connected event
+    pub async fn wake_and_connect(&self, address: &str) -> Result<()> {
+        let device = self.get_device(address).await?;
+        
+        // Attempt 1: immediate connect (may wake the device)
+        let mut last_err = match device.connect().await {
+            Ok(()) => {
+                // Success on first try!
+                if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+                    entry.connected = true;
+                }
+                self.emit(BtEvent {
+                    kind: BtEventKind::Connected,
+                    device: self.device_or_placeholder(address).await,
+                });
+                return Ok(());
+            }
+            Err(e) => e,
+        };
+        
+        // Attempt 2: wait 2 seconds, then retry
+        tracing::info!("Wake attempt 1 failed for {address}, waiting 2s before retry: {last_err}");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        
+        last_err = match device.connect().await {
+            Ok(()) => {
+                if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+                    entry.connected = true;
+                }
+                self.emit(BtEvent {
+                    kind: BtEventKind::Connected,
+                    device: self.device_or_placeholder(address).await,
+                });
+                return Ok(());
+            }
+            Err(e) => e,
+        };
+        
+        // Attempt 3: wait 5 seconds, then final retry
+        tracing::info!("Wake attempt 2 failed for {address}, waiting 5s before final retry: {last_err}");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        
+        device.connect().await
+            .with_context(|| format!("wake and connect to {address} after retries"))?;
+        
+        if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
+            entry.connected = true;
+        }
+        
+        self.emit(BtEvent {
+            kind: BtEventKind::Connected,
+            device: self.device_or_placeholder(address).await,
+        });
+        
+        Ok(())
+    }
+
     // -- queries --
 
     /// Check whether Bluetooth is available (adapter reachable).

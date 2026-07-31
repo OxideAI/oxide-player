@@ -18,6 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/bluetooth/scan/results", get(bluetooth_scan_results))
         .route("/api/bluetooth/pair", post(bluetooth_pair))
         .route("/api/bluetooth/connect", post(bluetooth_connect))
+        .route("/api/bluetooth/wake-connect", post(bluetooth_wake_connect))
         .route("/api/bluetooth/disconnect", post(bluetooth_disconnect))
         .route("/api/bluetooth/forget", post(bluetooth_forget))
         .route("/api/bluetooth/remove-output", post(bluetooth_remove_output))
@@ -155,6 +156,36 @@ async fn bluetooth_connect(
     Json(body): Json<AddressBody>,
 ) -> AppResult<StatusCode> {
     bt_available(s.bluetooth().connect(&body.address).await)?;
+
+    // Create (or update) the MPD output config fragment for this BT speaker.
+    let devices = s.bluetooth().list_devices().await;
+    if let Some(device) = devices.iter().find(|d| d.address == body.address) {
+        mpd_integration::create_fragment(
+            device,
+            s.device_configs(),
+            |pending| s.set_config_restart_pending(pending),
+        )
+        .map_err(|e| AppError::Bluetooth(e.to_string()))?;
+    }
+
+    Ok(StatusCode::OK)
+}
+
+/// `POST /api/bluetooth/wake-connect` — wake and connect to a paired device
+/// that may be in sleep/standby mode.
+///
+/// Many Bluetooth speakers go into deep sleep after being idle. This endpoint
+/// attempts to connect with retry logic and delays to give the device time
+/// to wake up and respond.
+///
+/// Also creates an MPD output config fragment for the speaker so it appears
+/// as an MPD output after a restart.
+/// Body: `{ "address": "XX:XX:XX:XX:XX:XX" }`.
+async fn bluetooth_wake_connect(
+    State(s): State<AppState>,
+    Json(body): Json<AddressBody>,
+) -> AppResult<StatusCode> {
+    bt_available(s.bluetooth().wake_and_connect(&body.address).await)?;
 
     // Create (or update) the MPD output config fragment for this BT speaker.
     let devices = s.bluetooth().list_devices().await;

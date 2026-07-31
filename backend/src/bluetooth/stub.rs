@@ -1,5 +1,5 @@
 use crate::bluetooth::input::BluetoothInputManager;
-use crate::bluetooth::types::{BtDevice, BtEvent, BtEventKind};
+use crate::bluetooth::types::{BtDevice, BtEvent};
 use anyhow::{bail, Result};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -99,6 +99,11 @@ impl BluetoothManager {
 
     /// Not supported on this platform.
     pub async fn test_connectivity(&self, _address: &str) -> Result<()> {
+        bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
+    }
+
+    /// Not supported on this platform.
+    pub async fn wake_and_connect(&self, _address: &str) -> Result<()> {
         bail!("Bluetooth is not supported on this platform (requires Linux + BlueZ)")
     }
 

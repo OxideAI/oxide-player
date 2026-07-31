@@ -527,6 +527,19 @@ function BluetoothSection() {
     }
   }, [loadDevices])
 
+  const handleWakeConnect = useCallback(async (address: string) => {
+    setBusyAddr(address)
+    setBtError(null)
+    try {
+      await api.btWakeConnect(address)
+      await loadDevices()
+    } catch (e) {
+      setBtError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyAddr(null)
+    }
+  }, [loadDevices])
+
   const handleDisconnect = useCallback(async (address: string) => {
     setBusyAddr(address)
     setBtError(null)
@@ -652,8 +665,7 @@ function BluetoothSection() {
                   {d.rssi != null && <span> RSSI: {d.rssi}</span>}
                 </div>
               </div>
-              <div className={styles.btActions}>
-                {d.connected ? (
+              <div className={styles.btActions}>                {d.connected ? (
                   <>
                     <button
                       className={styles.btnGhost}
@@ -678,6 +690,14 @@ function BluetoothSection() {
                       onClick={() => handleConnect(d.address)}
                     >
                       {isBusy ? '…' : 'Connect'}
+                    </button>
+                    <button
+                      className={styles.on}
+                      disabled={isBusy}
+                      onClick={() => handleWakeConnect(d.address)}
+                      title="Wake speaker from sleep and connect (with retries)"
+                    >
+                      {isBusy ? '…' : 'Wake & Connect'}
                     </button>
                     <button
                       className={styles.btnGhost}

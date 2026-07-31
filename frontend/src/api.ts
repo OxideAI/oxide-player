@@ -281,6 +281,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ address }),
     }).then((r) => json<unknown>(r)),
+  btWakeConnect: (address: string) =>
+    fetch('/api/bluetooth/wake-connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    }).then((r) => json<unknown>(r)),
   btDisconnect: (address: string) =>
     fetch('/api/bluetooth/disconnect', {
       method: 'POST',
