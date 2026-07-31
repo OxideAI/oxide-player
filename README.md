@@ -3,7 +3,7 @@
 An audiophile music server for your local library. A Rust backend wraps
 [MPD](https://www.musicpd.org/) (decode/transport) and
 [CamillaDSP](https://github.com/HEnquist/camilladsp) (resampling + parametric EQ) and
-serves a responsive **React** web UI — plus an optional full-screen kiosk view. One static
+serves a responsive **React** web UI, plus an optional full-screen kiosk view. One static
 binary, no runtime dependencies beyond MPD and CamillaDSP, designed to sit on a headless
 box feeding a USB DAC over your LAN.
 
@@ -23,16 +23,16 @@ controls over a JSON API.
 
 ## Features
 
-- **Library browser** — albums / artists / tracks with search and cover art.
-- **Now-playing bar** — play/pause/stop/next/prev, scrub, volume, and live format readout
-  (sample rate / bit depth / channels).
-- **Queue panel** — click-to-jump, **shuffle** toggle (MPD random mode), and per-track
+- **Library browser**: albums, artists, tracks with search and cover art.
+- **Now-playing bar**: play/pause/stop/next/prev, scrub, volume, and live format readout
+  (sample rate, bit depth, channels).
+- **Queue panel**: click-to-jump, **shuffle** toggle (MPD random mode), and per-track
   remove.
-- **Per-track menu** — play next, clear-and-play, add to playlist, file info.
-- **DSP** — bit-perfect passthrough, resampling presets, and per-device parametric EQ.
-- **Output devices** — enable/disable MPD outputs.
-- **Kiosk mode** — full-screen now-playing for an attached display.
-- **PWA** — installable to your home screen.
+- **Per-track menu**: play next, clear-and-play, add to playlist, file info.
+- **DSP**: bit-perfect passthrough, resampling presets, and per-device parametric EQ.
+- **Output devices**: enable/disable MPD outputs.
+- **Kiosk mode**: full-screen now-playing for an attached display.
+- **PWA**: installable to your home screen.
 
 ## Install
 
@@ -56,12 +56,12 @@ Kiosk view: `http://<server-ip>:8000/kiosk`
 Config: `/etc/oxide-player/config.json`
 Logs: `journalctl -u oxide-player -f`
 
-Install knobs can be overridden via environment variables — see `install.sh` for the full
+Install knobs can be overridden via environment variables; see `install.sh` for the full
 list (e.g. `MPD_MUSIC_DIR`, `LISTEN`, `BIN_DIR`, `DATA_DIR`).
 
 ### Upgrade
 
-The installer is idempotent — re-running it updates Oxide in place while preserving your
+The installer is idempotent; re-running it updates Oxide in place while preserving your
 config, library, and DSP settings.
 
 **Quick upgrade (re-run installer):**
@@ -141,18 +141,18 @@ Minimum fields:
 
 ## Usage
 
-- **Library:** browse albums/tracks, search, refresh the scan or re-scan cover art.
-- **Queue:** tap the **view queue** button in the player bar to open the queue; tap a track
+- **Library**: browse albums/tracks, search, refresh the scan or re-scan cover art.
+- **Queue**: tap the **view queue** button in the player bar to open the queue; tap a track
   to jump to it, tap ✕ to remove it. The shuffle 🔀 button toggles MPD random mode.
-- **Settings / DSP:** edit the CamillaDSP profile and toggle output devices.
-- **Kiosk:** open `/kiosk` (or provision the optional systemd kiosk service).
+- **Settings / DSP**: edit the CamillaDSP profile and toggle output devices.
+- **Kiosk**: open `/kiosk` (or provision the optional systemd kiosk service).
 
 ## Development
 
-- **Cargo workspace** — `cargo build` / `cargo test` work from the repo root **or** `backend/`.
+- **Cargo workspace**: `cargo build` / `cargo test` work from the repo root **or** `backend/`.
   The binary lands at `target/debug/oxide-player` (repo root).
-- **No Tailwind / no UI framework** — frontend uses **CSS Modules only**.
-- **Bug rule** — for every bug, first write a test that reproduces it, then fix. The test
+- **No Tailwind / no UI framework**: frontend uses **CSS Modules only**.
+- **Bug rule**: for every bug, first write a test that reproduces it, then fix. The test
   must be added to the suite that runs before pushing to `main`.
 - **MPD gotchas** (see ARCHITECTURE.md): MPD 0.24 has no `playid` (use 0-based position),
   shuffle = MPD `random` mode toggle, queue remove = `delete <pos>`, CUE albums share one URI.
