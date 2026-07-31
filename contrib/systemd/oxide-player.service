@@ -1,6 +1,6 @@
 [Unit]
 Description=oxide-player — audiophile MPD + CamillaDSP controller
-Documentation=https://github.com/your-org/oxide-player
+Documentation=https://github.com/OxideAI/oxide-player
 # Start only once MPD and CamillaDSP are ready.
 After=network-online.target mpd.service camilladsp.service
 Wants=mpd.service camilladsp.service
@@ -22,6 +22,12 @@ RestartSec=3
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=oxide-player
+# The default config binds 0.0.0.0:80. Ports below 1024 are privileged, so
+# grant the ambient capability that lets a non-root User=oxide bind to it.
+# install.sh keeps the same listen address; if you change `listen` to a
+# port >= 1024, drop these two lines (capability grant is then a no-op).
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
