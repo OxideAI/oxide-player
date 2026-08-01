@@ -280,10 +280,13 @@ impl VisualizerAnalyzer {
         Ok(())
     }
 }
+/// Match a configured capture device against CPAL's display name or stable ID.
+/// ALSA commonly exposes `hw:Loopback,1` as an ID while its display name is
+/// only `Loopback`.
+fn device_text_matches(requested: &str, candidate: &str) -> bool {
+    !requested.is_empty() && (candidate == requested || candidate.contains(requested))
+}
 
-/// Resolve the capture device by exact name, then by substring, then fall back
-/// to the platform default input device so the feature works with zero config
-/// on macOS (uses the default mic / loopback if one is set as default input).
 fn pick_device(
     host: &cpal::Host,
     name: &str,
@@ -298,12 +301,18 @@ fn pick_device(
     }
     if let Ok(devices) = host.input_devices().map(|d| d.collect::<Vec<_>>()) {
         for d in &devices {
-            if d.description().map(|desc| desc.name() == name).unwrap_or(false) {
+            if d.id()
+                .map(|id| device_text_matches(name, id.id()))
+                .unwrap_or(false)
+            {
                 return Ok(d.clone());
             }
         }
         for d in &devices {
-            if d.description().map(|desc| desc.name().contains(name)).unwrap_or(false) {
+            if d.description()
+                .map(|desc| device_text_matches(name, desc.name()))
+                .unwrap_or(false)
+            {
                 return Ok(d.clone());
             }
         }
@@ -423,7 +432,6 @@ fn compute_frame(
     let max_bin = half.min(fft_bins / 2).saturating_sub(1).max(min_bin);
     let log_min = (min_bin as f64).ln();
     let log_max = (max_bin as f64).ln();
-    let mut counts = vec![0usize; BANDS];
     for i in min_bin..=max_bin {
         let t = (i as f64).ln();
         let norm = if log_max > log_min {
@@ -433,17 +441,14 @@ fn compute_frame(
         };
         let band = (norm * (BANDS as f64 - 1.0)).round() as usize;
         let band = band.min(BANDS - 1);
-        // `mag[i]` is already scaled to a 0..1 amplitude; soft-clip to be safe.
-        let v = mag[i].clamp(0.0, 1.0);
-        bins[band] += v;
-        counts[band] += 1;
+        // Keep the strongest FFT bin in each musical band. Averaging dilutes
+        // narrow tonal peaks across hundreds of mostly-empty high-frequency
+        // bins, making real music appear motionless.
+        bins[band] = bins[band].max(mag[i].clamp(0.0, 1.0));
     }
-    for b in 0..BANDS {
-        if counts[b] > 0 {
-            bins[b] /= counts[b] as f32;
-        }
+    for value in &mut bins {
         // Perceptual lift: sqrt so quiet bands remain visible; clamp to 0..1.
-        bins[b] = bins[b].sqrt().clamp(0.0, 1.0);
+        *value = value.sqrt().clamp(0.0, 1.0);
     }
 
     SpectrumFrame { bins, level }
@@ -497,5 +502,29 @@ mod tests {
         let frame = compute_frame(&shared, &fft, 2048, &mut scratch);
         assert!(frame.level > 0.2);
         assert!(frame.bins.iter().any(|value| *value > 0.1));
+        assert!(frame.bins.iter().copied().fold(0.0, f32::max) > 0.5);
+    }
+
+    #[test]
+    fn fft_frame_keeps_high_frequency_peaks_visible() {
+        let shared = SharedState::new(4096, 1);
+        {
+            let mut samples = shared.samples.lock().unwrap();
+            for index in 0..4096 {
+                samples.push((index as f32 * 2.0 * std::f32::consts::PI * 12_000.0 / 44_100.0).sin() * 0.8);
+            }
+        }
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(4096);
+        let mut scratch = vec![Complex::new(0.0, 0.0); 4096];
+        let frame = compute_frame(&shared, &fft, 4096, &mut scratch);
+        assert!(frame.bins.iter().copied().fold(0.0, f32::max) > 0.5);
+    }
+
+    #[test]
+    fn configured_alsa_device_matches_its_cpal_id() {
+        assert!(device_text_matches("hw:Loopback,1", "hw:Loopback,1"));
+        assert!(device_text_matches("Loopback", "hw:Loopback,1"));
+        assert!(!device_text_matches("hw:Loopback,0", "hw:Loopback,1"));
     }
 }
