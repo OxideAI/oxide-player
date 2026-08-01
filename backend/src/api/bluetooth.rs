@@ -1,5 +1,6 @@
 use crate::bluetooth::mpd_integration;
 use crate::bluetooth::types::BtDevice;
+use crate::devices::include_injector::IncludeInjector;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use axum::extract::State;
@@ -39,6 +40,19 @@ fn bt_available<T>(r: anyhow::Result<T>) -> AppResult<T> {
             AppError::Bluetooth(msg)
         }
     })
+}
+
+/// Ensure MPD loads managed output fragments whenever a Bluetooth output is
+/// created. The installer sets `mpd_config`; source installs may intentionally
+/// omit it and retain the existing manual-include warning.
+async fn ensure_output_include(s: &AppState) -> AppResult<()> {
+    let cfg = s.config().await;
+    if let Some(path) = cfg.mpd_config {
+        IncludeInjector::new(path)
+            .ensure_include(s.device_configs().dir())
+            .map_err(|e| AppError::Bluetooth(e.to_string()))?;
+    }
+    Ok(())
 }
 
 // ── request / response types ──────────────────────────────────────
@@ -163,9 +177,14 @@ async fn bluetooth_connect(
         mpd_integration::create_fragment(
             device,
             s.device_configs(),
-            |pending| s.set_config_restart_pending(pending),
+            |pending| {
+                if pending {
+                    s.set_config_restart_pending(true);
+                }
+            },
         )
         .map_err(|e| AppError::Bluetooth(e.to_string()))?;
+        ensure_output_include(&s).await?;
     }
 
     Ok(StatusCode::OK)
@@ -193,9 +212,14 @@ async fn bluetooth_wake_connect(
         mpd_integration::create_fragment(
             device,
             s.device_configs(),
-            |pending| s.set_config_restart_pending(pending),
+            |pending| {
+                if pending {
+                    s.set_config_restart_pending(true);
+                }
+            },
         )
         .map_err(|e| AppError::Bluetooth(e.to_string()))?;
+        ensure_output_include(&s).await?;
     }
 
     Ok(StatusCode::OK)

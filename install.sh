@@ -503,6 +503,7 @@ state_file          "$DATA_DIR/mpd.state"
 bind_to_address     "127.0.0.1"
 port                "6600"
 auto_update         "yes"
+include             "$DATA_DIR/mpd-outputs.d/*.conf"
 
 audio_output {
     type          "alsa"
@@ -552,6 +553,7 @@ write_oxide_config() {
   "mpd_port": 6600,
   "listen": "$LISTEN",
   "data_dir": "$DATA_DIR",
+  "mpd_config": "/etc/mpd.conf",
   "mpd_music_directory": "$MPD_MUSIC_DIR",
   "library_dirs": $dirs_json,
   "static_dir": "$SHARE_DIR/dist",

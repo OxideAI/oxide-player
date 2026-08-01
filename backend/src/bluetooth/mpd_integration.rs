@@ -68,8 +68,12 @@ pub fn create_fragment(
     // "Device or resource busy" and the UI listed the speaker multiple times.
     // Dedupe by MAC: drop any existing fragment that references this address
     // under a different name before writing the canonical one.
+    let existing_configs = config_manager.list();
+    let existed = existing_configs
+        .iter()
+        .any(|c| c.name == cfg.name && c.device.as_deref() == Some(&addr));
     let mut removed = false;
-    for existing in config_manager.list() {
+    for existing in &existing_configs {
         if existing.device.as_deref() == Some(&addr) && existing.name != cfg.name {
             if config_manager.delete(&existing.name).is_ok() {
                 removed = true;
@@ -97,10 +101,6 @@ pub fn create_fragment(
     // Only prompt for an MPD restart when something actually changed (a stale
     // duplicate was removed or the canonical fragment didn't exist yet) — a
     // same-name reconnect must not nag for a pointless restart.
-    let existed = config_manager
-        .list()
-        .iter()
-        .any(|c| c.name == cfg.name && c.device.as_deref() == Some(&addr));
     let changed = removed || !existed;
     set_restart_pending(changed);
     tracing::info!(
@@ -219,6 +219,24 @@ mod tests {
         assert_eq!(list.len(), 1, "one MAC must yield exactly one fragment");
         assert_eq!(list[0].name, "HT-S400");
         assert!(list[0].device.as_deref().unwrap().contains(addr));
+    }
+
+    #[test]
+    fn create_fragment_marks_restart_pending_for_new_output() {
+        let (mgr, _dir) = mgr();
+        let pending = std::sync::atomic::AtomicBool::new(false);
+
+        create_fragment(
+            &device(Some("HT-S400"), "F8:AB:E5:A4:F2:16"),
+            &mgr,
+            |changed| pending.store(changed, std::sync::atomic::Ordering::Relaxed),
+        )
+        .unwrap();
+
+        assert!(
+            pending.load(std::sync::atomic::Ordering::Relaxed),
+            "a new MPD output requires a restart"
+        );
     }
 
     /// A device forgotten after a legacy duplicate state (two names, one MAC)

@@ -540,12 +540,18 @@ async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<crate::types::
 async fn enable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
     s.mpd().enable_output(id).await?;
     let _ = s.mpd().clear_error().await;
+    // Output mixer capabilities can change with the active device. Refresh and
+    // broadcast status now so clients show or hide volume controls without
+    // waiting for the next poller tick.
+    s.refresh_status().await;
     Ok(StatusCode::OK)
 }
 
 async fn disable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
     s.mpd().disable_output(id).await?;
     let _ = s.mpd().clear_error().await;
+    // Keep volume capability state synchronized after switching outputs.
+    s.refresh_status().await;
     Ok(StatusCode::OK)
 }
 
