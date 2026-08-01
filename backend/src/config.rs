@@ -126,10 +126,23 @@ impl Config {
         file: Option<&std::path::Path>,
         cli: &Cli,
     ) -> anyhow::Result<(Config, Option<PathBuf>)> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::load_from_dir(file, cli, &cwd)
+    }
+
+    /// Load configuration using an explicit base directory.
+    ///
+    /// This keeps callers that need a deterministic configuration root from
+    /// mutating the process-wide current directory.
+    pub(crate) fn load_from_dir(
+        file: Option<&std::path::Path>,
+        cli: &Cli,
+        base_dir: &Path,
+    ) -> anyhow::Result<(Config, Option<PathBuf>)> {
         let (mut config, resolved) = match file {
             Some(path) => (read_json_config(path)?, Some(path.to_path_buf())),
             None => {
-                let defaults = Config::default_config();
+                let defaults = Self::default_config_from_dir(base_dir);
                 let persisted = defaults.data_dir.join("config.json");
                 if persisted.exists() {
                     (read_json_config(&persisted)?, Some(persisted))
@@ -154,6 +167,9 @@ impl Config {
 
     pub(crate) fn default_config() -> Config {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::default_config_from_dir(&cwd)
+    }
+    fn default_config_from_dir(cwd: &Path) -> Config {
         Config {
             mpd_host: "127.0.0.1".to_string(),
             mpd_port: 6600,
@@ -340,14 +356,13 @@ mod tests {
     #[test]
     fn load_without_file_returns_defaults_and_none_resolved() {
         let dir = tempfile::tempdir().unwrap();
-        let old = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
 
-        let (got, resolved) = Config::load(None, &default_cli()).unwrap();
+        let (got, resolved) =
+            Config::load_from_dir(None, &default_cli(), dir.path()).unwrap();
 
-        std::env::set_current_dir(old).unwrap();
         assert!(resolved.is_none(), "expected no resolved path without persisted config");
         assert_eq!(got.listen, "127.0.0.1:8000");
+        assert_eq!(got.data_dir, dir.path().join("data"));
     }
 
     #[test]
@@ -379,9 +394,6 @@ mod tests {
     #[test]
     fn cli_overrides_are_applied_after_load() {
         let dir = tempfile::tempdir().unwrap();
-        let old = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-
         let cli = Cli {
             config: None,
             mpd_host: Some("10.0.0.1".to_string()),
@@ -390,13 +402,13 @@ mod tests {
             allow_root: false,
         };
 
-        let (got, resolved) = Config::load(None, &cli).unwrap();
+        let (got, resolved) = Config::load_from_dir(None, &cli, dir.path()).unwrap();
 
-        std::env::set_current_dir(old).unwrap();
         assert_eq!(got.mpd_host, "10.0.0.1");
         assert_eq!(got.mpd_port, 7700);
         assert_eq!(got.listen, "0.0.0.0:9000");
         assert!(resolved.is_none());
+        assert_eq!(got.data_dir, dir.path().join("data"));
     }
 
     #[test]
