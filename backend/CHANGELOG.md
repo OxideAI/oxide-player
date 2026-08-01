@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.12.3...oxide-player-v0.12.4) (2026-08-01)
+
+
+### Bug Fixes
+
+* perms ([e441c1f](https://github.com/OxideAI/oxide-player/commit/e441c1fef8ce213408ebcea5a93e3d61c4e28708))
+
 ## [0.12.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.12.2...oxide-player-v0.12.3) (2026-08-01)
 
 
