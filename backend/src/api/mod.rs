@@ -658,14 +658,9 @@ async fn create_device_config(
     };
     s.device_configs().create(&cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
 
-    // Mark restart pending and attempt include injection on first write.
-    s.set_config_restart_pending(true);
-    let cfg_data = s.config().await;
-    let include_warning = cfg_data.mpd_config.is_none();
-    if let Some(ref mpd_config_path) = cfg_data.mpd_config {
-        let injector = crate::devices::include_injector::IncludeInjector::new(mpd_config_path.clone());
-        let _ = injector.ensure_include(s.device_configs().dir());
-    }
+    // The installer owns the system MPD config and provisions this include.
+    // Do not attempt to rewrite it from the unprivileged backend process.
+    let include_warning = s.config().await.mpd_config.is_none();
 
     Ok(Json(DeviceConfigResponse {
         name: b.name,
@@ -839,12 +834,23 @@ fn into_tracks(b: serde_json::Value) -> Vec<TrackRef> {
     }
 }
 
-/// Resolve a track to the URI MPD can actually `add`.
-///
+/// Infer an MPD-relative URI from configured library roots when the explicit
+/// MPD music directory is absent. This keeps source installs from sending an
+/// absolute local path over MPD's TCP protocol.
+fn relative_uri_from_library_dirs(abs: &str, library_dirs: &[std::path::PathBuf]) -> Option<String> {
+    let path = std::path::Path::new(abs);
+    library_dirs
+        .iter()
+        .filter_map(|dir| path.strip_prefix(dir).ok().map(|rel| (dir, rel)))
+        .max_by_key(|(dir, _)| dir.components().count())
+        .map(|(_, rel)| rel.to_string_lossy().to_string())
+}
+
 /// MPD addresses tracks by a path *relative to its `music_directory`* (e.g.
 /// `MyMusic/Artist/Album.flac`), not by absolute OS paths. We convert the
 /// library DB's absolute `path` accordingly when `mpd_music_directory` is
-/// configured. For CUE-split tracks MPD exposes each split as
+/// configured, or use the matching `library_dirs` root as a safe fallback.
+/// For CUE-split tracks MPD exposes each split as
 /// `<file>.cue/trackNNNN`, so we return that and signal that no start/end
 /// offset should be applied (the split already isolates the track).
 async fn resolve_play_uri(s: &AppState, uri: &str, track_id: Option<i64>) -> (String, bool) {
@@ -867,17 +873,24 @@ async fn resolve_play_uri(s: &AppState, uri: &str, track_id: Option<i64>) -> (St
     let rel = match music_dir {
         Some(dir) => match std::path::Path::new(&abs).strip_prefix(dir) {
             Ok(rel) => rel.to_string_lossy().to_string(),
-            Err(_) => {
+            Err(_) => relative_uri_from_library_dirs(&abs, &cfg.library_dirs).unwrap_or_else(|| {
                 tracing::warn!(
-                    "mpd_music_directory ({}) is not a prefix of track path ({}); \
+                    "mpd_music_directory ({}) and library roots do not match track path ({}); \
                      passing the absolute path through, MPD add may fail",
                     dir.display(),
                     abs
                 );
                 abs.clone()
-            }
+            }),
         },
-        None => abs.clone(),
+        None => relative_uri_from_library_dirs(&abs, &cfg.library_dirs).unwrap_or_else(|| {
+            tracing::warn!(
+                "no configured MPD/library root matches track path ({}); \
+                 passing the absolute path through, MPD add may fail",
+                abs
+            );
+            abs.clone()
+        }),
     };
 
     let result = if let Some(cue) = cue_index {
@@ -1221,5 +1234,60 @@ mod tests {
             env!("CARGO_PKG_VERSION"),
             "version must match CARGO_PKG_VERSION"
         );
+    }
+
+    #[tokio::test]
+    async fn play_uri_uses_library_root_when_mpd_root_is_unset() {
+        let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let track_id = db
+            .insert_track(
+                "Artist/Album.flac",
+                "/music/Artist/Album.flac",
+                Some("Album"),
+                Some("Artist"),
+                Some("Album"),
+                None,
+                None,
+                None,
+                Some(1),
+                Some(180.0),
+                Some("flac"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("/music"),
+            )
+            .unwrap();
+        let mut config = Config::default_config();
+        config.mpd_music_directory = None;
+        config.library_dirs = vec![std::path::PathBuf::from("/music")];
+        let dsp = DspManager::new(
+            std::env::temp_dir().join("oxide_test_play_uri_dsp.yaml"),
+            None,
+            "".to_string(),
+            44100,
+            false,
+            None,
+        );
+        let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
+        let visualizer = crate::visualizer::VisualizerAnalyzer::new(&config);
+        let bt = crate::bluetooth::BluetoothManager::new().await;
+        let state = AppState::new(config, db, dsp, mpd, visualizer, bt, None);
+
+        let (uri, is_cue) = super::resolve_play_uri(
+            &state,
+            "Artist/Album.flac",
+            Some(track_id),
+        )
+        .await;
+
+        assert_eq!(uri, "Artist/Album.flac");
+        assert!(!is_cue);
     }
 }

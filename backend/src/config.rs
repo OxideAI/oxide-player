@@ -20,10 +20,10 @@ pub struct Config {
     /// Absolute path to MPD's `music_directory`. The library DB stores
     /// absolute file paths, but MPD addresses tracks by URIs *relative* to its
     /// music directory (e.g. `MyMusic/Artist/Album.flac`). When this is set we
-    /// convert the absolute path to that relative URI; for CUE tracks we append
-    /// `.cue/trackNNNN` so the individual split track is played. When unset, the
-    /// absolute path is passed through (works only if MPD's music directory
-    /// matches the OS path layout).
+    /// convert the absolute path to that relative URI; when unset, playback
+    /// falls back to the matching `library_dirs` root. For CUE tracks we append
+    /// `.cue/trackNNNN` so the individual split track is played. An absolute
+    /// path is used only when no configured root matches.
     #[serde(default)]
     pub mpd_music_directory: Option<PathBuf>,
     pub listen: String,

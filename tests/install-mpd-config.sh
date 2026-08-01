@@ -12,18 +12,19 @@ export MPD_CONFIG="$tmp_dir/etc/mpd.conf"
 export SERVICE_USER="$(id -un)"
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR"
-cat > "$MPD_CONFIG" <<'EOF'
-music_directory "/music"
-audio_output {
-    type "alsa"
-    name "Default"
-}
-EOF
+
+# A package-created empty /etc/mpd.conf is a real upgrade state. The repair
+# path must restore the core local-library settings, not only append the
+# managed output include.
+: > "$MPD_CONFIG"
 
 # shellcheck disable=SC1091
 source "$repo_root/install.sh"
 ensure_mpd_include
 
-grep -Fqx "include \"$DATA_DIR/mpd-outputs.d/*.conf\"" "$MPD_CONFIG"
+grep -Fqx "music_directory     \"$MPD_MUSIC_DIR\"" "$MPD_CONFIG"
+grep -Fq "include" "$MPD_CONFIG"
+grep -Fq "$DATA_DIR/mpd-outputs.d/*.conf" "$MPD_CONFIG"
 
 printf 'installer MPD config include test passed\n'
+

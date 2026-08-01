@@ -24,6 +24,30 @@ impl IncludeInjector {
         Self { mpd_config }
     }
 
+    /// Check whether the config already contains the exact managed fragment
+    /// include. This is read-only because the backend service user must not
+    /// rewrite a system-owned `/etc/mpd.conf`.
+    pub fn has_include(&self, fragment_dir: &Path) -> io::Result<bool> {
+        let content = self.read_config()?;
+        let expected = format!(
+            r#"include "{}/*.conf""#,
+            fragment_dir.to_string_lossy()
+        );
+        let canonical_dir = fragment_dir
+            .canonicalize()
+            .unwrap_or_else(|_| fragment_dir.to_path_buf());
+        let canonical = format!(
+            r#"include "{}/*.conf""#,
+            canonical_dir.to_string_lossy()
+        );
+        let expected_target = include_target(&expected).unwrap();
+        let canonical_target = include_target(&canonical).unwrap();
+        Ok(content.lines().any(|line| {
+            include_target(line)
+                .is_some_and(|target| target == expected_target || target == canonical_target)
+        }))
+    }
+
     /// Read and return the MPD config content, or a descriptive error.
     fn read_config(&self) -> io::Result<String> {
         fs::read_to_string(&self.mpd_config)
@@ -248,6 +272,20 @@ mod tests {
         let injector = IncludeInjector::new(path.clone());
         let modified = injector.ensure_include(&fragment_dir).unwrap();
         assert!(!modified, "aligned include should already be correct");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_has_include_is_read_only_when_include_is_missing() {
+        let (path, _) = temp_file("test_has_include_is_read_only_when_include_is_missing");
+        let fragment_dir = PathBuf::from("/var/lib/oxide-player/mpd-outputs.d");
+        let original = "music_directory \"/music\"\naudio_output {\n    type \"alsa\"\n}\n";
+        fs::write(&path, original).unwrap();
+
+        let injector = IncludeInjector::new(path.clone());
+        assert!(!injector.has_include(&fragment_dir).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
 
         cleanup(&path);
     }

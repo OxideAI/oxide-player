@@ -640,6 +640,11 @@ ensure_mpd_include() {
     warn "MPD config $conf does not exist — skipping managed output include repair."
     return 1
   fi
+  if [ ! -s "$conf" ]; then
+    warn "MPD config $conf is empty — restoring the managed local-library configuration."
+    write_mpd_config
+    return 0
+  fi
   if grep -Fqx "$include" "$conf"; then
     log "MPD config already includes managed outputs: $conf"
     return 1

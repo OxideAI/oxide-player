@@ -42,15 +42,23 @@ fn bt_available<T>(r: anyhow::Result<T>) -> AppResult<T> {
     })
 }
 
-/// Ensure MPD loads managed output fragments whenever a Bluetooth output is
-/// created. The installer sets `mpd_config`; source installs may intentionally
-/// omit it and retain the existing manual-include warning.
+/// Verify that MPD already loads managed output fragments. The installer
+/// provisions this include as root; the backend service user must not attempt
+/// to rewrite a system-owned `/etc/mpd.conf` at connection time.
 async fn ensure_output_include(s: &AppState) -> AppResult<()> {
     let cfg = s.config().await;
-    if let Some(path) = cfg.mpd_config {
-        IncludeInjector::new(path)
-            .ensure_include(s.device_configs().dir())
-            .map_err(|e| AppError::Bluetooth(e.to_string()))?;
+    let Some(path) = cfg.mpd_config else {
+        return Ok(());
+    };
+    let injector = IncludeInjector::new(path.clone());
+    let present = injector
+        .has_include(s.device_configs().dir())
+        .map_err(|e| AppError::Bluetooth(e.to_string()))?;
+    if !present {
+        return Err(AppError::Bluetooth(format!(
+            "MPD config at {} is missing the managed output include; run install.sh --update as root",
+            path.display()
+        )));
     }
     Ok(())
 }
