@@ -8,9 +8,25 @@ interface Props {
   params?: VizParams
 }
 
-/// Live-tunable visualizer parameters. Exposed via the temporary dev controls
-/// (sliders + copy button) so the look can be dialed in without recompiling.
+export type VizStyle = 'bars' | 'mirrored' | 'circular' | 'waveform' | 'ring'
+
+export const REFERENCE_VIZ_STYLES: ReadonlyArray<{
+  id: VizStyle
+  label: string
+  icon: string
+  description: string
+}> = [
+  { id: 'bars', label: 'Classic Bars', icon: '▥', description: 'Frequency bars rising from the bottom' },
+  { id: 'mirrored', label: 'Mirrored Bars', icon: '◈', description: 'Symmetric bars expanding from the center' },
+  { id: 'circular', label: 'Circular', icon: '◉', description: 'Radial spectrum spikes around the album art' },
+  { id: 'waveform', label: 'Waveform', icon: '〰', description: 'Oscilloscope line shaped by the spectrum' },
+  { id: 'ring', label: 'Ring of Fire', icon: '◎', description: 'Glowing circular pulses around the stage' },
+]
+
+/// Live-tunable visualizer parameters. Exposed via the kiosk controls so the
+/// look can be dialed in without recompiling.
 export interface VizParams {
+  style: VizStyle
   bloomAlpha: number // base halo opacity (0..1)
   bloomBeat: number // halo opacity added by the beat pulse (0..1)
   bloomEnergy: number // halo opacity added by audio level (0..1)
@@ -24,22 +40,101 @@ export interface VizParams {
 }
 
 export const DEFAULT_VIZ_PARAMS: VizParams = {
-  bloomAlpha: 0.42,
-  bloomBeat: 0.22,
-  bloomEnergy: 0.28,
-  bloomRadius: 1.05,
-  barIdle: 0.18,
-  barPeak: 0.82,
+  style: 'bars',
+  bloomAlpha: 0.28,
+  bloomBeat: 0.16,
+  bloomEnergy: 0.5,
+  bloomRadius: 0.92,
+  barIdle: 0.08,
+  barPeak: 0.92,
   barGap: 3,
   barRadius: 6,
   phaseSpeed: 1.1,
-  blur: 6,
+  blur: 3,
 }
 
-// The number of bars follows the backend's published bin count (BANDS in
-// visualizer/mod.rs) at runtime, so the two can never drift out of sync. We
-// only need a stable upper bound for the smoothed-height buffer.
+export const VIZ_PRESETS: Record<VizStyle, VizParams> = {
+  bars: DEFAULT_VIZ_PARAMS,
+  mirrored: {
+    ...DEFAULT_VIZ_PARAMS,
+    style: 'mirrored',
+    bloomAlpha: 0.24,
+    bloomBeat: 0.2,
+    bloomEnergy: 0.55,
+    barIdle: 0.06,
+    barPeak: 0.86,
+    barGap: 4,
+    barRadius: 8,
+  },
+  circular: {
+    ...DEFAULT_VIZ_PARAMS,
+    style: 'circular',
+    bloomAlpha: 0.2,
+    bloomBeat: 0.22,
+    bloomEnergy: 0.62,
+    barIdle: 0.08,
+    barPeak: 0.95,
+    barGap: 2,
+    barRadius: 4,
+    blur: 2,
+  },
+  waveform: {
+    ...DEFAULT_VIZ_PARAMS,
+    style: 'waveform',
+    bloomAlpha: 0.18,
+    bloomBeat: 0.14,
+    bloomEnergy: 0.72,
+    barIdle: 0.04,
+    barPeak: 0.9,
+    phaseSpeed: 0.8,
+    blur: 1,
+  },
+  ring: {
+    ...DEFAULT_VIZ_PARAMS,
+    style: 'ring',
+    bloomAlpha: 0.3,
+    bloomBeat: 0.28,
+    bloomEnergy: 0.75,
+    barIdle: 0.1,
+    barPeak: 0.9,
+    barGap: 2,
+    barRadius: 4,
+    phaseSpeed: 1.35,
+    blur: 4,
+  },
+}
+
+const DEFAULT_BARS = 72
 const MAX_BARS = 256
+
+/** Resample backend FFT bins for any renderer width without dropping signal. */
+export function getSpectrumTargets(
+  _style: VizStyle,
+  frame: SpectrumFrame | null,
+  count: number,
+): number[] {
+  if (count <= 0) return []
+  const bins = frame?.bins?.filter((value) => Number.isFinite(value)) ?? []
+  if (bins.length === 0) {
+    return new Array(count).fill(Math.max(0, Math.min(1, frame?.level ?? 0)))
+  }
+  if (bins.length === count) return bins.map((value) => Math.max(0, Math.min(1, value)))
+
+  return Array.from({ length: count }, (_, index) => {
+    const position = count === 1 ? 0 : index * (bins.length - 1) / (count - 1)
+    const left = Math.floor(position)
+    const right = Math.min(bins.length - 1, left + 1)
+    const mix = position - left
+    return Math.max(0, Math.min(1, bins[left] * (1 - mix) + bins[right] * mix))
+  })
+}
+
+export function hasSpectrumSignal(frame: SpectrumFrame | null): boolean {
+  return frame !== null && (
+    frame.level > 0
+    || frame.bins.some((value) => Number.isFinite(value) && value > 0)
+  )
+}
 
 export function Visualizer({ playing, frame, params }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -47,8 +142,8 @@ export function Visualizer({ playing, frame, params }: Props) {
   const reducedRef = useRef(false)
   const frameRef = useRef<SpectrumFrame | null>(frame)
   frameRef.current = frame
-  // Params read by the render loop without restarting it on every slider tick.
   const paramsRef = useRef<VizParams>(params ?? DEFAULT_VIZ_PARAMS)
+  const hasSignal = hasSpectrumSignal(frame)
   paramsRef.current = params ?? DEFAULT_VIZ_PARAMS
 
   useEffect(() => {
@@ -70,94 +165,83 @@ export function Visualizer({ playing, frame, params }: Props) {
     let accent = '#6ee7b7'
     let accent2 = '#8b9cff'
     const syncVars = () => {
-      const s = getComputedStyle(canvas)
-      accent = s.getPropertyValue('--accent').trim() || accent
-      accent2 = s.getPropertyValue('--accent-2').trim() || accent2
+      const computed = getComputedStyle(canvas)
+      accent = computed.getPropertyValue('--accent').trim() || accent
+      accent2 = computed.getPropertyValue('--accent-2').trim() || accent2
     }
     syncVars()
 
     const resize = () => {
       const dpr = window.devicePixelRatio || 1
-      const w = Math.max(1, Math.floor(canvas.clientWidth * dpr))
-      const h = Math.max(1, Math.floor(canvas.clientHeight * dpr))
-      if (canvas.width === w && canvas.height === h) return
-      canvas.width = w
-      canvas.height = h
+      const width = Math.max(1, Math.floor(canvas.clientWidth * dpr))
+      const height = Math.max(1, Math.floor(canvas.clientHeight * dpr))
+      if (canvas.width === width && canvas.height === height) return
+      canvas.width = width
+      canvas.height = height
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     }
     resize()
     const ro = new ResizeObserver(resize)
     ro.observe(canvas)
 
-    // Apply the live blur without a full style object churn.
     const applyBlur = (px: number) => {
       canvas.style.filter = `blur(${px}px) saturate(1.5)`
     }
     applyBlur(paramsRef.current.blur)
 
-    // Smoothed bar heights so the spectrum eases instead of flickering.
     const smoothed = new Float32Array(MAX_BARS)
-    // Gentle idle pulse so the visualizer breathes even on silence/pause.
     let phase = 0
 
     const render = (animate: boolean) => {
       const p = paramsRef.current
       if (canvas.style.filter !== `blur(${p.blur}px) saturate(1.5)`) applyBlur(p.blur)
-      const w = canvas.clientWidth
-      const h = canvas.clientHeight
-      // When playback is stopped we render a single static, empty frame and
-      // stop the loop entirely — no idle pulse, no halo, no bars.
+      const width = canvas.clientWidth
+      const height = canvas.clientHeight
       if (!animate) {
-        ctx.clearRect(0, 0, w, h)
+        ctx.clearRect(0, 0, width, height)
         return
       }
-      const dt = 1 / 60
-      phase += dt * p.phaseSpeed
-      const f = frameRef.current
-      const energy = f ? f.level : 0
-      const bins = f?.bins
-      const barCount = bins && bins.length > 0 ? Math.min(bins.length, MAX_BARS) : MAX_BARS
 
-      ctx.clearRect(0, 0, w, h)
+      phase += (1 / 60) * p.phaseSpeed
+      const current = frameRef.current
+      const energy = Math.max(0, Math.min(1, current?.level ?? 0))
+      const count = Math.min(current?.bins?.length || DEFAULT_BARS, MAX_BARS)
+      const targets = getSpectrumTargets(p.style, current, count)
+      for (let index = 0; index < targets.length; index++) {
+        const target = targets[index]
+        const previous = smoothed[index]
+        const attack = target > previous ? 0.5 : 0.12
+        smoothed[index] += (target - previous) * attack
+      }
 
-      // Full-screen radial halo whose bloom tracks overall energy. Motion here
-      // comes from `phase` (steady) and `energy` (audio), never from volume —
-      // so the visualizer animates even when muted, and reacts to real audio.
+      ctx.clearRect(0, 0, width, height)
       const beat = 0.5 + 0.5 * Math.sin(phase * 1.6)
-      const a = p.bloomAlpha + beat * p.bloomBeat + energy * p.bloomEnergy
-      const bloomR = Math.hypot(w, h) * (p.bloomRadius + beat * 0.12 + energy * 0.1)
-      const bloom = ctx.createRadialGradient(w / 2, h * 0.52, 0, w / 2, h * 0.52, bloomR)
-      bloom.addColorStop(0, hexToRgba(accent, a))
-      bloom.addColorStop(0.45, hexToRgba(accent2, a * 0.72))
+      const alpha = Math.min(1, p.bloomAlpha + beat * p.bloomBeat + energy * p.bloomEnergy)
+      const bloomRadius = Math.hypot(width, height) * (p.bloomRadius + beat * 0.08 + energy * 0.16)
+      const bloom = ctx.createRadialGradient(width / 2, height * 0.52, 0, width / 2, height * 0.52, bloomRadius)
+      bloom.addColorStop(0, hexToRgba(accent, alpha))
+      bloom.addColorStop(0.45, hexToRgba(accent2, alpha * 0.72))
       bloom.addColorStop(1, 'transparent')
       ctx.fillStyle = bloom
-      ctx.fillRect(0, 0, w, h)
+      ctx.fillRect(0, 0, width, height)
 
-      // Frequency bars from the real FFT bins. Each bar eases toward its target
-      // magnitude so transients look lively but the field doesn't strobe. Bars
-      // are tall (up to the full viewport height) and bold so the spectrum
-      // reads as a large, prominent animation behind the album art.
-      const gap = p.barGap
-      const bw = (w - gap * (barCount - 1)) / barCount
-      for (let i = 0; i < barCount; i++) {
-        const target = bins && bins.length === barCount ? bins[i] : 0
-        // Attack fast, release slow — mimics a real VU/spectrum meter.
-        const k = target > smoothed[i] ? 0.5 : 0.12
-        smoothed[i] += (target - smoothed[i]) * k
-        const v = smoothed[i]
-        const idle = p.barIdle * (0.5 + 0.5 * Math.sin(phase * 1.3 + i * 0.5))
-        const amp = Math.max(idle, v)
-        // Bars reach nearly the full height on strong bins.
-        const bh = h * (p.barIdle + amp * p.barPeak)
-        const x = i * (bw + gap)
-        const y = h - bh
-        const grad = ctx.createLinearGradient(0, y, 0, h)
-        grad.addColorStop(0, accent2)
-        grad.addColorStop(1, accent)
-        ctx.fillStyle = grad
-        const r = Math.min(bw / 2, p.barRadius)
-        roundRect(ctx, x, y, bw, bh, r)
-        ctx.fill()
+      switch (p.style) {
+        case 'mirrored':
+          drawMirrored(ctx, width, height, smoothed, p, accent, accent2)
+          break
+        case 'circular':
+          drawCircular(ctx, width, height, smoothed, p, accent, accent2, phase)
+          break
+        case 'waveform':
+          drawWaveform(ctx, width, height, smoothed, p, accent, accent2, phase)
+          break
+        case 'ring':
+          drawRing(ctx, width, height, smoothed, p, accent, accent2, phase)
+          break
+        case 'bars':
+        default:
+          drawBars(ctx, width, height, smoothed, p, accent, accent2, phase)
+          break
       }
     }
 
@@ -166,11 +250,11 @@ export function Visualizer({ playing, frame, params }: Props) {
       rafRef.current = requestAnimationFrame(loop)
     }
 
-    if (playing && !reducedRef.current) {
+    const active = playing || hasSignal
+    if (active && !reducedRef.current) {
       rafRef.current = requestAnimationFrame(loop)
     } else {
-      // Stopped/paused (or reduced motion): paint one static frame and halt.
-      render(playing)
+      render(active)
     }
 
     return () => {
@@ -178,9 +262,187 @@ export function Visualizer({ playing, frame, params }: Props) {
       rafRef.current = null
       ro.disconnect()
     }
-  }, [playing])
+  }, [hasSignal, playing])
 
   return <canvas ref={canvasRef} className={styles.canvas} aria-hidden />
+}
+
+function drawBars(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  values: Float32Array,
+  p: VizParams,
+  accent: string,
+  accent2: string,
+  phase: number,
+) {
+  const gap = p.barGap
+  const barWidth = Math.max(1, (width - gap * (values.length - 1)) / values.length)
+  for (let index = 0; index < values.length; index++) {
+    const idle = p.barIdle * (0.5 + 0.5 * Math.sin(phase * 1.3 + index * 0.5))
+    const barHeight = height * (p.barIdle + Math.max(idle, values[index]) * p.barPeak)
+    const x = index * (barWidth + gap)
+    const y = height - barHeight
+    const gradient = ctx.createLinearGradient(0, y, 0, height)
+    gradient.addColorStop(0, accent2)
+    gradient.addColorStop(1, accent)
+    ctx.fillStyle = gradient
+    roundRect(ctx, x, y, barWidth, barHeight, Math.min(barWidth / 2, p.barRadius))
+    ctx.fill()
+  }
+}
+
+function drawMirrored(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  values: Float32Array,
+  p: VizParams,
+  accent: string,
+  accent2: string,
+) {
+  const gap = p.barGap
+  const barWidth = Math.max(1, (width - gap * (values.length - 1)) / values.length)
+  const center = height / 2
+  for (let index = 0; index < values.length; index++) {
+    const barHeight = height * (0.035 + (p.barIdle * 0.35 + values[index] * p.barPeak * 0.47))
+    const x = index * (barWidth + gap)
+    const gradient = ctx.createLinearGradient(0, center - barHeight, 0, center + barHeight)
+    gradient.addColorStop(0, accent)
+    gradient.addColorStop(0.5, accent2)
+    gradient.addColorStop(1, accent)
+    ctx.fillStyle = gradient
+    roundRect(ctx, x, center - barHeight, barWidth, barHeight, Math.min(barWidth / 2, p.barRadius))
+    ctx.fill()
+    roundRect(ctx, x, center, barWidth, barHeight, Math.min(barWidth / 2, p.barRadius))
+    ctx.fill()
+  }
+}
+
+function drawCircular(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  values: Float32Array,
+  p: VizParams,
+  accent: string,
+  accent2: string,
+  phase: number,
+) {
+  const cx = width / 2
+  const cy = height / 2
+  const inner = Math.min(width, height) * 0.23
+  const maxLength = Math.min(width, height) * 0.27
+  ctx.beginPath()
+  ctx.arc(cx, cy, inner, 0, Math.PI * 2)
+  ctx.strokeStyle = hexToRgba(accent, 0.4)
+  ctx.lineWidth = 2
+  ctx.stroke()
+
+  for (let index = 0; index < values.length; index++) {
+    const angle = -Math.PI / 2 + index / values.length * Math.PI * 2
+    const pulse = p.barIdle * 0.3 + values[index] * p.barPeak
+    const start = inner
+    const end = inner + maxLength * pulse
+    const x1 = cx + Math.cos(angle) * start
+    const y1 = cy + Math.sin(angle) * start
+    const x2 = cx + Math.cos(angle) * end
+    const y2 = cy + Math.sin(angle) * end
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.strokeStyle = index % 2 === 0 ? accent2 : accent
+    ctx.lineWidth = Math.max(2, p.barRadius * 0.65)
+    ctx.lineCap = 'round'
+    ctx.stroke()
+  }
+  ctx.beginPath()
+  ctx.arc(cx, cy, inner * (0.94 + Math.sin(phase) * 0.025), 0, Math.PI * 2)
+  ctx.strokeStyle = accent
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+}
+
+function drawWaveform(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  values: Float32Array,
+  p: VizParams,
+  accent: string,
+  accent2: string,
+  phase: number,
+) {
+  const center = height / 2
+  const amplitude = height * (0.14 + p.barPeak * 0.28)
+  const gradient = ctx.createLinearGradient(0, 0, width, 0)
+  gradient.addColorStop(0, accent)
+  gradient.addColorStop(0.5, accent2)
+  gradient.addColorStop(1, accent)
+  ctx.strokeStyle = gradient
+  ctx.lineWidth = Math.max(2, p.barRadius * 0.55)
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.beginPath()
+  for (let index = 0; index < values.length; index++) {
+    const x = values.length === 1 ? 0 : index / (values.length - 1) * width
+    const phaseOffset = phase * 1.4 + index * 0.72
+    const y = center + Math.sin(phaseOffset) * amplitude * (p.barIdle * 0.3 + values[index])
+    if (index === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(0, center)
+  ctx.lineTo(width, center)
+  ctx.strokeStyle = hexToRgba(accent, 0.16)
+  ctx.lineWidth = 1
+  ctx.stroke()
+}
+
+function drawRing(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  values: Float32Array,
+  p: VizParams,
+  accent: string,
+  accent2: string,
+  phase: number,
+) {
+  const cx = width / 2
+  const cy = height / 2
+  const base = Math.min(width, height) * 0.28
+  ctx.beginPath()
+  ctx.arc(cx, cy, base, 0, Math.PI * 2)
+  ctx.strokeStyle = hexToRgba(accent2, 0.45)
+  ctx.lineWidth = 2
+  ctx.stroke()
+
+  for (let index = 0; index < values.length; index++) {
+    const angle = -Math.PI / 2 + index / values.length * Math.PI * 2
+    const pulse = p.barIdle * 0.5 + values[index] * p.barPeak
+    const inner = base + 3
+    const outer = inner + Math.min(width, height) * 0.2 * pulse
+    const x1 = cx + Math.cos(angle) * inner
+    const y1 = cy + Math.sin(angle) * inner
+    const x2 = cx + Math.cos(angle) * outer
+    const y2 = cy + Math.sin(angle) * outer
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.strokeStyle = index % 3 === 0 ? accent2 : accent
+    ctx.lineWidth = Math.max(2, p.barRadius * 0.7)
+    ctx.lineCap = 'round'
+    ctx.stroke()
+  }
+
+  ctx.beginPath()
+  ctx.arc(cx, cy, base * (1 + 0.05 * Math.sin(phase * 1.4)), 0, Math.PI * 2)
+  ctx.strokeStyle = accent
+  ctx.lineWidth = 1
+  ctx.stroke()
 }
 
 function hexToRgba(hex: string, alpha: number): string {

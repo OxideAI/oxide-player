@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::dsp::camilladsp::{DEFAULT_CAPTURE_DEVICE, DEFAULT_CAPTURE_RATE};
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, SampleFormat, StreamConfig};
+use cpal::{SampleFormat, StreamConfig};
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,8 @@ pub struct SpectrumFrame {
 /// disk, not the browser). Mirrors the frontend `VizParams` shape.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VizParams {
+    #[serde(default)]
+    pub style: String,
     pub bloom_alpha: f32,
     pub bloom_beat: f32,
     pub bloom_energy: f32,
@@ -53,16 +55,17 @@ pub struct VizParams {
 impl Default for VizParams {
     fn default() -> Self {
         VizParams {
-            bloom_alpha: 0.42,
-            bloom_beat: 0.22,
-            bloom_energy: 0.28,
-            bloom_radius: 1.05,
-            bar_idle: 0.18,
-            bar_peak: 0.82,
+            style: "bars".to_string(),
+            bloom_alpha: 0.28,
+            bloom_beat: 0.16,
+            bloom_energy: 0.5,
+            bloom_radius: 0.92,
+            bar_idle: 0.08,
+            bar_peak: 0.92,
             bar_gap: 3.0,
             bar_radius: 6.0,
             phase_speed: 1.1,
-            blur: 6.0,
+            blur: 3.0,
         }
     }
 }
@@ -88,7 +91,12 @@ impl VizParams {
     /// `vizparams.json` can never produce a degenerate visual or a panic in the
     /// renderer. Mirrors `CoverOptimization::from_config` in config.rs.
     fn clamp(self) -> Self {
+        let style = match self.style.as_str() {
+            "mirrored" | "circular" | "waveform" | "ring" => self.style,
+            _ => "bars".to_string(),
+        };
         VizParams {
+            style,
             bloom_alpha: self.bloom_alpha.clamp(0.0, 1.0),
             bloom_beat: self.bloom_beat.clamp(0.0, 1.0),
             bloom_energy: self.bloom_energy.clamp(0.0, 1.0),
@@ -154,24 +162,42 @@ impl VisualizerAnalyzer {
             .clone()
             .or_else(|| config.camilladsp_capture_device.clone())
             .unwrap_or_else(|| DEFAULT_CAPTURE_DEVICE.to_string());
-        let rate = config
+        let host = cpal::default_host();
+        let device = pick_device(&host, &device_name)?;
+        let default_config = device
+            .default_input_config()
+            .map_err(|e| anyhow::anyhow!("no input config for {device_name}: {e}"))?;
+        let requested_rate = config
             .visualizer_capture_rate
             .or(config.camilladsp_capture_rate)
             .unwrap_or(DEFAULT_CAPTURE_RATE);
-
-        let host = cpal::default_host();
-        let device = pick_device(&host, &device_name)?;
-        let config_range = device
-            .default_input_config()
-            .map_err(|e| anyhow::anyhow!("no input config for {device_name}: {e}"))?;
-        let sample_format = config_range.sample_format();
-        let channels = config_range.channels().max(1);
-
-        let stream_config = StreamConfig {
-            channels,
-            sample_rate: rate,
-            buffer_size: BufferSize::Default,
-        };
+        // A stale fixed rate is enough to make CPAL reject the stream. Keep
+        // the requested rate when the selected device supports it, otherwise
+        // use that device's known-good default input configuration.
+        let selected_config = device
+            .supported_input_configs()
+            .ok()
+            .and_then(|ranges| {
+                ranges
+                    .filter(|range| {
+                        range.channels() == default_config.channels()
+                            && range.sample_format() == default_config.sample_format()
+                    })
+                    .find_map(|range| range.try_with_sample_rate(requested_rate))
+            })
+            .unwrap_or_else(|| {
+                if requested_rate != default_config.sample_rate() {
+                    tracing::warn!(
+                        "visualizer device '{device_name}' does not support {requested_rate} Hz; using {} Hz",
+                        default_config.sample_rate()
+                    );
+                }
+                default_config
+            });
+        let sample_format = selected_config.sample_format();
+        let channels = selected_config.channels().max(1);
+        let rate = selected_config.sample_rate();
+        let stream_config: StreamConfig = selected_config.into();
 
         let tx = self.inner.tx.clone();
         // `window` holds the most recent samples; the callback writes into a
@@ -421,4 +447,55 @@ fn compute_frame(
     }
 
     SpectrumFrame { bins, level }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn legacy_params_json() -> serde_json::Value {
+        serde_json::json!({
+            "bloom_alpha": 0.42,
+            "bloom_beat": 0.22,
+            "bloom_energy": 0.28,
+            "bloom_radius": 1.05,
+            "bar_idle": 0.18,
+            "bar_peak": 0.82,
+            "bar_gap": 3.0,
+            "bar_radius": 6.0,
+            "phase_speed": 1.1,
+            "blur": 6.0
+        })
+    }
+
+    #[test]
+    fn legacy_params_default_to_classic_bars() {
+        let parsed: VizParams = serde_json::from_value(legacy_params_json()).unwrap();
+        assert_eq!(parsed.clamp().style, "bars");
+    }
+
+    #[test]
+    fn unknown_style_is_normalized_to_classic_bars() {
+        let mut json = legacy_params_json();
+        json["style"] = serde_json::json!("not-a-style");
+        let parsed: VizParams = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.clamp().style, "bars");
+    }
+
+    #[test]
+    fn fft_frame_reports_signal_energy() {
+        let shared = SharedState::new(2048, 1);
+        {
+            let mut samples = shared.samples.lock().unwrap();
+            for index in 0..2048 {
+                samples.push((index as f32 * 2.0 * std::f32::consts::PI * 440.0 / 44_100.0).sin() * 0.8);
+            }
+        }
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(2048);
+        let mut scratch = vec![Complex::new(0.0, 0.0); 2048];
+        let frame = compute_frame(&shared, &fft, 2048, &mut scratch);
+        assert!(frame.level > 0.2);
+        assert!(frame.bins.iter().any(|value| *value > 0.1));
+    }
 }

@@ -36,6 +36,23 @@
 .close:hover {
   color: #fff;
 }
+.stylePicker {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.stylePicker select {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.28);
+  color: #e8eaf0;
+  font: inherit;
+}
 
 .sliders {
   display: flex;

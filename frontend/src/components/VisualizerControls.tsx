@@ -1,10 +1,17 @@
 import { useState } from 'react'
-import type { VizParams } from './Visualizer'
+import {
+  REFERENCE_VIZ_STYLES,
+  VIZ_PRESETS,
+  type VizParams,
+  type VizStyle,
+} from './Visualizer'
 import { api } from '../api'
 import styles from './VisualizerControls.module.css'
 
+type NumericVizKey = Exclude<keyof VizParams, 'style'>
+
 interface SliderDef {
-  key: keyof VizParams
+  key: NumericVizKey
   label: string
   min: number
   max: number
@@ -40,14 +47,13 @@ interface Props {
 export function VisualizerControls({ params, onChange, onClose }: Props) {
   const [saved, setSaved] = useState(false)
   const snippet = JSON.stringify(params, null, 2)
-
   const set = (key: keyof VizParams, value: number) => {
     onChange({ ...params, [key]: value })
   }
-
   const save = () => {
     // Backend stores snake_case keys; map from the frontend camelCase shape.
-    const body: Record<string, number> = {
+    const body: Record<string, number | string> = {
+      style: params.style,
       bloom_alpha: params.bloomAlpha,
       bloom_beat: params.bloomBeat,
       bloom_energy: params.bloomEnergy,
@@ -77,6 +83,20 @@ export function VisualizerControls({ params, onChange, onClose }: Props) {
           ×
         </button>
       </div>
+      <label className={styles.stylePicker}>
+        <span className={styles.label}>Visualization style</span>
+        <select
+          aria-label="Visualization style"
+          value={params.style}
+          onChange={(e) => onChange(VIZ_PRESETS[e.target.value as VizStyle])}
+        >
+          {REFERENCE_VIZ_STYLES.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.icon} {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <div className={styles.sliders}>
         {SLIDERS.map((s) => (

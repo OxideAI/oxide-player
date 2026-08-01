@@ -264,8 +264,8 @@ export const api = {
 
   // —— Visualizer tuning (persisted on disk, not the browser) ——
   getVizParams: () =>
-    fetch('/api/visualizer/params').then((r) => json<Record<string, number>>(r)),
-  saveVizParams: (params: Record<string, number>) =>
+    fetch('/api/visualizer/params').then((r) => json<Record<string, number | string>>(r)),
+  saveVizParams: (params: Record<string, number | string>) =>
     fetch('/api/visualizer/params', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

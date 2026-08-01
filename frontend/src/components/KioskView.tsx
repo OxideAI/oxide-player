@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import type { PlayerStatus, QueueResponse, Config } from '../types'
+import type { PlayerStatus, QueueResponse } from '../types'
 import { api } from '../api'
 import { fmtTime, displayTitle, audioQuality, folderKey } from '../util'
 import { useDragValue, useSmoothElapsed } from './playerHooks'
-import { Visualizer, DEFAULT_VIZ_PARAMS, type VizParams } from './Visualizer'
+import { Visualizer, DEFAULT_VIZ_PARAMS, VIZ_PRESETS, type VizParams, type VizStyle } from './Visualizer'
 import { VisualizerControls } from './VisualizerControls'
 import { useVisualizer } from '../useVisualizer'
 import styles from './KioskView.module.css'
@@ -40,38 +40,35 @@ export function KioskView({
   const vol = useDragValue(status?.volume ?? 0, onVolume)
   const volumeAvailable = status?.volume !== null && status?.volume !== undefined
 
-  // Whether the real FFT visualizer is enabled server-side. When off we pass
-  // `enabled=false` so the hook stays disconnected (zero cost).
-  const [fftEnabled, setFftEnabled] = useState(false)
-  useEffect(() => {
-    let alive = true
-    api.getConfig().then((c: Config) => { if (alive) setFftEnabled(!!c.visualizer_fft) }).catch(() => {})
-    return () => { alive = false }
-  }, [])
-  const frame = useVisualizer(fftEnabled)
+  // The websocket is cheap when FFT capture is disabled and keeping it
+  // connected avoids a config-request race hiding a live analyzer.
+  const frame = useVisualizer(true)
 
-  // Temporary live-tuning state for the visualizer (sliders + save button).
-  // Loads the saved look from disk (`/api/visualizer/params`) on mount, so a
-  // restart keeps the look you tuned; falls back to the code defaults.
+  // The selected look is persisted with the numeric tuning params on the
+  // server, so kiosk mode keeps its configuration across restarts.
   const [vizParams, setVizParams] = useState<VizParams>(DEFAULT_VIZ_PARAMS)
   const [vizTuning, setVizTuning] = useState(false)
   useEffect(() => {
     let alive = true
     api.getVizParams()
-      .then((p: Record<string, number>) => {
+      .then((p: Record<string, number | string>) => {
         if (!alive) return
-        // Backend keys are snake_case; map to the frontend camelCase shape.
+        const style = typeof p.style === 'string' && p.style in VIZ_PRESETS
+          ? p.style as VizStyle
+          : DEFAULT_VIZ_PARAMS.style
+        const preset = VIZ_PRESETS[style]
         setVizParams({
-          bloomAlpha: p.bloom_alpha ?? DEFAULT_VIZ_PARAMS.bloomAlpha,
-          bloomBeat: p.bloom_beat ?? DEFAULT_VIZ_PARAMS.bloomBeat,
-          bloomEnergy: p.bloom_energy ?? DEFAULT_VIZ_PARAMS.bloomEnergy,
-          bloomRadius: p.bloom_radius ?? DEFAULT_VIZ_PARAMS.bloomRadius,
-          barIdle: p.bar_idle ?? DEFAULT_VIZ_PARAMS.barIdle,
-          barPeak: p.bar_peak ?? DEFAULT_VIZ_PARAMS.barPeak,
-          barGap: p.bar_gap ?? DEFAULT_VIZ_PARAMS.barGap,
-          barRadius: p.bar_radius ?? DEFAULT_VIZ_PARAMS.barRadius,
-          phaseSpeed: p.phase_speed ?? DEFAULT_VIZ_PARAMS.phaseSpeed,
-          blur: p.blur ?? DEFAULT_VIZ_PARAMS.blur,
+          ...preset,
+          bloomAlpha: typeof p.bloom_alpha === 'number' ? p.bloom_alpha : preset.bloomAlpha,
+          bloomBeat: typeof p.bloom_beat === 'number' ? p.bloom_beat : preset.bloomBeat,
+          bloomEnergy: typeof p.bloom_energy === 'number' ? p.bloom_energy : preset.bloomEnergy,
+          bloomRadius: typeof p.bloom_radius === 'number' ? p.bloom_radius : preset.bloomRadius,
+          barIdle: typeof p.bar_idle === 'number' ? p.bar_idle : preset.barIdle,
+          barPeak: typeof p.bar_peak === 'number' ? p.bar_peak : preset.barPeak,
+          barGap: typeof p.bar_gap === 'number' ? p.bar_gap : preset.barGap,
+          barRadius: typeof p.bar_radius === 'number' ? p.bar_radius : preset.barRadius,
+          phaseSpeed: typeof p.phase_speed === 'number' ? p.phase_speed : preset.phaseSpeed,
+          blur: typeof p.blur === 'number' ? p.blur : preset.blur,
         })
       })
       .catch(() => {})
