@@ -282,7 +282,7 @@ async fn bluetooth_remove_output(
     Ok(StatusCode::OK)
 }
 
-// ── BT input (A2DP sink) — stubs filled by U4 ─────────────────────
+// ── BT input (A2DP sink) ────────────────────────────────────────────
 
 /// `POST /api/bluetooth/input/enable` — enable A2DP sink input.
 async fn bluetooth_input_enable(State(s): State<AppState>) -> AppResult<StatusCode> {

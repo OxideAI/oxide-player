@@ -8,12 +8,12 @@
 //! ## Pipeline
 //!
 //! ```text
-//! Phone ──A2DP──▶ bluealsad ──PCM──▶ bluealsa-aplay ──▶ hw:Loopback,0,0
-//!                                                           │
-//!                                                    CamillaDSP captures
-//!                                                    from hw:Loopback,0,1
-//!                                                           │
-//!                                                         DAC
+//! Phone ──A2DP──▶ bluealsa ──PCM──▶ bluealsa-aplay ──▶ oxide_loopback
+//!                                                        │
+//!                                                  CamillaDSP captures
+//!                                                  from hw:Loopback,1
+//!                                                        │
+//!                                                       DAC
 //! ```
 //!
 //! ## Platform support
@@ -23,7 +23,16 @@
 //! stub that always returns "not supported".
 
 use anyhow::Result;
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(target_os = "linux")]
+use std::process::Stdio;
+#[cfg(target_os = "linux")]
+use tokio::process::Command;
+#[cfg(target_os = "linux")]
+use tokio::sync::Mutex;
 
 /// Manages the Bluetooth A2DP Sink input pipeline.
 ///
@@ -32,46 +41,113 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Clone)]
 pub struct BluetoothInputManager {
     enabled: std::sync::Arc<AtomicBool>,
+    #[cfg(target_os = "linux")]
+    child: std::sync::Arc<Mutex<Option<tokio::process::Child>>>,
+    #[cfg(target_os = "linux")]
+    streaming: std::sync::Arc<AtomicBool>,
 }
 
 impl BluetoothInputManager {
-    /// Create a new input manager. On non‑Linux platforms the manager is always
+    /// Create a new input manager. On non-Linux platforms the manager is always
     /// disabled and all operations return errors.
     pub fn new() -> Self {
         BluetoothInputManager {
             enabled: std::sync::Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "linux")]
+            child: std::sync::Arc::new(Mutex::new(None)),
+            #[cfg(target_os = "linux")]
+            streaming: std::sync::Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Enable the A2DP Sink input pipeline.
     ///
-    /// On Linux this starts `bluealsa-aplay` pointed at the ALSA loopback and
-    /// reconfigures CamillaDSP's capture device. Returns an error when the
-    /// pipeline cannot be started (e.g. no phone connected, `snd-aloop` not
-    /// loaded).
-    /// On other platforms this always returns an error.
+    /// The BlueALSA daemon is installed and supervised by the installer. This
+    /// process bridges any connected A2DP source into the shared ALSA PCM that
+    /// CamillaDSP captures.
     #[cfg(target_os = "linux")]
     pub async fn enable(&self) -> Result<()> {
-        // TODO(U4): Linux implementation
-        anyhow::bail!("A2DP sink input is not yet implemented on Linux (U4)")
+        let mut slot = self.child.lock().await;
+        if let Some(child) = slot.as_mut() {
+            match child.try_wait() {
+                Ok(None) => {
+                    self.enabled.store(true, Ordering::Relaxed);
+                    return Ok(());
+                }
+                Ok(Some(_)) | Err(_) => {
+                    slot.take();
+                }
+            }
+        }
+
+        let mut child = Command::new("bluealsa-aplay")
+            .args(["--pcm=oxide_loopback", "--single-audio"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .context("start bluealsa-aplay (is bluez-alsa-utils installed?)")?;
+        child.kill_on_drop(true);
+        *slot = Some(child);
+        drop(slot);
+
+        self.enabled.store(true, Ordering::Relaxed);
+        self.streaming.store(false, Ordering::Relaxed);
+        self.spawn_monitor();
+        Ok(())
     }
 
-    /// Stub for non‑Linux.
+    #[cfg(target_os = "linux")]
+    fn spawn_monitor(&self) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            loop {
+                let exited = {
+                    let mut slot = manager.child.lock().await;
+                    match slot.as_mut() {
+                        Some(child) => match child.try_wait() {
+                            Ok(Some(_)) => true,
+                            Ok(None) => false,
+                            Err(error) => {
+                                tracing::warn!("bluealsa-aplay status check failed: {error}");
+                                true
+                            }
+                        },
+                        None => return,
+                    }
+                };
+
+                if exited {
+                    manager.child.lock().await.take();
+                    manager.enabled.store(false, Ordering::Relaxed);
+                    manager.streaming.store(false, Ordering::Relaxed);
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        });
+    }
+
+    /// Stub for non-Linux.
     #[cfg(not(target_os = "linux"))]
     pub async fn enable(&self) -> Result<()> {
         anyhow::bail!("A2DP sink input is not supported on this platform (requires Linux + BlueZ + BlueALSA)")
     }
 
     /// Disable the A2DP Sink input pipeline.
-    ///
-    /// Stops `bluealsa-aplay` and restores CamillaDSP's original capture device.
     #[cfg(target_os = "linux")]
     pub async fn disable(&self) -> Result<()> {
-        // TODO(U4): Linux implementation
-        anyhow::bail!("A2DP sink input is not yet implemented on Linux (U4)")
+        let child = self.child.lock().await.take();
+        if let Some(mut child) = child {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+        self.enabled.store(false, Ordering::Relaxed);
+        self.streaming.store(false, Ordering::Relaxed);
+        Ok(())
     }
 
-    /// Stub for non‑Linux.
+    /// Stub for non-Linux.
     #[cfg(not(target_os = "linux"))]
     pub async fn disable(&self) -> Result<()> {
         anyhow::bail!("A2DP sink input is not supported on this platform (requires Linux + BlueZ + BlueALSA)")
@@ -83,13 +159,15 @@ impl BluetoothInputManager {
     }
 
     /// Whether a phone or tablet is currently streaming audio via A2DP.
+    ///
+    /// BlueALSA's bridge process does not expose a portable stream-state API;
+    /// this remains false until a future D-Bus stream monitor is added.
     #[cfg(target_os = "linux")]
     pub fn is_streaming(&self) -> bool {
-        // TODO(U4): check bluealsa-aplay process state
-        false
+        self.streaming.load(Ordering::Relaxed)
     }
 
-    /// Stub for non‑Linux.
+    /// Stub for non-Linux.
     #[cfg(not(target_os = "linux"))]
     pub fn is_streaming(&self) -> bool {
         false

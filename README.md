@@ -24,16 +24,17 @@ Oxide scans the library into SQLite and serves optimized cover art. Its JSON API
 - Add, play, and delete persistent HTTP(S) radio stations. Live stream metadata appears in now playing.
 - Use CamillaDSP for bit-perfect passthrough, resampling presets, and per-device parametric EQ.
 - Enable or disable MPD outputs. Persistent device configuration fragments take effect after an MPD restart.
-- On Linux, Bluetooth support covers discovery, pairing, connecting, waking sleeping devices, disconnecting, renaming, and removal.
+- On Linux, Bluetooth support covers discovery, pairing, connecting, waking sleeping devices, disconnecting, renaming, removal, and optional A2DP phone input.
+- On Linux, the installer provisions an AirPlay receiver through Shairport Sync; iPhone/iPad devices can stream to the server over the LAN.
 - Open kiosk mode for full-screen now playing, a real-time FFT visualizer, persistent visualizer settings, and reduced-motion support.
 - Install the PWA to a home screen. The service worker updates the app and caches cover art.
-- The installer creates an SMB Music share and advertises the web UI and share through mDNS.
+- The installer creates an SMB Music share and advertises the web UI, share, and AirPlay receiver through mDNS.
 
 ## Install
 
 ### Quick install (Debian / Ubuntu / Raspberry Pi OS)
 
-The installer runs on Debian-based Linux systems. It installs MPD, ALSA utilities, CamillaDSP, the Oxide service, Bluetooth, Avahi, and Samba, then wires MPD to CamillaDSP through the `snd-aloop` path. It first tries the latest release package for `x86_64` or `arm64`; if no package is available, it builds from source.
+The installer runs on Debian-based Linux systems. It installs MPD, ALSA utilities, CamillaDSP, the Oxide service, BlueZ/BlueALSA, Shairport Sync, Avahi, and Samba. MPD, Bluetooth A2DP, and AirPlay share an ALSA loopback mixer before CamillaDSP, so the same DSP/output chain is used for local and phone playback. It first tries the latest release package for `x86_64` or `arm64`; if no package is available, it builds from source.
 
 Run it as root:
 
@@ -72,24 +73,41 @@ curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.s
   | sudo bash -s -- --fix-perms
 ```
 
-Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `MPD_CONFIG`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, and `SERVICE_USER`.
+Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `MPD_CONFIG`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, `AIRPLAY_NAME`, `AIRPLAY_CONFIG`, and `SERVICE_USER`.
+
+### iPhone and iPad playback
+
+After installation, both receiver paths use the same CamillaDSP configuration:
+
+**AirPlay (recommended):**
+
+1. Connect the iPhone/iPad and server to the same LAN.
+2. Open Control Center, tap the AirPlay output picker, and select the configured `AIRPLAY_NAME` (default: **Oxide Player**).
+3. Start playback. Shairport Sync forwards the stream into Oxide's DSP/output path.
+
+**Bluetooth A2DP:**
+
+1. Open **Settings → Devices → Bluetooth** in Oxide and scan.
+2. Pair the iPhone when it appears.
+3. Tap **Connect**, then enable **A2DP Sink** input.
+4. Select **Oxide Player** as the iPhone's Bluetooth audio output and start playback.
+
+Bluetooth input is disabled until its toggle is enabled. AirPlay is advertised automatically by the `oxide-airplay` systemd service. Both inputs feed the shared `oxide_loopback` ALSA PCM; avoid playing unrelated sources simultaneously if you do not want them mixed.
 
 ### Upgrade
 
-Use update mode for a normal upgrade. It downloads the latest package for the host architecture, replaces the backend binary and frontend assets, and restarts Oxide. It leaves `/etc/oxide-player/config.json`, the library database, radio stations, playlists, and DSP data in place:
+Use update mode for a normal upgrade. It downloads the latest package for the host architecture, replaces the backend binary and frontend assets, installs or repairs the Bluetooth/AirPlay receiver services and shared ALSA loopback, then restarts Oxide. It leaves `/etc/oxide-player/config.json`, the library database, radio stations, playlists, and DSP data in place:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh \
   | sudo bash -s -- --update
 ```
 
-The `--update` mode replaces the binary and frontend assets and repairs the managed MPD output include in an existing config. It does not redo the rest of system setup. Run the full installer when provisioning a host or reapplying system integration:
+The `--update` mode repairs the managed MPD output include and preserves existing MPD/ALSA configuration where possible. Run the full installer when provisioning a host or reapplying all system integration:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh | sudo bash
 ```
-
-Pass the same overrides to both commands when using custom paths. The installer retries when GitHub has published a release before its binary assets are ready. If no matching asset appears, it falls back to a source build.
 
 **From source (manual build):**
 

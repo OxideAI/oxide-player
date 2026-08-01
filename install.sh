@@ -21,6 +21,9 @@ DATA_DIR="${DATA_DIR:-/var/lib/oxide-player}"
 MPD_CONFIG="${MPD_CONFIG:-/etc/mpd.conf}"
 CAMILLADSP_CONFIG="${CAMILLADSP_CONFIG:-/etc/camilladsp/config.yml}"
 CAMILLADSP_WS="${CAMILLADSP_WS:-ws://127.0.0.1:1234}"
+AIRPLAY_NAME="${AIRPLAY_NAME:-Oxide Player}"
+AIRPLAY_CONFIG="${AIRPLAY_CONFIG:-${CONFIG_DIR}/shairport-sync.conf}"
+ASOUND_CONFIG="${ASOUND_CONFIG:-/etc/asound.conf}"
 SERVICE_USER="${SERVICE_USER:-oxide}"
 # oxide-player binds on port 80 by default so the web UI is reachable at
 # http://oxide-player/ or http://oxide-player.local/ without a port number.
@@ -48,8 +51,8 @@ Usage: sudo bash install.sh [OPTIONS]
 Install or update oxide-player on a Debian-based system.
 
 Options:
-  --update     Replace binary + frontend and repair the managed MPD include.
-               Skips the rest of system setup and fetches the latest package.
+  --update     Replace binary + frontend, install/repair phone audio
+               receivers, and repair the managed MPD include.
   --fix-perms  Repair music library ownership/permissions so the service
                user and MPD can read it (fixes a silently empty library
                after music was copied with root ownership, e.g. sudo).
@@ -58,8 +61,8 @@ Options:
 Environment variables (all optional):
   REPO_URL, BRANCH, INSTALL_FROM_DIR, BIN_DIR, SHARE_DIR, CONFIG_DIR,
   DATA_DIR, MPD_CONFIG, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
-  CAMILLADSP_WS, SERVICE_USER, BUILD_DIR, RELEASE_ASSET_RETRIES,
-  RELEASE_ASSET_RETRY_DELAY
+  CAMILLADSP_WS, AIRPLAY_NAME, AIRPLAY_CONFIG, ASOUND_CONFIG, SERVICE_USER,
+  BUILD_DIR, RELEASE_ASSET_RETRIES, RELEASE_ASSET_RETRY_DELAY
 EOF
   exit 0
 }
@@ -404,32 +407,65 @@ setup_bluetooth() {
   run systemctl enable bluetooth || true
   run systemctl start bluetooth || warn "bluetooth.service start failed — is there a BT adapter?"
 
-  # Advertise A2DP Sink and AVRCP via Avahi so phones/tablets can discover
-  # this system as a Bluetooth audio receiver.
-  cat > /etc/avahi/services/oxide-bt.service <<BTAVAHIEOF
-<?xml version="1.0" standalone='no'?>
-<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
-<service-group>
-  <name>Oxide Player (Bluetooth)</name>
-  <service>
-    <type>_a2dp-sink._sub._music._tcp</type>
-    <port>0</port>
-    <txt-record>name=Oxide Player</txt-record>
-  </service>
-</service-group>
-BTAVAHIEOF
-  run systemctl restart avahi-daemon || true
-  log "Bluetooth stack enabled — A2DP Sink advertised via Avahi"
+  # bluez-alsa-utils ships the daemon under both names across supported
+  # Debian/Ubuntu releases. A2DP sink is what makes this host appear as an
+  # audio receiver to an iPhone.
+  local bluetoothctl_bin
+  bluetoothctl_bin="$(command -v bluetoothctl || echo /usr/bin/bluetoothctl)"
+  local daemon
+  if command -v bluealsad >/dev/null 2>&1; then
+    daemon="$(command -v bluealsad)"
+  elif command -v bluealsa >/dev/null 2>&1; then
+    daemon="$(command -v bluealsa)"
+  else
+    warn "BlueALSA daemon not found — Bluetooth phone input will be unavailable."
+    return
+  fi
+
+  run systemctl disable --now bluealsa.service bluealsad.service bluealsa-aplay.service 2>/dev/null || true
+  cat > /etc/systemd/system/oxide-bluealsa.service <<EOF
+[Unit]
+Description=Oxide Player Bluetooth A2DP sink
+After=bluetooth.service sound.target
+Wants=bluetooth.service sound.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+SupplementaryGroups=audio
+ExecStart=$daemon -S -p a2dp-sink
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > /etc/systemd/system/oxide-bluetooth-discoverable.service <<EOF
+[Unit]
+Description=Make Oxide Player discoverable for phone audio
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=$bluetoothctl_bin power on
+ExecStart=$bluetoothctl_bin pairable on
+ExecStart=$bluetoothctl_bin pairable-timeout 0
+ExecStart=$bluetoothctl_bin discoverable on
+ExecStart=$bluetoothctl_bin discoverable-timeout 0
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  log "BlueALSA A2DP sink service configured"
 }
 
 setup_asound() {
-  # Detect the default audio output device (skip the snd-aloop loopback)
-  # and write /etc/asound.conf so ALSA's "default" device points to the
-  # first real playback card found.
-  #
-  # When no hardware is detected (headless / no sound driver) the file is
-  # skipped and CamillaDSP falls back to hw:DAC (user must configure).
-  local conf=/etc/asound.conf
+  # Detect the default audio output device (skip the snd-aloop loopback) and
+  # write /etc/asound.conf. All local producers use oxide_loopback so MPD,
+  # Bluetooth A2DP, and AirPlay can share the CamillaDSP input safely.
+  local conf="$ASOUND_CONFIG"
 
   if ! command -v aplay >/dev/null 2>&1; then
     warn "aplay not found — skipping ALSA default config."
@@ -437,7 +473,6 @@ setup_asound() {
     return
   fi
 
-  # Parse aplay -l, find first non-Loopback playback card
   local card="" dev="" name=""
   while IFS= read -r line; do
     if [[ $line =~ ^card[[:space:]]+([0-9]+):[[:space:]]([A-Za-z].+),[[:space:]]+device[[:space:]]+([0-9]+):[[:space:]](.+) ]]; then
@@ -445,7 +480,6 @@ setup_asound() {
       local cname="${BASH_REMATCH[2]}"
       local d="${BASH_REMATCH[3]}"
       local dname="${BASH_REMATCH[4]}"
-      # skip the loopback module
       if [[ $cname != *Loopback* ]] && [[ $cname != *loopback* ]]; then
         card="$c"
         dev="$d"
@@ -455,6 +489,32 @@ setup_asound() {
     fi
   done < <(aplay -l 2>/dev/null || true)
 
+  log "Writing ALSA configuration ($conf)"
+  cat > "$conf" <<'ASOUNDEOF'
+# oxide-player: shared input path for MPD, Bluetooth A2DP, and AirPlay
+# Producers write to oxide_loopback; CamillaDSP captures hw:Loopback,1.
+pcm.oxide_loopback {
+    type plug
+    slave.pcm {
+        type dmix
+        ipc_key 0x4f584944
+        slave {
+            pcm "hw:Loopback,0,0"
+            format S32_LE
+            rate 44100
+            channels 2
+            period_size 1024
+            buffer_size 4096
+        }
+    }
+}
+
+ctl.oxide_loopback {
+    type hw
+    card Loopback
+}
+ASOUNDEOF
+
   if [ -z "$card" ]; then
     warn "No audio hardware detected (only loopback found)."
     warn "CamillaDSP will use 'hw:DAC'. Edit /etc/asound.conf manually."
@@ -462,17 +522,9 @@ setup_asound() {
   fi
 
   log "Detected audio output: card $card ($name)"
-  log "Writing ALSA default config ($conf)"
-  cat > "$conf" <<ASOUNDEOF
-# oxide-player: default audio output → card $card, device $dev
-# Auto-detected during install. Edit this file to change the default.
-#
-# To list available devices:
-#   aplay -l
-#
-# Override per-session via the ALSA_PCM environment variable:
-#   ALSA_PCM=hw:1,0  mplayer track.flac
+  cat >> "$conf" <<ASOUNDEOF
 
+# oxide-player: default audio output → card $card, device $dev
 pcm.!default {
     type hw
     card $card
@@ -485,6 +537,60 @@ ctl.!default {
 }
 ASOUNDEOF
   log "ALSA default → card $card, device $dev"
+}
+
+ensure_asound_loopback() {
+  local conf="$ASOUND_CONFIG"
+  if [ -f "$conf" ] && grep -Fq 'pcm.oxide_loopback' "$conf"; then
+    log "ALSA shared loopback already configured: $conf"
+    return 1
+  fi
+
+  cat >> "$conf" <<'ASOUNDEOF'
+
+# oxide-player: shared input path for MPD, Bluetooth A2DP, and AirPlay
+pcm.oxide_loopback {
+    type plug
+    slave.pcm {
+        type dmix
+        ipc_key 0x4f584944
+        slave {
+            pcm "hw:Loopback,0,0"
+            format S32_LE
+            rate 44100
+            channels 2
+            period_size 1024
+            buffer_size 4096
+        }
+    }
+}
+
+ctl.oxide_loopback {
+    type hw
+    card Loopback
+}
+ASOUNDEOF
+  log "Added shared ALSA loopback to $conf"
+  return 0
+}
+
+setup_airplay() {
+  log "Configuring AirPlay receiver"
+  run mkdir -p "$(dirname "$AIRPLAY_CONFIG")"
+  cat > "$AIRPLAY_CONFIG" <<EOF
+general =
+{
+    name = "$AIRPLAY_NAME";
+    output_backend = "alsa";
+    mdns_backend = "avahi";
+};
+
+alsa =
+{
+    output_device = "oxide_loopback";
+};
+EOF
+  run chown "$SERVICE_USER:$SERVICE_USER" "$AIRPLAY_CONFIG" 2>/dev/null || true
 }
 
 write_mpd_config() {
@@ -509,13 +615,14 @@ include             "$DATA_DIR/mpd-outputs.d/*.conf"
 audio_output {
     type          "alsa"
     name          "camilladsp-loopback"
-    device        "hw:Loopback,0"
-    dop          "no"
+    device        "oxide_loopback"
+    dop           "no"
 }
 EOF
   run mkdir -p "$DATA_DIR/playlists"
   run chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" 2>/dev/null || true
 }
+
 
 #
 # Repair an existing MPD config during --update. Older installations may not
@@ -619,6 +726,8 @@ install_units() {
   local _cam_host="${CAMILLADSP_WS#ws://}"
   _cam_host="${_cam_host%:*}"
   local _cam_port="${CAMILLADSP_WS##*:}"
+  local _shairport_bin
+  _shairport_bin="$(command -v shairport-sync || echo /usr/bin/shairport-sync)"
   cat > /etc/systemd/system/camilladsp.service <<EOF
 [Unit]
 Description=CamillaDSP audio processor
@@ -630,6 +739,24 @@ Type=simple
 User=$SERVICE_USER
 ExecStart=$BIN_DIR/camilladsp $CAMILLADSP_CONFIG -a $_cam_host -p $_cam_port
 Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > /etc/systemd/system/oxide-airplay.service <<EOF
+[Unit]
+Description=Oxide Player AirPlay receiver
+After=network-online.target avahi-daemon.service sound.target
+Wants=network-online.target avahi-daemon.service sound.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+SupplementaryGroups=audio
+ExecStart=$_shairport_bin -c $AIRPLAY_CONFIG
+Restart=on-failure
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
@@ -656,6 +783,7 @@ RestartSec=3
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
+
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -663,9 +791,13 @@ EOF
 
   run mkdir -p /etc/modules-load.d
   echo "snd-aloop" > /etc/modules-load.d/oxide.conf
+  run systemctl disable --now shairport-sync.service || true
   run systemctl daemon-reload
-  run systemctl enable mpd camilladsp oxide-player
-  run systemctl restart mpd camilladsp oxide-player
+  run systemctl enable mpd camilladsp oxide-player oxide-airplay
+  run systemctl enable oxide-bluealsa oxide-bluetooth-discoverable || warn "Bluetooth input service could not be enabled"
+  run systemctl restart mpd camilladsp oxide-airplay oxide-player
+  run systemctl restart oxide-bluealsa || warn "Bluetooth A2DP service could not be started"
+  run systemctl restart oxide-bluetooth-discoverable || warn "Bluetooth discoverability could not be enabled"
 }
 
 finish() {
@@ -680,6 +812,8 @@ finish() {
   log "Kiosk view:    http://$_ip${_port_suffix}/kiosk"
   log "Music share:   smb://$_ip/Music"
   log "  mDNS:        smb://${_hostname}.local/Music"
+  log "AirPlay:       select '$AIRPLAY_NAME' on an iPhone/iPad on the same LAN"
+  log "Bluetooth:     pair an iPhone with 'Oxide Player', then enable A2DP input in Settings"
   log "Edit config:   $CONFIG_DIR/config.json"
   log "Logs:          journalctl -u oxide-player -f"
   log ""
@@ -717,14 +851,15 @@ do_update() {
   need_root
   check_linux
   detect_os
+  apt_install bluez-alsa-utils shairport-sync
   fetch_source
   build_backend
   build_frontend
-  if ensure_mpd_include; then
-    run systemctl restart mpd || true
-  fi
-  run systemctl daemon-reload
-  run systemctl restart camilladsp oxide-player || true
+  ensure_mpd_include || true
+  ensure_asound_loopback || true
+  setup_bluetooth
+  setup_airplay
+  install_units
   log "Update complete."
   finish
 }
@@ -756,7 +891,8 @@ main() {
   check_linux
   detect_os
   apt_install curl jq git build-essential pkg-config libssl-dev \
-              libasound2-dev alsa-utils mpd mpc ffmpeg samba avahi-daemon bluez
+              libasound2-dev alsa-utils mpd mpc ffmpeg samba avahi-daemon bluez \
+              bluez-alsa-utils shairport-sync
   check_dependencies
   ensure_camilladsp
   fetch_source
@@ -770,6 +906,7 @@ main() {
   write_mpd_config
   write_camilladsp_config
   write_oxide_config
+  setup_airplay
   install_units
   finish
 }

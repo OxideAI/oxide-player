@@ -416,8 +416,9 @@ export function DevicesView() {
         </div>
       )}
 
-      {/* ════════ Bluetooth section ════════ */}
+      {/* ════════ Bluetooth and AirPlay input sections ════════ */}
       <BluetoothSection />
+      <AirPlaySection />
     </div>
   )
 }
@@ -731,6 +732,23 @@ function BluetoothSection() {
           Audio is being streamed from a phone or tablet.
         </div>
       )}
+    </div>
+  )
+}
+
+function AirPlaySection() {
+  return (
+    <div className={styles.cfgSection}>
+      <div>
+        <span className={styles.eyebrow}>AirPlay</span>
+        <h3 className={styles.h}>iPhone and iPad input</h3>
+        <p className={styles.dim}>
+          On an installed Linux server, select <strong>Oxide Player</strong> in
+          the iPhone or iPad AirPlay output picker while both devices are on
+          the same network.
+        </p>
+      </div>
+      <span className={styles.btBadge}>LAN receiver</span>
     </div>
   )
 }
