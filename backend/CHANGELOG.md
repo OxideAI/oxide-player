@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.12.4...oxide-player-v0.13.0) (2026-08-01)
+
+
+### Features
+
+* Add bluetooth/airplay input ([8c37799](https://github.com/OxideAI/oxide-player/commit/8c377997384f918496e5c2c6ca268d53858e4d5b))
+
+
+### Bug Fixes
+
+* tests ([2055ad9](https://github.com/OxideAI/oxide-player/commit/2055ad943d63f9feaa537b212b4ecb3f6734a46c))
+* tests ([69529cd](https://github.com/OxideAI/oxide-player/commit/69529cdc1ba9c31199c4724af4893c04257338d7))
+
 ## [0.12.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.12.3...oxide-player-v0.12.4) (2026-08-01)
 
 
