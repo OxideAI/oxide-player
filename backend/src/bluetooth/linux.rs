@@ -30,6 +30,19 @@ struct Inner {
     _event_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     input: BluetoothInputManager,
 }
+/// Update the cached state after BlueZ successfully pairs a device.
+fn mark_paired(device: &mut BtDevice) {
+    device.paired = true;
+    device.trusted = true;
+}
+
+async fn ensure_trusted(device: &Device, address: &str) -> Result<()> {
+    device
+        .set_trusted(true)
+        .await
+        .with_context(|| format!("trust Bluetooth device {address}"))
+}
+
 
 impl BluetoothManager {
     /// Create a new `BluetoothManager`.  Best‑effort: if BlueZ is unavailable
@@ -251,10 +264,10 @@ impl BluetoothManager {
     pub async fn pair(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
         device.pair().await.with_context(|| format!("pair with {address}"))?;
+        ensure_trusted(&device, address).await?;
 
-        // Mark cached paired.
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
-            entry.paired = true;
+            mark_paired(entry);
         }
 
         Ok(())
@@ -264,10 +277,12 @@ impl BluetoothManager {
 
     pub async fn connect(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
+        ensure_trusted(&device, address).await?;
         device.connect().await.with_context(|| format!("connect to {address}"))?;
 
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
             entry.connected = true;
+            entry.trusted = true;
         }
 
         Ok(())
@@ -315,37 +330,34 @@ impl BluetoothManager {
     /// Test connectivity to a device by connecting and then disconnecting.
     pub async fn test_connectivity(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
-        
-        // Try to connect
+        ensure_trusted(&device, address).await?;
+
         device.connect().await
             .with_context(|| format!("test connect to {address}"))?;
-        
-        // Update cache temporarily
+
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
             entry.connected = true;
+            entry.trusted = true;
         }
-        
-        // Brief pause to let connection stabilize
+
         tokio::time::sleep(Duration::from_millis(500)).await;
-        
-        // Disconnect
+
         device.disconnect().await
             .with_context(|| format!("test disconnect from {address}"))?;
-        
-        // Update cache
+
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
             entry.connected = false;
         }
-        
+
         Ok(())
     }
 
     /// Wake and connect to a paired Bluetooth device that may be in sleep/standby mode.
-    /// 
+    ///
     /// Many Bluetooth speakers go into deep sleep after being idle. This method
     /// attempts to connect with retry logic and delays to give the device time
     /// to wake up and respond.
-    /// 
+    ///
     /// The algorithm:
     /// 1. First attempt to connect immediately (may wake the device)
     /// 2. If that fails, wait 2 seconds and retry (device may be waking up)
@@ -353,45 +365,46 @@ impl BluetoothManager {
     /// 4. On success, update the cache and emit Connected event
     pub async fn wake_and_connect(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
-        
+        ensure_trusted(&device, address).await?;
+
         // Attempt 1: immediate connect (may wake the device)
         let mut last_err = match device.connect().await {
             Ok(()) => {
                 // Success on first try!
                 if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
                     entry.connected = true;
+                    entry.trusted = true;
                 }
                 return Ok(());
             }
             Err(e) => e,
         };
-        
-        // Attempt 2: wait 2 seconds, then retry
+
         tracing::info!("Wake attempt 1 failed for {address}, waiting 2s before retry: {last_err}");
         tokio::time::sleep(Duration::from_secs(2)).await;
-        
+
         last_err = match device.connect().await {
             Ok(()) => {
                 if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
                     entry.connected = true;
+                    entry.trusted = true;
                 }
                 return Ok(());
             }
             Err(e) => e,
         };
-        
-        // Attempt 3: wait 5 seconds, then final retry
+
         tracing::info!("Wake attempt 2 failed for {address}, waiting 5s before final retry: {last_err}");
         tokio::time::sleep(Duration::from_secs(5)).await;
-        
+
         device.connect().await
             .with_context(|| format!("wake and connect to {address} after retries"))?;
-        
+
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
             entry.connected = true;
+            entry.trusted = true;
         }
-        
-        
+
         Ok(())
     }
 
@@ -474,5 +487,30 @@ impl BluetoothManager {
 
     async fn on_device_lost(&self, addr: Address) {
         self.inner.devices.write().await.remove(&addr.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_marks_device_trusted_for_future_connections() {
+        let mut device = BtDevice {
+            address: "AA:BB:CC:DD:EE:FF".to_string(),
+            name: Some("Speaker".to_string()),
+            alias: None,
+            class: None,
+            icon: None,
+            rssi: None,
+            connected: false,
+            paired: false,
+            trusted: false,
+        };
+
+        mark_paired(&mut device);
+
+        assert!(device.paired);
+        assert!(device.trusted, "paired devices must be trusted before reconnecting");
     }
 }

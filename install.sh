@@ -25,6 +25,7 @@ AIRPLAY_NAME="${AIRPLAY_NAME:-Oxide Player}"
 AIRPLAY_CONFIG="${AIRPLAY_CONFIG:-${CONFIG_DIR}/shairport-sync.conf}"
 ASOUND_CONFIG="${ASOUND_CONFIG:-/etc/asound.conf}"
 SERVICE_USER="${SERVICE_USER:-oxide}"
+SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 # oxide-player binds on port 80 by default so the web UI is reachable at
 # http://oxide-player/ or http://oxide-player.local/ without a port number.
 # Ports below 1024 need CAP_NET_BIND_SERVICE (set up automatically in the
@@ -423,24 +424,27 @@ setup_bluetooth() {
   fi
 
   run systemctl disable --now bluealsa.service bluealsad.service bluealsa-aplay.service 2>/dev/null || true
-  cat > /etc/systemd/system/oxide-bluealsa.service <<EOF
+  cat > "$SYSTEMD_DIR/oxide-bluealsa.service" <<EOF
 [Unit]
 Description=Oxide Player Bluetooth A2DP sink
-After=bluetooth.service sound.target
+Documentation=man:bluealsa(8)
+Requisite=dbus.service
+After=bluetooth.service dbus.service sound.target
 Wants=bluetooth.service sound.target
 
 [Service]
-Type=simple
-User=$SERVICE_USER
-SupplementaryGroups=audio
-ExecStart=$daemon -S -p a2dp-sink
+Type=dbus
+BusName=org.bluealsa
+User=root
+ExecStart=$daemon -S -p a2dp-source -p a2dp-sink
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
 Restart=on-failure
 RestartSec=3
-
 [Install]
 WantedBy=multi-user.target
 EOF
-  cat > /etc/systemd/system/oxide-bluetooth-discoverable.service <<EOF
+  cat > "$SYSTEMD_DIR/oxide-bluetooth-discoverable.service" <<EOF
 [Unit]
 Description=Make Oxide Player discoverable for phone audio
 After=bluetooth.service
