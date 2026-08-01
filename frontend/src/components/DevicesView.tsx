@@ -518,19 +518,8 @@ function BluetoothSection() {
     setBusyAddr(address)
     setBtError(null)
     try {
-      await api.btConnect(address)
-      await loadDevices()
-    } catch (e) {
-      setBtError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusyAddr(null)
-    }
-  }, [loadDevices])
-
-  const handleWakeConnect = useCallback(async (address: string) => {
-    setBusyAddr(address)
-    setBtError(null)
-    try {
+      // A sleeping speaker may reject the first connection attempt. Use the
+      // retrying wake path for the single Connect action shown to users.
       await api.btWakeConnect(address)
       await loadDevices()
     } catch (e) {
@@ -690,14 +679,6 @@ function BluetoothSection() {
                       onClick={() => handleConnect(d.address)}
                     >
                       {isBusy ? '…' : 'Connect'}
-                    </button>
-                    <button
-                      className={styles.on}
-                      disabled={isBusy}
-                      onClick={() => handleWakeConnect(d.address)}
-                      title="Wake speaker from sleep and connect (with retries)"
-                    >
-                      {isBusy ? '…' : 'Wake & Connect'}
                     </button>
                     <button
                       className={styles.btnGhost}

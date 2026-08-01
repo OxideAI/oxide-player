@@ -121,12 +121,18 @@ impl BluetoothManager {
                 }
             };
 
-            // Fetch all relevant properties
+            // Fetch metadata and live connection state. BlueZ keeps paired
+            // devices in the adapter cache, so these properties are the
+            // source of truth after a restart or an external bluetoothctl
+            // operation.
             let name = device.name().await.ok().flatten();
-            let alias = device.alias().await.ok().and_then(|s| Some(s));
+            let alias = device.alias().await.ok();
             let class = device.class().await.ok().flatten();
             let icon = device.icon().await.ok().flatten();
             let rssi = device.rssi().await.ok().flatten();
+            let paired = device.is_paired().await.unwrap_or(false);
+            let connected = device.is_connected().await.unwrap_or(false);
+            let trusted = device.is_trusted().await.unwrap_or(false);
 
             cache.entry(addr_str).and_modify(|d| {
                 d.name = name.clone();
@@ -134,6 +140,9 @@ impl BluetoothManager {
                 d.class = class;
                 d.icon = icon.clone();
                 d.rssi = rssi;
+                d.paired = paired;
+                d.connected = connected;
+                d.trusted = trusted;
             }).or_insert(BtDevice {
                 address: addr.to_string(),
                 name,
@@ -141,9 +150,9 @@ impl BluetoothManager {
                 class,
                 icon,
                 rssi,
-                connected: false,
-                paired: false,
-                trusted: false,
+                connected,
+                paired,
+                trusted,
             });
         }
     }
