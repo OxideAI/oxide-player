@@ -31,6 +31,10 @@ LISTEN="${LISTEN:-0.0.0.0:80}"
 MUSIC_DIR="${MUSIC_DIR:-${DATA_DIR}/music}"
 MPD_MUSIC_DIR="${MPD_MUSIC_DIR:-${MUSIC_DIR}}"
 BUILD_DIR="${BUILD_DIR:-/tmp/oxide-player-build}"
+# Release assets are uploaded after the GitHub release is published. Keep the
+# installer from racing that upload on a fresh release.
+RELEASE_ASSET_RETRIES="${RELEASE_ASSET_RETRIES:-30}"
+RELEASE_ASSET_RETRY_DELAY="${RELEASE_ASSET_RETRY_DELAY:-10}"
 
 # ---- CLI / mode ------------------------------------------------------------
 update_mode=false
@@ -53,7 +57,8 @@ Options:
 Environment variables (all optional):
   REPO_URL, BRANCH, INSTALL_FROM_DIR, BIN_DIR, SHARE_DIR, CONFIG_DIR,
   DATA_DIR, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
-  CAMILLADSP_WS, SERVICE_USER, BUILD_DIR
+  CAMILLADSP_WS, SERVICE_USER, BUILD_DIR, RELEASE_ASSET_RETRIES,
+  RELEASE_ASSET_RETRY_DELAY
 EOF
   exit 0
 }
@@ -148,17 +153,31 @@ fetch_release_pkg() {
   command -v curl >/dev/null 2>&1 || { warn "curl missing — skipping release download."; return 1; }
   command -v jq   >/dev/null 2>&1 || { warn "jq missing — skipping release download."; return 1; }
 
-  local arch asset url tag
+  local arch asset url tag attempt
   arch="$(detect_arch)"
   asset="oxide-player-${arch}.tar.gz"
 
   log "Looking up latest release asset: $asset"
-  url="$(curl -fsSL "$REPO_API/releases/latest" \
-        | jq -r --arg a "$asset" '.tag_name as $t | (.assets[]? | select(.name==$a) | {url: .browser_download_url, tag: $t}) | "\(.tag)\t\(.url)"' \
-        | head -1)"
+  url=""
+  for ((attempt = 1; attempt <= RELEASE_ASSET_RETRIES; attempt++)); do
+    if url="$(curl -fsSL "$REPO_API/releases/latest" \
+          | jq -r --arg a "$asset" '.tag_name as $t | (.assets[]? | select(.name==$a) | {url: .browser_download_url, tag: $t}) | "\(.tag)\t\(.url)"' \
+          | head -1)"; then
+      :
+    else
+      url=""
+    fi
+    if [ -n "$url" ]; then
+      break
+    fi
+    if [ "$attempt" -lt "$RELEASE_ASSET_RETRIES" ]; then
+      log "Release asset not available yet (attempt $attempt/$RELEASE_ASSET_RETRIES); retrying in ${RELEASE_ASSET_RETRY_DELAY}s"
+      sleep "$RELEASE_ASSET_RETRY_DELAY"
+    fi
+  done
 
   if [ -z "$url" ]; then
-    warn "No matching release asset found — will build from source."
+    warn "No matching release asset found after $RELEASE_ASSET_RETRIES attempts — will build from source."
     return 1
   fi
   tag="${url%%$'\t'*}"
@@ -701,4 +720,6 @@ main() {
   finish
 }
 
-main
+if [ "${OXIDE_INSTALLER_TEST:-0}" != "1" ]; then
+  main
+fi

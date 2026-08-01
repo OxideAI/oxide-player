@@ -69,3 +69,11 @@ jobs:
       - name: Test
         run: npm test
 
+
+  installer:
+    name: Installer release asset selection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test release asset lookup
+        run: tests/install-release-assets.sh
