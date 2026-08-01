@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.13.1...oxide-player-v0.13.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* bluetooth connectivity ([0adfdc9](https://github.com/OxideAI/oxide-player/commit/0adfdc946bb2bb2395b4c4ec4b130abeadbbb227))
+
 ## [0.13.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.13.0...oxide-player-v0.13.1) (2026-08-01)
 
 
