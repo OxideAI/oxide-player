@@ -47,6 +47,18 @@ pub struct BluetoothInputManager {
     streaming: std::sync::Arc<AtomicBool>,
 }
 
+#[cfg(target_os = "linux")]
+fn bluealsa_aplay_command() -> Command {
+    let mut command = Command::new("bluealsa-aplay");
+    command
+        .args(["--pcm=oxide_loopback", "--single-audio"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    command
+}
+
 impl BluetoothInputManager {
     /// Create a new input manager. On non-Linux platforms the manager is always
     /// disabled and all operations return errors.
@@ -80,14 +92,9 @@ impl BluetoothInputManager {
             }
         }
 
-        let mut child = Command::new("bluealsa-aplay")
-            .args(["--pcm=oxide_loopback", "--single-audio"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
+        let child = bluealsa_aplay_command()
             .spawn()
             .context("start bluealsa-aplay (is bluez-alsa-utils installed?)")?;
-        child.kill_on_drop(true);
         *slot = Some(child);
         drop(slot);
 
@@ -171,5 +178,23 @@ impl BluetoothInputManager {
     #[cfg(not(target_os = "linux"))]
     pub fn is_streaming(&self) -> bool {
         false
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::bluealsa_aplay_command;
+
+    #[test]
+    fn bluealsa_aplay_command_uses_shared_loopback_and_kills_on_drop() {
+        let command = bluealsa_aplay_command();
+        let std_command = command.as_std();
+
+        assert_eq!(std_command.get_program(), "bluealsa-aplay");
+        assert_eq!(
+            std_command.get_args().collect::<Vec<_>>(),
+            ["--pcm=oxide_loopback", "--single-audio"]
+        );
+        assert!(command.get_kill_on_drop());
     }
 }
