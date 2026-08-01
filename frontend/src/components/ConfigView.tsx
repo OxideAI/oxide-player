@@ -5,7 +5,7 @@ import { DevicesView } from './DevicesView'
 import { DspView } from './DspView'
 import styles from './ConfigView.module.css'
 
-type Section = 'library' | 'mpd' | 'server' | 'dsp' | 'storage'
+type Section = 'library' | 'mpd' | 'server' | 'bluetooth' | 'dsp' | 'storage'
 
 export function ConfigView() {
   const [config, setConfig] = useState<Config | null>(null)
@@ -208,6 +208,33 @@ export function ConfigView() {
         </p>
         <button className={styles.save} onClick={() => save('server', true)} disabled={saving === 'server'}>
           {saving === 'server' ? 'Saving...' : 'Save server settings'}
+        </button>
+      </section>
+
+      <section className={styles.card}>
+        <div className={styles.cardHead}>
+          <h3 className={styles.cardTitle}>Bluetooth</h3>
+          <span className={styles.restartTag}>restart required</span>
+        </div>
+        <label className={styles.checkField}>
+          <input
+            className={styles.checkbox}
+            type="checkbox"
+            checked={config!.bluetooth_reconnect_on_startup}
+            onChange={(e) => patch({ bluetooth_reconnect_on_startup: e.target.checked })}
+          />
+          <span>Reconnect paired speakers on startup</span>
+        </label>
+        <p className={styles.hint}>
+          On launch, Oxide reconnects paired speakers with managed BlueALSA outputs. Disable this
+          if another service owns Bluetooth connection policy.
+        </p>
+        <button
+          className={styles.save}
+          onClick={() => save('bluetooth', true)}
+          disabled={saving === 'bluetooth'}
+        >
+          {saving === 'bluetooth' ? 'Saving...' : 'Save Bluetooth settings'}
         </button>
       </section>
 

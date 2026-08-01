@@ -187,6 +187,7 @@ export interface Config {
   mpd_binary: string | null
   mpd_config: string | null
   mpd_music_directory: string | null
+  bluetooth_reconnect_on_startup: boolean
   listen: string
   data_dir: string
   library_dirs: string[]

@@ -26,6 +26,10 @@ pub struct Config {
     /// path is used only when no configured root matches.
     #[serde(default)]
     pub mpd_music_directory: Option<PathBuf>,
+    /// Reconnect paired Bluetooth output devices when the server starts.
+    /// Enabled by default so a service restart preserves the active speaker.
+    #[serde(default = "default_true")]
+    pub bluetooth_reconnect_on_startup: bool,
     pub listen: String,
     pub data_dir: PathBuf,
     pub library_dirs: Vec<PathBuf>,
@@ -177,6 +181,7 @@ impl Config {
             mpd_binary: None,
             mpd_config: None,
             mpd_music_directory: None,
+            bluetooth_reconnect_on_startup: true,
             // Bind to localhost by default; override with --listen (or config)
             // only when you intend to expose the (currently unauthenticated) API
             // beyond this machine. See AGENTS.md / security notes.
@@ -363,6 +368,18 @@ mod tests {
         assert!(resolved.is_none(), "expected no resolved path without persisted config");
         assert_eq!(got.listen, "127.0.0.1:8000");
         assert_eq!(got.data_dir, dir.path().join("data"));
+    }
+
+    #[test]
+    fn bluetooth_reconnect_is_enabled_by_default() {
+        assert!(Config::default_config().bluetooth_reconnect_on_startup);
+
+        let mut raw = serde_json::to_value(Config::default_config()).unwrap();
+        raw.as_object_mut()
+            .unwrap()
+            .remove("bluetooth_reconnect_on_startup");
+        let parsed: Config = serde_json::from_value(raw).unwrap();
+        assert!(parsed.bluetooth_reconnect_on_startup);
     }
 
     #[test]

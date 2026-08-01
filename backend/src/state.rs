@@ -11,6 +11,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
+fn bluetooth_address_from_device(device: Option<&str>) -> Option<String> {
+    let value = device?.strip_prefix("bluealsa:DEV=")?;
+    value.split(',').next().filter(|address| !address.is_empty()).map(str::to_string)
+}
+
+fn configured_bluetooth_addresses(configs: &[crate::devices::config_fragment::DeviceConfig]) -> std::collections::HashSet<String> {
+    configs
+        .iter()
+        .filter_map(|config| bluetooth_address_from_device(config.device.as_deref()))
+        .collect()
+}
+
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Inner>,
@@ -81,6 +93,42 @@ impl AppState {
             dsp.seed(profiles).await;
         });
         state
+    }
+
+    /// Reconnect Bluetooth outputs that were configured by Oxide. This runs
+    /// after startup in the background so a sleeping speaker cannot delay the
+    /// HTTP server from becoming available.
+    pub fn spawn_bluetooth_reconnect(&self) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            if !state.config().await.bluetooth_reconnect_on_startup {
+                tracing::info!("Bluetooth startup reconnect disabled by configuration");
+                return;
+            }
+
+            let addresses = configured_bluetooth_addresses(&state.device_configs().list());
+            if addresses.is_empty() {
+                return;
+            }
+
+            for device in state.bluetooth().list_devices().await {
+                if !device.paired || device.connected || !addresses.contains(&device.address) {
+                    continue;
+                }
+                match state.bluetooth().wake_and_connect(&device.address).await {
+                    Ok(()) => tracing::info!(
+                        "reconnected Bluetooth output '{}' ({}) on startup",
+                        device.name.as_deref().unwrap_or("unknown"),
+                        device.address
+                    ),
+                    Err(e) => tracing::warn!(
+                        "could not reconnect Bluetooth output '{}' ({}): {e}",
+                        device.name.as_deref().unwrap_or("unknown"),
+                        device.address
+                    ),
+                }
+            }
+        });
     }
 
     pub fn db(&self) -> &LibraryDb {
@@ -623,5 +671,36 @@ mod tests {
             }
         }
         assert!(got_status, "refresh_status must broadcast a Status event");
+
+    }
+    #[test]
+    fn configured_bluetooth_addresses_only_include_bluealsa_outputs() {
+        let configs = vec![
+            crate::devices::config_fragment::DeviceConfig {
+                name: "Speaker".to_string(),
+                output_type: "alsa".to_string(),
+                device: Some("bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp".to_string()),
+                format: None,
+                mixer_type: None,
+                mixer_device: None,
+                mixer_control: None,
+                dop: false,
+            },
+            crate::devices::config_fragment::DeviceConfig {
+                name: "Loopback".to_string(),
+                output_type: "alsa".to_string(),
+                device: Some("hw:Loopback,1".to_string()),
+                format: None,
+                mixer_type: None,
+                mixer_device: None,
+                mixer_control: None,
+                dop: false,
+            },
+        ];
+
+        assert_eq!(
+            configured_bluetooth_addresses(&configs),
+            std::collections::HashSet::from(["AA:BB:CC:DD:EE:FF".to_string()])
+        );
     }
 }

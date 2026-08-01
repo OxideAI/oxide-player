@@ -8,6 +8,7 @@ vi.mock('../api', () => ({
       library_dirs: [],
       mpd_host: '127.0.0.1',
       mpd_port: 6600,
+      bluetooth_reconnect_on_startup: true,
       listen: '0.0.0.0:8000',
       camilladsp_config_path: '',
       camilladsp_ws_url: null,
@@ -26,6 +27,10 @@ describe('ConfigView version', () => {
     render(<ConfigView />)
     await waitFor(() => {
       expect(screen.getByText(/Version 0\.1\.0/i)).toBeTruthy()
+      const checkbox = screen.getByRole('checkbox', {
+        name: /Reconnect paired speakers on startup/i,
+      }) as HTMLInputElement
+      expect(checkbox.checked).toBe(true)
     })
   })
 })

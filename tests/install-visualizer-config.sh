@@ -26,6 +26,7 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as f:
     config = json.load(f)
 
+assert config["bluetooth_reconnect_on_startup"] is True, "installed config must enable Bluetooth startup reconnect"
 assert config["visualizer_fft"] is True, "installed config must enable FFT visualizer"
 assert config["visualizer_capture_device"] == "hw:Loopback,1"
 assert config["visualizer_capture_rate"] == 44100

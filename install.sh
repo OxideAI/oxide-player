@@ -727,6 +727,7 @@ write_oxide_config() {
   "data_dir": "$DATA_DIR",
   "mpd_config": "$MPD_CONFIG",
   "mpd_music_directory": "$MPD_MUSIC_DIR",
+  "bluetooth_reconnect_on_startup": true,
   "library_dirs": $dirs_json,
   "static_dir": "$SHARE_DIR/dist",
   "camilladsp_config_path": "$CAMILLADSP_CONFIG",
