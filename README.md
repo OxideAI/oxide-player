@@ -73,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.s
   | sudo bash -s -- --fix-perms
 ```
 
-Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `MPD_CONFIG`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, `AIRPLAY_NAME`, `AIRPLAY_CONFIG`, and `SERVICE_USER`.
+Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `MPD_CONFIG`, `SAMBA_CONFIG`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, `AIRPLAY_NAME`, `AIRPLAY_CONFIG`, and `SERVICE_USER`.
 
 ### iPhone and iPad playback
 
@@ -108,6 +108,31 @@ The `--update` mode repairs the managed MPD output include and preserves existin
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh | sudo bash
 ```
+
+### Uninstall
+
+Remove the Oxide binary, frontend assets, Oxide systemd services, Avahi
+advertisement, and installer-managed audio integration:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh \
+  | sudo bash -s -- --uninstall
+```
+
+For a local checkout:
+
+```bash
+sudo bash install.sh --uninstall
+```
+
+Uninstall preserves `/etc/oxide-player`, `/var/lib/oxide-player`, and the
+configured music directory, including the library database, playlists, radio
+stations, and DSP data. It does not remove the service account or Debian
+packages. When the installer created `.pre-oxide` backups for MPD or Samba,
+uninstall restores them; otherwise those system configuration files are left
+unchanged and a warning is printed. Pass the same `DATA_DIR`, `MPD_CONFIG`,
+`CONFIG_DIR`, `BIN_DIR`, `SHARE_DIR`, and related overrides used during
+installation when uninstalling a custom deployment.
 
 **From source (manual build):**
 

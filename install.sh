@@ -24,6 +24,7 @@ CAMILLADSP_WS="${CAMILLADSP_WS:-ws://127.0.0.1:1234}"
 AIRPLAY_NAME="${AIRPLAY_NAME:-Oxide Player}"
 AIRPLAY_CONFIG="${AIRPLAY_CONFIG:-${CONFIG_DIR}/shairport-sync.conf}"
 ASOUND_CONFIG="${ASOUND_CONFIG:-/etc/asound.conf}"
+SAMBA_CONFIG="${SAMBA_CONFIG:-/etc/samba/smb.conf}"
 SERVICE_USER="${SERVICE_USER:-oxide}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 # oxide-player binds on port 80 by default so the web UI is reachable at
@@ -44,16 +45,19 @@ RELEASE_ASSET_RETRY_DELAY="${RELEASE_ASSET_RETRY_DELAY:-10}"
 # ---- CLI / mode ------------------------------------------------------------
 update_mode=false
 fix_perms_mode=false
+uninstall_mode=false
 
 show_usage() {
   cat <<'EOF'
 Usage: sudo bash install.sh [OPTIONS]
 
-Install or update oxide-player on a Debian-based system.
+Install, update, or uninstall oxide-player on a Debian-based system.
 
 Options:
   --update     Replace binary + frontend, install/repair phone audio
                receivers, and repair the managed MPD include.
+  --uninstall  Remove Oxide binaries, services, and system integration.
+               Preserves config, library, playlists, and runtime data.
   --fix-perms  Repair music library ownership/permissions so the service
                user and MPD can read it (fixes a silently empty library
                after music was copied with root ownership, e.g. sudo).
@@ -62,8 +66,8 @@ Options:
 Environment variables (all optional):
   REPO_URL, BRANCH, INSTALL_FROM_DIR, BIN_DIR, SHARE_DIR, CONFIG_DIR,
   DATA_DIR, MPD_CONFIG, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
-  CAMILLADSP_WS, AIRPLAY_NAME, AIRPLAY_CONFIG, ASOUND_CONFIG, SERVICE_USER,
-  BUILD_DIR, RELEASE_ASSET_RETRIES, RELEASE_ASSET_RETRY_DELAY
+  CAMILLADSP_WS, AIRPLAY_NAME, AIRPLAY_CONFIG, ASOUND_CONFIG, SAMBA_CONFIG,
+  SERVICE_USER, BUILD_DIR, RELEASE_ASSET_RETRIES, RELEASE_ASSET_RETRY_DELAY
 EOF
   exit 0
 }
@@ -71,6 +75,7 @@ EOF
 while [ $# -gt 0 ]; do
   case "${1:-}" in
     --update) update_mode=true ;;
+    --uninstall) uninstall_mode=true ;;
     --fix-perms) fix_perms_mode=true ;;
     --help|-h) show_usage ;;
     *) warn "Unknown option: $1 (try --help)" ;;
@@ -324,14 +329,13 @@ setup_samba() {
 
   apt_install samba
 
-  # Backup existing smb.conf
-  if [ -f /etc/samba/smb.conf ] && [ ! -f /etc/samba/smb.conf.pre-oxide ]; then
-    run cp /etc/samba/smb.conf /etc/samba/smb.conf.pre-oxide
-    warn "Backed up existing smb.conf to smb.conf.pre-oxide"
+  if [ -f "$SAMBA_CONFIG" ] && [ ! -f "$SAMBA_CONFIG.pre-oxide" ]; then
+    run cp "$SAMBA_CONFIG" "$SAMBA_CONFIG.pre-oxide"
+    warn "Backed up existing $SAMBA_CONFIG to $SAMBA_CONFIG.pre-oxide"
   fi
 
   log "Writing Samba config"
-  cat > /etc/samba/smb.conf <<SAMBAEOF
+  cat > "$SAMBA_CONFIG" <<SAMBAEOF
 [global]
    workgroup = WORKGROUP
    server string = oxide-player
@@ -867,6 +871,85 @@ check_linux() {
   esac
 }
 
+remove_path() {
+  local path="$1"
+  case "$path" in
+    ""|/|.) die "refusing to remove unsafe path '$path'" ;;
+  esac
+  [ -e "$path" ] || return 0
+  run rm -rf -- "$path"
+}
+
+restore_backup_or_warn() {
+  local path="$1"
+  local backup="${path}.pre-oxide"
+  if [ -f "$backup" ]; then
+    run mv "$backup" "$path"
+  else
+    warn "No Oxide backup for $path; leaving it unchanged."
+  fi
+}
+
+do_uninstall() {
+  need_root
+  check_linux
+
+  local units=(
+    oxide-player.service
+    oxide-airplay.service
+    oxide-bluealsa.service
+    oxide-bluetooth-discoverable.service
+    camilladsp.service
+  )
+  run systemctl disable --now "${units[@]}" 2>/dev/null || true
+  run systemctl daemon-reload || true
+
+  for unit in "${units[@]}"; do
+    remove_path "$SYSTEMD_DIR/$unit"
+  done
+
+  remove_path "$BIN_DIR/oxide-player"
+  remove_path "$SHARE_DIR"
+  remove_path "/etc/avahi/services/oxide-player.service"
+
+  if [ -f "$ASOUND_CONFIG" ] && grep -Fq '# oxide-player:' "$ASOUND_CONFIG"; then
+    remove_path "$ASOUND_CONFIG"
+  else
+    warn "Leaving $ASOUND_CONFIG unchanged; it is not marked as Oxide-managed."
+  fi
+
+  if [ -f "$AIRPLAY_CONFIG" ] &&
+    grep -Fq 'output_device = "oxide_loopback";' "$AIRPLAY_CONFIG"; then
+    remove_path "$AIRPLAY_CONFIG"
+  fi
+
+  if [ -f "$MPD_CONFIG.pre-oxide" ]; then
+    restore_backup_or_warn "$MPD_CONFIG"
+    run systemctl restart mpd || true
+  else
+    warn "No Oxide MPD backup found; leaving $MPD_CONFIG unchanged."
+  fi
+
+  if [ -f "$SAMBA_CONFIG.pre-oxide" ]; then
+    run mv "$SAMBA_CONFIG.pre-oxide" "$SAMBA_CONFIG"
+    run systemctl restart smbd || true
+  else
+    warn "No Oxide Samba backup found; leaving $SAMBA_CONFIG unchanged."
+  fi
+
+  if [ -f /etc/modules-load.d/oxide.conf ] &&
+    [ "$(tr -d '\n' < /etc/modules-load.d/oxide.conf)" = "snd-aloop" ]; then
+    remove_path /etc/modules-load.d/oxide.conf
+  fi
+  run systemctl restart avahi-daemon || true
+
+  log "Uninstall complete."
+  log "Preserved config: $CONFIG_DIR"
+  log "Preserved data and music: $DATA_DIR and $MPD_MUSIC_DIR"
+  log "The $SERVICE_USER account and installed packages were not removed."
+  log "Remove preserved files manually only after confirming you no longer need them."
+}
+
 do_update() {
   need_root
   check_linux
@@ -899,6 +982,10 @@ check_dependencies() {
 }
 
 main() {
+  if $uninstall_mode; then
+    do_uninstall
+    return
+  fi
   if $update_mode; then
     do_update
     return
