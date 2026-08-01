@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.13.0...oxide-player-v0.13.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* prioritize harwdware volume ([500f717](https://github.com/OxideAI/oxide-player/commit/500f7173b50d6d8a944ffa84a883b5c541e4f196))
+
 ## [0.13.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.12.4...oxide-player-v0.13.0) (2026-08-01)
 
 
