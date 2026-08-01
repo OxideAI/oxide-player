@@ -673,8 +673,18 @@ ensure_mpd_include() {
       if (!done) print include
     }
   ' "$conf" > "$tmp"
-  cat "$tmp" > "$conf"
+  if [ ! -s "$tmp" ] || ! grep -Fq "$include" "$tmp"; then
+    rm -f "$tmp"
+    die "refusing to replace $conf: generated MPD config is empty or missing the managed output include"
+  fi
+  if ! cat "$tmp" > "$conf"; then
+    rm -f "$tmp"
+    die "cannot update MPD config $conf"
+  fi
   rm -f "$tmp"
+  if [ ! -s "$conf" ] || ! grep -Fq "$include" "$conf"; then
+    die "MPD config $conf failed post-write validation"
+  fi
   log "Added managed output include to $conf"
 }
 

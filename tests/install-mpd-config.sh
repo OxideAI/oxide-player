@@ -26,5 +26,15 @@ grep -Fqx "music_directory     \"$MPD_MUSIC_DIR\"" "$MPD_CONFIG"
 grep -Fq "include" "$MPD_CONFIG"
 grep -Fq "$DATA_DIR/mpd-outputs.d/*.conf" "$MPD_CONFIG"
 
+cat > "$MPD_CONFIG" <<'EOF'
+music_directory "/music"
+audio_output {
+    type "alsa"
+}
+EOF
+ensure_mpd_include
+test -s "$MPD_CONFIG"
+grep -Fq "$DATA_DIR/mpd-outputs.d/*.conf" "$MPD_CONFIG"
+
 printf 'installer MPD config include test passed\n'
 
