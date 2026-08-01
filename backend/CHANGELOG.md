@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.13.5...oxide-player-v0.14.0) (2026-08-01)
+
+
+### Features
+
+* remeber last output ([4939f17](https://github.com/OxideAI/oxide-player/commit/4939f176d9f2c07aa17d6da40712b6bbb7476aa9))
+
 ## [0.13.5](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.13.4...oxide-player-v0.13.5) (2026-08-01)
 
 
