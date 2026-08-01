@@ -1,8 +1,8 @@
 # Oxide
 
-A music server for your local library. The Rust backend wraps MPD (decode/transport) and CamillaDSP (resampling + parametric EQ) and serves a React web UI, plus an optional full-screen kiosk view. One static binary, no runtime dependencies beyond MPD and CamillaDSP, made to run on a headless box feeding a USB DAC over your LAN.
+A self-hosted music server for a local library. The Rust backend talks to MPD for decoding and transport, uses CamillaDSP for resampling and parametric EQ, and serves a React web UI. It also has an optional full-screen kiosk view with a real-time FFT visualizer. The intended setup is a headless Linux box connected to a USB DAC and reachable over your LAN.
 
-Oxide is a thin control and metadata layer in front of MPD: it scans your library into a SQLite database, serves cover art, and exposes playback, queue, shuffle, DSP, and device controls over a JSON API.
+Oxide scans the library into SQLite and serves optimized cover art. Its JSON API controls playback, queues, DSP, radio, Bluetooth, output devices, and playlists. The backend stays in front of MPD as a control and metadata layer.
 
 ## Screenshots
 
@@ -16,134 +16,178 @@ Oxide is a thin control and metadata layer in front of MPD: it scans your librar
 
 ## Features
 
-- **Library browser**: albums, artists, tracks with search and cover art.
-- **Now-playing bar**: play/pause/stop/next/prev, scrub, volume, and live format readout (sample rate, bit depth, channels).
-- **Queue panel**: click-to-jump, **shuffle** toggle (MPD random mode), and per-track remove.
-- **Per-track menu**: play next, clear-and-play, add to playlist, file info.
-- **DSP**: bit-perfect passthrough, resampling presets, and per-device parametric EQ.
-- **Output devices**: enable/disable MPD outputs.
-- **Kiosk mode**: full-screen now-playing for an attached display.
-- **PWA**: installable to your home screen.
+- Browse albums, artists, and tracks with full-text search, CUE-sheet track addressing, and cover art.
+- Control playback, scrubbing, volume, queues, MPD random-mode shuffle, and live format information.
+- Player status and queue updates travel over one reconnecting WebSocket. If the socket is unavailable, the UI falls back to REST.
+- Track actions include play next, clear-and-play, adding to a playlist, and viewing file information.
+- Browse MPD playlists and add tracks from the library or a track menu.
+- Add, play, and delete persistent HTTP(S) radio stations. Live stream metadata appears in now playing.
+- Use CamillaDSP for bit-perfect passthrough, resampling presets, and per-device parametric EQ.
+- Enable or disable MPD outputs. Persistent device configuration fragments take effect after an MPD restart.
+- On Linux, Bluetooth support covers discovery, pairing, connecting, waking sleeping devices, disconnecting, renaming, and removal.
+- Open kiosk mode for full-screen now playing, a real-time FFT visualizer, persistent visualizer settings, and reduced-motion support.
+- Install the PWA to a home screen. The service worker updates the app and caches cover art.
+- The installer creates an SMB Music share and advertises the web UI and share through mDNS.
 
 ## Install
 
 ### Quick install (Debian / Ubuntu / Raspberry Pi OS)
 
-The `curl | bash` installer provisions everything on a clean host: installs MPD + ALSA utils, fetches/builds CamillaDSP, wires the MPD → CamillaDSP (`snd-aloop`) loopback, builds the backend and frontend, and enables systemd units.
+The installer runs on Debian-based Linux systems. It installs MPD, ALSA utilities, CamillaDSP, the Oxide service, Bluetooth, Avahi, and Samba, then wires MPD to CamillaDSP through the `snd-aloop` path. It first tries the latest release package for `x86_64` or `arm64`; if no package is available, it builds from source.
+
+Run it as root:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh | sudo bash
 ```
 
-After install, open the web UI on your LAN (replace the IP with the server's):
+The installed service listens on `0.0.0.0:80` by default. Open:
 
+```text
+http://<server-ip>/
 ```
-http://<server-ip>:8000/
+
+If mDNS is available, the service is also reachable at `http://oxide-player.local/`. Set `LISTEN` before running the installer when you need another address:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh \
+  | sudo LISTEN=0.0.0.0:8000 bash
 ```
 
-Kiosk view: `http://<server-ip>:8000/kiosk`
-Config: `/etc/oxide-player/config.json`
-Logs: `journalctl -u oxide-player -f`
+The main paths and commands are:
 
-Install knobs can be overridden via environment variables; see `install.sh` for the full list (e.g. `MPD_MUSIC_DIR`, `LISTEN`, `BIN_DIR`, `DATA_DIR`).
+```text
+Web UI:       http://<server-ip>/
+Kiosk:        http://<server-ip>/kiosk
+Config:       /etc/oxide-player/config.json
+Music share:  smb://<server-ip>/Music
+Data/library: /var/lib/oxide-player
+Logs:         journalctl -u oxide-player -f
+```
+
+Copy music into the `Music` share, then choose **Settings → Music library sources → Rescan library**. If the library is empty after files were copied with `sudo`, repair ownership and permissions and rescan:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh \
+  | sudo bash -s -- --fix-perms
+```
+
+Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, and `SERVICE_USER`.
 
 ### Upgrade
 
-The installer is idempotent; re-running it updates Oxide in place while preserving your config, library, and DSP settings.
+Use update mode for a normal upgrade. It downloads the latest package for the host architecture, replaces the backend binary and frontend assets, and restarts Oxide. It leaves `/etc/oxide-player/config.json`, the library database, radio stations, playlists, and DSP data in place:
 
-**Quick upgrade (re-run installer):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh \
+  | sudo bash -s -- --update
+```
+
+The `--update` mode only updates the binary and frontend assets. It does not redo system setup. Run the full installer when provisioning a host or reapplying system integration:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh | sudo bash
 ```
+
+Pass the same overrides to both commands when using custom paths. The installer retries when GitHub has published a release before its binary assets are ready. If no matching asset appears, it falls back to a source build.
 
 **From source (manual build):**
 
 ```bash
-cd oxide-player
 git pull
 git fetch --tags
-tag="$(git describe --tags $(git rev-list --tags --max-count=1))"
+tag="$(git describe --tags "$(git rev-list --tags --max-count=1)")"
 git checkout "$tag"
-cargo build --release
-sudo install -m0755 target/release/oxide-player /usr/local/bin/oxide-player
+
 cd frontend
 npm ci
 npm run build
-sudo systemctl restart oxide-player
+cd ..
+
+cargo build --release
+sudo install -m0755 target/release/oxide-player /usr/local/bin/oxide-player
 ```
 
-**Prebuilt binary (skip source build):**
-
-Fetch the latest release archive for your architecture from the [releases page](https://github.com/OxideAI/oxide-player/releases), then:
+For the default installer paths, copy the generated frontend assets before restarting:
 
 ```bash
-sudo systemctl stop oxide-player
-sudo install -m0755 oxide-player /usr/local/bin/oxide-player  # or $BIN_DIR
+sudo install -d /usr/local/share/oxide-player/dist
+sudo cp -r frontend/dist/. /usr/local/share/oxide-player/dist/
 sudo systemctl restart oxide-player
 ```
 
-> The frontend `dist/` is bundled inside the release archive so you only need to replace the binary.
+If `static_dir` points elsewhere, copy `frontend/dist/` there instead. Release archives already include the frontend assets, so `install.sh --update` is the simpler choice unless you need a source build or a custom deployment.
 
 ## Quick start (from source)
 
-Requires Rust (stable), Node 18+, MPD, and CamillaDSP.
+You need Rust stable, Node 26+, MPD, and CamillaDSP. The automated installer is Linux-only. You can still build the backend and frontend independently on macOS for development.
 
 ```bash
-# 1. Backend
-cargo build
-./target/debug/oxide-player -c config.json        # default listen 0.0.0.0:8000
-#    flags: --mpd-host <host>  --mpd-port <port>  --listen <ip:port>
-
-# 2. Frontend (served by the backend from frontend/dist/)
+# 1. Build the frontend served by the backend
 cd frontend
-npm install
-npm run build        # tsc + vite build -> frontend/dist/
-# for live UI dev: npm run dev   (Vite dev server)
+npm ci
+npm run build        # tsc + Vite build -> frontend/dist/
+cd ..
+
+# 2. Build and run the backend from the repository root
+cargo build
+./target/debug/oxide-player   # default listen: 127.0.0.1:8000
+# flags: --mpd-host <host> --mpd-port <port> --listen <ip:port>
 ```
 
-Open the backend URL (default `http://localhost:8000/`). After changing frontend code, rebuild with `npm run build`; the backend serves `dist/` from disk, so a UI-only change usually needs no backend restart. New API routes do require a backend rebuild + restart.
+For live UI development, run `npm run dev` in `frontend/`. Vite proxies `/api` and WebSocket traffic to the backend. `./dev.sh` is a convenience wrapper for development and production modes.
+
+The backend reads `frontend/dist/` from disk. After a UI-only change, rebuild the frontend; a backend restart is usually unnecessary. New or changed API routes require both a backend rebuild and a restart.
 
 ### Config
 
-`oxide-player` reads a JSON config (see `backend/data/config.json` for a full example). Minimum fields:
+Without `-c`, Oxide looks for `data/config.json` and otherwise uses its built-in defaults. In a source checkout, start with a config like:
 
 ```json
 {
   "mpd_host": "127.0.0.1",
   "mpd_port": 6600,
   "listen": "127.0.0.1:8000",
-  "data_dir": "backend/data",
-  "library_dirs": ["/path/to/music"],
-  "static_dir": "frontend/dist",
-  "camilladsp_config_path": "backend/data/camilladsp/config.yml",
-  "camilladsp_ws_url": "ws://127.0.0.1:1234"
+  "data_dir": "./data",
+  "library_dirs": ["./music"],
+  "static_dir": "./frontend/dist",
+  "camilladsp_config_path": "./data/camilladsp/config.yml",
+  "camilladsp_ws_url": "ws://127.0.0.1:1234",
+  "visualizer_fft": true,
+  "visualizer_capture_device": "hw:Loopback,1",
+  "visualizer_capture_rate": 44100
 }
 ```
 
+Pass a particular file with `./target/debug/oxide-player -c path/to/config.json`. The installer writes its production config to `/etc/oxide-player/config.json`; keep that file separate from the source example.
+
 ## Usage
 
-- **Library**: browse albums/tracks, search, refresh the scan or re-scan cover art.
-- **Queue**: tap the **view queue** button in the player bar to open the queue; tap a track to jump to it, tap ✕ to remove it. The shuffle 🔀 button toggles MPD random mode.
-- **Settings / DSP**: edit the CamillaDSP profile and toggle output devices.
-- **Kiosk**: open `/kiosk` (or provision the optional systemd kiosk service).
+- Browse albums and tracks, search, open album deep links, refresh the scan, and re-scan cover art.
+- Open the queue from the player bar, jump to a track, remove tracks, or toggle MPD random mode.
+- Browse saved MPD playlists and add selected tracks from the library.
+- Add an HTTP(S) stream in Radio, play it, or remove it. When available, icy metadata appears in now playing.
+- Edit CamillaDSP profiles, configure library sources, manage output devices, and manage Bluetooth audio devices on Linux from Settings.
+- Open `/kiosk` for the full-screen player and tune the FFT visualizer.
+- Press `?` or `h` to open the keyboard shortcut reference.
 
 ## Development
 
-- **Cargo workspace**: `cargo build` / `cargo test` work from the repo root **or** `backend/`. The binary lands at `target/debug/oxide-player` (repo root).
-- **No Tailwind / no UI framework**: frontend uses **CSS Modules only**.
-- **Bug rule**: for every bug, first write a test that reproduces it, then fix. The test must be added to the suite that runs before pushing to `main`.
-- **MPD gotchas** (see ARCHITECTURE.md): MPD 0.24 has no `playid` (use 0-based position), shuffle = MPD `random` mode toggle, queue remove = `delete <pos>`, CUE albums share one URI.
+- Run `cargo build` or `cargo test` from the repository root. The binary lands at `target/debug/oxide-player`.
+- Run `cd frontend && npm run build` for TypeScript checking and the Vite production build. Run `npm test` for the Vitest suite.
+- Frontend styling uses CSS Modules. Tailwind is not used.
+- For a bug fix, first write a test that reproduces the bug, then fix it. Keep the regression test in the suite that runs before pushing to `main`.
+- MPD 0.24 has no `playid`. Playback uses 0-based queue positions, shuffle is MPD `random` mode, queue removal uses `delete <pos>`, and CUE albums share one URI.
 
 ## Documentation
 
-Technical and developer documentation lives in [`ARCHITECTURE.md`](ARCHITECTURE.md):
+[`ARCHITECTURE.md`](ARCHITECTURE.md) contains:
 
 - System architecture and request flow.
-- Backend / frontend module breakdown.
-- Full REST API reference.
-- MPD integration notes and gotchas (0-based positions, shuffle = random mode, CUE handling).
-- Build & serve details.
+- Backend and frontend module breakdown.
+- API route overview and integration notes.
+- MPD integration notes and gotchas, including 0-based positions, random-mode shuffle, and CUE handling.
+- Build and serve details.
 
 ## License
 

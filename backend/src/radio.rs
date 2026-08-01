@@ -2,9 +2,9 @@
 //! `<data_dir>/radio_stations.json`.
 //!
 //! Mirrors the `VizParams` persistence pattern: best-effort load at startup,
-//! atomic temp+rename writes. A missing file is seeded with the shipped JFK
-//! Ibiza station; once the file exists it is the single source of truth, so a
-//! user who deletes the seed keeps it gone.
+//! atomic temp+rename writes. A missing file is seeded with the shipped
+//! stations; once the file exists it is the single source of truth, so a user
+//! who deletes a seed keeps it gone.
 
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
@@ -13,17 +13,28 @@ use std::sync::RwLock;
 
 const STATIONS_FILE: &str = "radio_stations.json";
 
-/// The one shipped station. Verified 2026-07-31 via radio-browser.info ("JFK
-/// Radio Ibiza" / `stream.aiir.com/7dsjltmny8cvv`, homepage jfkibiza.es); the
-/// URL 302-redirects to a freshly signed CDN link on every request, so it is
-/// stable for redirect-following clients (MPD/libcurl).
-fn seed_station() -> RadioStation {
-    RadioStation {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: "JFK Ibiza".to_string(),
-        url: "https://stream.aiir.com/7dsjltmny8cvv".to_string(),
-        homepage: Some("https://jfkibiza.es/".to_string()),
-    }
+/// The stations shipped on a fresh install.
+fn seed_stations() -> Vec<RadioStation> {
+    vec![
+        RadioStation {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "JFK Ibiza".to_string(),
+            url: "https://stream.aiir.com/7dsjltmny8cvv".to_string(),
+            homepage: Some("https://jfkibiza.es/".to_string()),
+        },
+        RadioStation {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "100% ACID JAZZ".to_string(),
+            url: "https://mpc1.mediacp.eu:8356/stream".to_string(),
+            homepage: Some("https://www.internet-radio.com/station/100acidjazz/".to_string()),
+        },
+        RadioStation {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "The Loft".to_string(),
+            url: "https://usa17.fastcast4u.com/proxy/fbpxpddt?mp=/1".to_string(),
+            homepage: Some("https://www.jazzandvocalloft.org/".to_string()),
+        },
+    ]
 }
 
 /// A single internet radio station.
@@ -44,8 +55,8 @@ pub struct RadioManager {
 
 impl RadioManager {
     /// Load stations from `<data_dir>/radio_stations.json`. Missing or
-    /// unparseable files fall back to the seed station, which is persisted so
-    /// the seed exists on disk from first run on.
+    /// unparseable files fall back to the shipped stations, which are persisted
+    /// so they exist on disk from first run on.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(STATIONS_FILE);
         let (stations, seeded) = match std::fs::read_to_string(&path) {
@@ -53,10 +64,10 @@ impl RadioManager {
                 Ok(stations) => (stations, false),
                 Err(e) => {
                     tracing::warn!("radio_stations.json unparseable, reseeding: {e}");
-                    (vec![seed_station()], true)
+                    (seed_stations(), true)
                 }
             },
-            Err(_) => (vec![seed_station()], true),
+            Err(_) => (seed_stations(), true),
         };
         let manager = RadioManager {
             path,
@@ -64,7 +75,7 @@ impl RadioManager {
         };
         if seeded {
             if let Err(e) = manager.save() {
-                tracing::warn!("failed to persist radio station seed: {e}");
+                tracing::warn!("failed to persist radio station seeds: {e}");
             }
         }
         manager
@@ -168,17 +179,32 @@ mod tests {
     }
 
     #[test]
-    fn missing_file_seeds_jfk_ibiza_and_persists() {
+    fn missing_file_seeds_shipped_stations_and_persists() {
         let dir = temp_dir();
         let manager = RadioManager::load(dir.path());
 
         let stations = manager.list();
-        assert_eq!(stations.len(), 1);
-        assert_eq!(stations[0].name, "JFK Ibiza");
-        assert_eq!(stations[0].url, "https://stream.aiir.com/7dsjltmny8cvv");
-        assert_eq!(stations[0].homepage.as_deref(), Some("https://jfkibiza.es/"));
+        assert_eq!(stations.len(), 3);
+        let jfk = stations.iter().find(|s| s.name == "JFK Ibiza").unwrap();
+        assert_eq!(jfk.url, "https://stream.aiir.com/7dsjltmny8cvv");
+        assert_eq!(jfk.homepage.as_deref(), Some("https://jfkibiza.es/"));
+        let acid_jazz = stations.iter().find(|s| s.name == "100% ACID JAZZ").unwrap();
+        assert_eq!(acid_jazz.url, "https://mpc1.mediacp.eu:8356/stream");
+        assert_eq!(
+            acid_jazz.homepage.as_deref(),
+            Some("https://www.internet-radio.com/station/100acidjazz/")
+        );
+        let loft = stations.iter().find(|s| s.name == "The Loft").unwrap();
+        assert_eq!(
+            loft.url,
+            "https://usa17.fastcast4u.com/proxy/fbpxpddt?mp=/1"
+        );
+        assert_eq!(
+            loft.homepage.as_deref(),
+            Some("https://www.jazzandvocalloft.org/")
+        );
 
-        // Seed must be on disk so a reload (restart) reads the same station.
+        // Seeds must be on disk so a reload (restart) reads the same stations.
         let reloaded = RadioManager::load(dir.path());
         assert_eq!(reloaded.list(), stations);
     }
@@ -195,9 +221,8 @@ mod tests {
         assert_eq!(added.url, "https://example.com/stream.mp3");
         assert_eq!(added.homepage, None);
         assert!(!added.id.is_empty());
-
         let reloaded = RadioManager::load(dir.path());
-        assert_eq!(reloaded.list().len(), 2);
+        assert_eq!(reloaded.list().len(), 4);
         assert!(reloaded.get(&added.id).is_some());
     }
 
@@ -220,11 +245,10 @@ mod tests {
     fn add_rejects_duplicate_url() {
         let dir = temp_dir();
         let manager = RadioManager::load(dir.path());
-
         manager.add("A", "https://example.com/stream.mp3", None).unwrap();
         let dup = manager.add("B", "https://example.com/stream.mp3", None);
         assert!(matches!(dup, Err(AppError::BadRequest(_))));
-        assert_eq!(manager.list().len(), 2, "seed + one addition");
+        assert_eq!(manager.list().len(), 4, "three seeds + one addition");
     }
 
     #[test]
@@ -241,15 +265,16 @@ mod tests {
     fn remove_persists_and_by_url_tracks_changes() {
         let dir = temp_dir();
         let manager = RadioManager::load(dir.path());
-        let seed = manager.list().remove(0);
+        let seeds = manager.list();
 
-        assert!(manager.by_url(&seed.url).is_some());
-        manager.remove(&seed.id).expect("remove seed");
-        assert!(manager.by_url(&seed.url).is_none());
+        for seed in &seeds {
+            assert!(manager.by_url(&seed.url).is_some());
+            manager.remove(&seed.id).expect("remove seed");
+        }
         assert!(manager.list().is_empty());
 
         let reloaded = RadioManager::load(dir.path());
-        assert!(reloaded.list().is_empty(), "deleted seed stays deleted");
+        assert!(reloaded.list().is_empty(), "deleted seeds stay deleted");
     }
 
     #[test]
@@ -257,7 +282,9 @@ mod tests {
         let dir = temp_dir();
         std::fs::write(dir.path().join(STATIONS_FILE), "not json").unwrap();
         let manager = RadioManager::load(dir.path());
-        assert_eq!(manager.list().len(), 1);
-        assert_eq!(manager.list()[0].name, "JFK Ibiza");
+        assert_eq!(manager.list().len(), 3);
+        assert!(manager.list().iter().any(|s| s.name == "JFK Ibiza"));
+        assert!(manager.list().iter().any(|s| s.name == "100% ACID JAZZ"));
+        assert!(manager.list().iter().any(|s| s.name == "The Loft"));
     }
 }
