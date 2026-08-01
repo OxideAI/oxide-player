@@ -30,6 +30,7 @@ struct DspInner {
     capture_device: String,
     capture_rate: u32,
     profiles: Mutex<HashMap<String, DspProfile>>,
+    active_device: Mutex<Option<String>>,
 }
 
 impl DspManager {
@@ -57,6 +58,7 @@ impl DspManager {
                 capture_device,
                 capture_rate,
                 profiles: Mutex::new(HashMap::new()),
+                active_device: Mutex::new(None),
             }),
         }
     }
@@ -131,6 +133,28 @@ impl DspManager {
     pub async fn list_profiles(&self) -> Vec<DspProfile> {
         self.inner.profiles.lock().await.values().cloned().collect()
     }
+    /// Apply the configured profile for an output, falling back to the
+    /// conventional `default` profile or a neutral passthrough profile.
+    pub async fn apply_profile_for_device(&self, device: &str) -> Result<()> {
+        let profiles = self.inner.profiles.lock().await;
+        let mut profile = profiles
+            .get(device)
+            .cloned()
+            .or_else(|| profiles.get("default").cloned())
+            .unwrap_or_else(|| DspProfile::bit_perfect(device));
+        drop(profiles);
+        profile.device = device.to_string();
+        self.apply_profile(profile).await
+    }
+
+    pub async fn active_device(&self) -> Option<String> {
+        self.inner.active_device.lock().await.clone()
+    }
+
+    pub async fn clear_active_device(&self) {
+        *self.inner.active_device.lock().await = None;
+    }
+
 
     /// Persist the profile as a CamillaDSP config and signal a reload.
     pub async fn apply_profile(&self, profile: DspProfile) -> Result<()> {
@@ -166,6 +190,7 @@ impl DspManager {
         if let Some(url) = &self.inner.ws_url {
             self.send_reload(url).await?;
         }
+        *self.inner.active_device.lock().await = Some(effective.device);
         Ok(())
     }
 
@@ -199,8 +224,9 @@ impl DspManager {
             Ok(Ok(ws)) => ws,
         };
         let (mut write, mut read) = ws.split();
-        let path = self.inner.config_path.to_string_lossy().to_string();
-        let msg = serde_json::json!({ "Reload": { "config": path } }).to_string();
+        // CamillaDSP 4.1 reloads the config file it was started with when it
+        // receives the JSON string command "Reload".
+        let msg = serde_json::json!("Reload").to_string();
         write
             .send(Message::Text(msg.into()))
             .await
@@ -391,5 +417,45 @@ mod tests {
         assert!(parsed.devices.resampler.is_some());
         assert!(parsed.pipeline.is_empty()); // no EQ, no pipeline steps
         println!("--- resample no-target config ---\n{yaml}");
+    }
+    #[tokio::test]
+    async fn apply_sends_camilladsp_reload_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let received = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let message = ws.next().await.unwrap().unwrap().into_text().unwrap().to_string();
+            ws.send(Message::Text(r#"{"Reload":{"result":"Ok"}}"#.into()))
+                .await
+                .unwrap();
+            message
+        });
+
+        let m = DspManager::new(
+            tmp.path().join("config.yml"),
+            Some(format!("ws://{addr}")),
+            "hw:Loopback,1".to_string(),
+            44100,
+            false,
+            None,
+        );
+        m.apply_profile(base("DAC")).await.unwrap();
+
+        assert_eq!(received.await.unwrap(), r#""Reload""#);
+    }
+    #[tokio::test]
+    async fn apply_profile_for_device_targets_selected_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = manager(tmp.path());
+        m.seed(vec![base("default")]).await;
+
+        m.apply_profile_for_device("hw:USB,0").await.unwrap();
+
+        let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
+        let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.devices.playback.device, "hw:USB,0");
+        assert_eq!(m.active_device().await.as_deref(), Some("hw:USB,0"));
     }
 }

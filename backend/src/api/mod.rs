@@ -13,7 +13,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use tower_http::services::ServeDir;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 mod bluetooth;
 
@@ -67,6 +67,8 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/devices/restart-mpd", post(restart_mpd))
         .route("/api/devices/{id}/enable", post(enable_device))
         .route("/api/devices/{id}/disable", post(disable_device))
+        .route("/api/devices/{id}/dsp/enable", post(enable_device_dsp))
+        .route("/api/devices/{id}/dsp/disable", post(disable_device_dsp))
         .route("/api/radio", get(radio_list))
         .route("/api/radio", post(radio_add))
         .route("/api/radio/{id}", delete(radio_delete))
@@ -533,8 +535,92 @@ async fn volume(State(s): State<AppState>, Json(b): Json<VolumeBody>) -> AppResu
     Ok(StatusCode::OK)
 }
 
-async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<crate::types::OutputDevice>>> {
-    Ok(Json(s.mpd().outputs().await?))
+const DSP_LOOPBACK_NAME: &str = "camilladsp-loopback";
+
+#[derive(Serialize)]
+struct OutputDeviceResponse {
+    id: u32,
+    name: String,
+    enabled: bool,
+    dsp_supported: bool,
+    dsp_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dsp_reason: Option<String>,
+}
+
+fn bluetooth_address(device: &str) -> Option<&str> {
+    device
+        .strip_prefix("bluealsa:DEV=")
+        .and_then(|value| value.split(',').next())
+        .filter(|value| !value.is_empty())
+}
+
+fn configured_dsp_device(
+    configs: &[DeviceConfigDto],
+    output: &crate::types::OutputDevice,
+) -> Result<String, String> {
+    if output.name == DSP_LOOPBACK_NAME {
+        return Err("CamillaDSP loopback is the DSP path, not a playback target".to_string());
+    }
+    let config = configs
+        .iter()
+        .find(|config| config.name == output.name)
+        .ok_or_else(|| "output has no configured device preset".to_string())?;
+    if !config.output_type.eq_ignore_ascii_case("alsa") {
+        return Err("only ALSA outputs support CamillaDSP".to_string());
+    }
+    let device = config
+        .device
+        .as_deref()
+        .filter(|device| !device.trim().is_empty())
+        .ok_or_else(|| "output has no ALSA device configured".to_string())?;
+    Ok(device.to_string())
+}
+
+async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<OutputDeviceResponse>>> {
+    let outputs = s.mpd().outputs().await?;
+    let configs = s.device_configs().list();
+    let bluetooth = s.bluetooth().list_devices().await;
+    let active_device = s.dsp().active_device().await;
+    let loopback_enabled = outputs
+        .iter()
+        .find(|output| output.name == DSP_LOOPBACK_NAME)
+        .is_some_and(|output| output.enabled);
+
+    let response = outputs
+        .into_iter()
+        .map(|output| {
+            let configured_device = configured_dsp_device(&configs, &output);
+            let connected = configured_device.as_ref().map_or(true, |device| {
+                bluetooth_address(device).map_or(true, |address| {
+                    bluetooth
+                        .iter()
+                        .any(|device| device.address == address && device.connected)
+                })
+            });
+            let dsp_route_active = loopback_enabled
+                && active_device.as_deref() == configured_device.as_ref().ok().map(String::as_str);
+            let (base_supported, mut dsp_reason) = match (&configured_device, connected) {
+                (Ok(_), true) => (true, None),
+                (Ok(_), false) => (false, Some("Bluetooth output is not connected".to_string())),
+                (Err(reason), _) => (false, Some(reason.clone())),
+            };
+            let dsp_supported = base_supported && (output.enabled || dsp_route_active);
+            if base_supported && !dsp_supported {
+                dsp_reason = Some("output is not active".to_string());
+            }
+            let dsp_enabled = dsp_supported && dsp_route_active;
+            OutputDeviceResponse {
+                id: output.id,
+                name: output.name,
+                enabled: output.enabled,
+                dsp_supported,
+                dsp_enabled,
+                dsp_reason,
+            }
+        })
+        .collect();
+    Ok(Json(response))
 }
 
 async fn enable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
@@ -551,6 +637,71 @@ async fn disable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppRe
     s.mpd().disable_output(id).await?;
     let _ = s.mpd().clear_error().await;
     // Keep volume capability state synchronized after switching outputs.
+    s.refresh_status().await;
+    Ok(StatusCode::OK)
+}
+
+async fn dsp_output_target(
+    s: &AppState,
+    id: u32,
+) -> AppResult<(crate::types::OutputDevice, String, crate::types::OutputDevice)> {
+    let outputs = s.mpd().outputs().await?;
+    let target = outputs
+        .iter()
+        .find(|output| output.id == id)
+        .cloned()
+        .ok_or_else(|| AppError::NotFound(format!("output {id}")))?;
+    let device = configured_dsp_device(&s.device_configs().list(), &target)
+        .map_err(AppError::BadRequest)?;
+    if let Some(address) = bluetooth_address(&device) {
+        let connected = s
+            .bluetooth()
+            .list_devices()
+            .await
+            .iter()
+            .any(|bt| bt.address == address && bt.connected);
+        if !connected {
+            return Err(AppError::BadRequest("Bluetooth output is not connected".to_string()));
+        }
+    }
+    let loopback = outputs
+        .into_iter()
+        .find(|output| output.name == DSP_LOOPBACK_NAME)
+        .ok_or_else(|| AppError::BadRequest("CamillaDSP loopback output is not available".to_string()))?;
+    let route_active = loopback.enabled && s.dsp().active_device().await.as_deref() == Some(&device);
+    if !target.enabled && !route_active {
+        return Err(AppError::BadRequest("output is not active".to_string()));
+    }
+    Ok((target, device, loopback))
+}
+
+async fn enable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
+    let (target, device, loopback) = dsp_output_target(&s, id).await?;
+    s.dsp()
+        .apply_profile_for_device(&device)
+        .await
+        .map_err(|e| AppError::Dsp(e.to_string()))?;
+    if target.enabled {
+        s.mpd().disable_output(target.id).await?;
+    }
+    if !loopback.enabled {
+        s.mpd().enable_output(loopback.id).await?;
+    }
+    let _ = s.mpd().clear_error().await;
+    s.refresh_status().await;
+    Ok(StatusCode::OK)
+}
+
+async fn disable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
+    let (target, _device, loopback) = dsp_output_target(&s, id).await?;
+    if loopback.enabled {
+        s.mpd().disable_output(loopback.id).await?;
+    }
+    if !target.enabled {
+        s.mpd().enable_output(target.id).await?;
+    }
+    s.dsp().clear_active_device().await;
+    let _ = s.mpd().clear_error().await;
     s.refresh_status().await;
     Ok(StatusCode::OK)
 }
@@ -1189,10 +1340,12 @@ async fn radio_play(State(s): State<AppState>, Path(id): Path<String>) -> AppRes
 #[cfg(test)]
 mod tests {
     use crate::config::Config;
+    use crate::devices::config_fragment::DeviceConfig;
     use crate::dsp::DspManager;
     use crate::library::LibraryDb;
     use crate::mpd::Mpd;
     use crate::state::AppState;
+    use crate::types::OutputDevice;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
@@ -1290,4 +1443,43 @@ mod tests {
         assert_eq!(uri, "Artist/Album.flac");
         assert!(!is_cue);
     }
+    fn config(name: &str, output_type: &str, device: Option<&str>) -> DeviceConfig {
+        DeviceConfig {
+            name: name.to_string(),
+            output_type: output_type.to_string(),
+            device: device.map(str::to_string),
+            format: None,
+            mixer_type: None,
+            mixer_device: None,
+            mixer_control: None,
+            dop: false,
+        }
+    }
+
+    #[test]
+    fn dsp_requires_a_configured_alsa_device() {
+        let output = OutputDevice {
+            id: 1,
+            name: "USB DAC".to_string(),
+            enabled: true,
+        };
+        assert_eq!(
+            super::configured_dsp_device(&[config("USB DAC", "alsa", Some("hw:USB,0"))], &output)
+                .unwrap(),
+            "hw:USB,0"
+        );
+        assert!(super::configured_dsp_device(&[config("Pipe", "pipe", Some("/tmp/audio"))], &output).is_err());
+        assert!(super::configured_dsp_device(&[], &output).is_err());
+    }
+
+    #[test]
+    fn dsp_loopback_cannot_be_selected_as_playback_target() {
+        let output = OutputDevice {
+            id: 1,
+            name: "camilladsp-loopback".to_string(),
+            enabled: true,
+        };
+        assert!(super::configured_dsp_device(&[], &output).is_err());
+    }
+
 }

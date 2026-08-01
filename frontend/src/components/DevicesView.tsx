@@ -81,6 +81,20 @@ export function DevicesView() {
       setBusy(null)
     }
   }
+  const toggleDsp = async (d: OutputDevice) => {
+    if (d.dsp_supported !== true) return
+    setBusy(d.id)
+    setError(null)
+    try {
+      if (d.dsp_enabled) await api.disableDeviceDsp(d.id)
+      else await api.enableDeviceDsp(d.id)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
 
   // Convenience: populate form data from a DeviceConfig
   const populateForm = (cfg: DeviceConfig) => {
@@ -220,6 +234,10 @@ export function DevicesView() {
         <span className={styles.eyebrow}>Runtime</span>
         <h3 className={styles.h}>Active devices</h3>
       </div>
+      <p className={styles.dim}>
+        DSP routes a configured ALSA output through CamillaDSP. Unconfigured,
+        disconnected, and non-ALSA outputs stay unavailable.
+      </p>
       {loading && <p className={styles.dim}>loading…</p>}
       {!loading && !error && devices.length === 0 && (
         <p className={styles.dim}>No output devices reported by MPD.</p>
@@ -231,13 +249,24 @@ export function DevicesView() {
               <div className={styles.name}>{d.name}</div>
               <div className={styles.id}>#{d.id}</div>
             </div>
-            <button
-              className={d.enabled ? styles.on : styles.off}
-              disabled={busy === d.id}
-              onClick={() => toggle(d)}
-            >
-              {d.enabled ? 'Enabled' : 'Disabled'}
-            </button>
+            <div className={styles.outputActions}>
+              <button
+                className={d.dsp_enabled ? styles.dspOn : styles.dspOff}
+                disabled={busy === d.id || d.dsp_supported !== true}
+                title={d.dsp_supported === true ? 'Route this output through CamillaDSP' : d.dsp_reason}
+                aria-label={d.dsp_enabled ? `Disable DSP for ${d.name}` : `Enable DSP for ${d.name}`}
+                onClick={() => toggleDsp(d)}
+              >
+                {d.dsp_enabled ? 'DSP on' : 'DSP off'}
+              </button>
+              <button
+                className={d.enabled ? styles.on : styles.off}
+                disabled={busy === d.id}
+                onClick={() => toggle(d)}
+              >
+                {d.enabled ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
           </li>
         ))}
       </ul>

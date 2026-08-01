@@ -111,6 +111,10 @@ export const api = {
     fetch(`/api/devices/${id}/enable`, { method: 'POST' }).then((r) => json<unknown>(r)),
   disableDevice: (id: number) =>
     fetch(`/api/devices/${id}/disable`, { method: 'POST' }).then((r) => json<unknown>(r)),
+  enableDeviceDsp: (id: number) =>
+    fetch(`/api/devices/${id}/dsp/enable`, { method: 'POST' }).then((r) => json<unknown>(r)),
+  disableDeviceDsp: (id: number) =>
+    fetch(`/api/devices/${id}/dsp/disable`, { method: 'POST' }).then((r) => json<unknown>(r)),
 
   // —— Device config fragments ——
   deviceConfigs: () => fetch('/api/devices/configs').then((r) => json<DeviceConfig[]>(r)),

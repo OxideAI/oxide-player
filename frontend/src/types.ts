@@ -58,6 +58,9 @@ export interface OutputDevice {
   id: number
   name: string
   enabled: boolean
+  dsp_supported?: boolean
+  dsp_enabled?: boolean
+  dsp_reason?: string
 }
 
 export type PlaybackState = 'playing' | 'paused' | 'stopped'
