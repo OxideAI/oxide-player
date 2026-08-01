@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.14.0...oxide-player-v0.15.0) (2026-08-01)
+
+
+### Features
+
+* DSP ([400d426](https://github.com/OxideAI/oxide-player/commit/400d4266aba89e40c079b35af673b3df3d7d46c1))
+
 ## [0.14.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.13.5...oxide-player-v0.14.0) (2026-08-01)
 
 
