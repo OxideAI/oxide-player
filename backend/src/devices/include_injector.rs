@@ -9,6 +9,15 @@ pub struct IncludeInjector {
     mpd_config: PathBuf,
 }
 
+fn include_target(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("include")?;
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    Some(rest.trim())
+}
+
 impl IncludeInjector {
     /// Create a new injector for the given MPD config path.
     pub fn new(mpd_config: PathBuf) -> Self {
@@ -90,13 +99,17 @@ impl IncludeInjector {
 
         // Search for an existing include line matching the fragment directory.
         let existing_include_pos = content.lines().position(|line| {
-            let trimmed = line.trim();
-            trimmed.starts_with("include ") && trimmed.contains("mpd-outputs.d")
+            include_target(line)
+                .is_some_and(|target| target.contains("mpd-outputs.d"))
         });
 
         if let Some(pos) = existing_include_pos {
-            let existing_line = content.lines().nth(pos).unwrap().trim();
-            if existing_line == include_line || existing_line == canonical_include {
+            let existing_line = content.lines().nth(pos).unwrap();
+            let expected_target = include_target(&include_line).unwrap();
+            let canonical_target = include_target(&canonical_include).unwrap();
+            if include_target(existing_line)
+                .is_some_and(|target| target == expected_target || target == canonical_target)
+            {
                 // Already set up correctly — no change needed.
                 return Ok(false);
             }
@@ -218,6 +231,23 @@ mod tests {
         let injector = IncludeInjector::new(path.clone());
         let modified = injector.ensure_include(&fragment_dir).unwrap();
         assert!(!modified, "should NOT modify when include is already correct");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_inject_with_aligned_existing_include_is_noop() {
+        let (path, _) = temp_file("test_inject_with_aligned_existing_include_is_noop");
+        let fragment_dir = PathBuf::from("/var/lib/oxide-player/mpd-outputs.d");
+
+        fs::write(
+            &path,
+            "music_directory \"/music\"\ninclude             \"/var/lib/oxide-player/mpd-outputs.d/*.conf\"\naudio_output {\n    type \"alsa\"\n}\n",
+        ).unwrap();
+
+        let injector = IncludeInjector::new(path.clone());
+        let modified = injector.ensure_include(&fragment_dir).unwrap();
+        assert!(!modified, "aligned include should already be correct");
 
         cleanup(&path);
     }
