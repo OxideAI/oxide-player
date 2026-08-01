@@ -18,6 +18,7 @@ BIN_DIR="${BIN_DIR:-/usr/local/bin}"
 SHARE_DIR="${SHARE_DIR:-/usr/local/share/oxide-player}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/oxide-player}"
 DATA_DIR="${DATA_DIR:-/var/lib/oxide-player}"
+MPD_CONFIG="${MPD_CONFIG:-/etc/mpd.conf}"
 CAMILLADSP_CONFIG="${CAMILLADSP_CONFIG:-/etc/camilladsp/config.yml}"
 CAMILLADSP_WS="${CAMILLADSP_WS:-ws://127.0.0.1:1234}"
 SERVICE_USER="${SERVICE_USER:-oxide}"
@@ -47,8 +48,8 @@ Usage: sudo bash install.sh [OPTIONS]
 Install or update oxide-player on a Debian-based system.
 
 Options:
-  --update     Replace binary + frontend only (skip system setup).
-               Fetches the latest prebuilt release package.
+  --update     Replace binary + frontend and repair the managed MPD include.
+               Skips the rest of system setup and fetches the latest package.
   --fix-perms  Repair music library ownership/permissions so the service
                user and MPD can read it (fixes a silently empty library
                after music was copied with root ownership, e.g. sudo).
@@ -56,7 +57,7 @@ Options:
 
 Environment variables (all optional):
   REPO_URL, BRANCH, INSTALL_FROM_DIR, BIN_DIR, SHARE_DIR, CONFIG_DIR,
-  DATA_DIR, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
+  DATA_DIR, MPD_CONFIG, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
   CAMILLADSP_WS, SERVICE_USER, BUILD_DIR, RELEASE_ASSET_RETRIES,
   RELEASE_ASSET_RETRY_DELAY
 EOF
@@ -487,7 +488,7 @@ ASOUNDEOF
 }
 
 write_mpd_config() {
-  local conf=/etc/mpd.conf
+  local conf="$MPD_CONFIG"
   if [ -f "$conf" ] && [ ! -f "$conf.pre-oxide" ]; then
     run cp "$conf" "$conf.pre-oxide"
     warn "Backed up existing $conf to $conf.pre-oxide"
@@ -514,6 +515,51 @@ audio_output {
 EOF
   run mkdir -p "$DATA_DIR/playlists"
   run chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" 2>/dev/null || true
+}
+
+#
+# Repair an existing MPD config during --update. Older installations may not
+# have the managed output include because --update previously skipped all MPD
+# setup. Keep the file owner and mode unchanged by updating it in place.
+ensure_mpd_include() {
+  local conf="$MPD_CONFIG"
+  local include="include \"$DATA_DIR/mpd-outputs.d/*.conf\""
+
+  if [ ! -f "$conf" ]; then
+    warn "MPD config $conf does not exist — skipping managed output include repair."
+    return 1
+  fi
+  if grep -Fqx "$include" "$conf"; then
+    log "MPD config already includes managed outputs: $conf"
+    return 1
+  fi
+
+  local tmp="${conf}.oxide-player.tmp"
+  awk -v include="$include" '
+    BEGIN { done = 0 }
+    {
+      if ($0 ~ /^[[:space:]]*include[[:space:]]+"/ &&
+          $0 ~ /mpd-outputs[.]d/ &&
+          $0 ~ /[*][.]conf/) {
+        if (!done) {
+          print include
+          done = 1
+        }
+        next
+      }
+      if (!done && $0 ~ /^[[:space:]]*audio_output[[:space:]]*[{]/) {
+        print include
+        done = 1
+      }
+      print
+    }
+    END {
+      if (!done) print include
+    }
+  ' "$conf" > "$tmp"
+  cat "$tmp" > "$conf"
+  rm -f "$tmp"
+  log "Added managed output include to $conf"
 }
 
 write_camilladsp_config() {
@@ -553,7 +599,7 @@ write_oxide_config() {
   "mpd_port": 6600,
   "listen": "$LISTEN",
   "data_dir": "$DATA_DIR",
-  "mpd_config": "/etc/mpd.conf",
+  "mpd_config": "$MPD_CONFIG",
   "mpd_music_directory": "$MPD_MUSIC_DIR",
   "library_dirs": $dirs_json,
   "static_dir": "$SHARE_DIR/dist",
@@ -674,6 +720,9 @@ do_update() {
   fetch_source
   build_backend
   build_frontend
+  if ensure_mpd_include; then
+    run systemctl restart mpd || true
+  fi
   run systemctl daemon-reload
   run systemctl restart camilladsp oxide-player || true
   log "Update complete."

@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.s
   | sudo bash -s -- --fix-perms
 ```
 
-Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, and `SERVICE_USER`.
+Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `MPD_CONFIG`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, and `SERVICE_USER`.
 
 ### Upgrade
 
@@ -83,7 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.s
   | sudo bash -s -- --update
 ```
 
-The `--update` mode only updates the binary and frontend assets. It does not redo system setup. Run the full installer when provisioning a host or reapplying system integration:
+The `--update` mode replaces the binary and frontend assets and repairs the managed MPD output include in an existing config. It does not redo the rest of system setup. Run the full installer when provisioning a host or reapplying system integration:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh | sudo bash
