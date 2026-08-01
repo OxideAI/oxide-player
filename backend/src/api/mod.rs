@@ -653,6 +653,7 @@ async fn create_device_config(
         format: b.format.clone(),
         mixer_type: b.mixer_type.clone(),
         mixer_device: b.mixer_device.clone(),
+        mixer_control: None,
         dop: b.dop,
     };
     s.device_configs().create(&cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
@@ -716,6 +717,7 @@ async fn update_device_config(
         format: format.clone(),
         mixer_type: mixer_type.clone(),
         mixer_device: mixer_device.clone(),
+        mixer_control: existing.mixer_control.clone(),
         dop,
     };
     s.device_configs().update(&name, &cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;

@@ -12,6 +12,7 @@ pub struct DeviceConfig {
     pub format: Option<String>,
     pub mixer_type: Option<String>,
     pub mixer_device: Option<String>,
+    pub mixer_control: Option<String>,
     pub dop: bool,
 }
 
@@ -170,24 +171,29 @@ impl ConfigFragmentManager {
         out.push_str(&format!("    type        \"{}\"\n", config.output_type));
         out.push_str(&format!("    name        \"{}\"\n", config.name));
 
-        if let Some(ref device) = config.device {
+        if let Some(device) = &config.device {
             if !device.trim().is_empty() {
                 out.push_str(&format!("    device      \"{}\"\n", device));
             }
         }
-        if let Some(ref fmt) = config.format {
+        if let Some(fmt) = &config.format {
             if !fmt.trim().is_empty() {
                 out.push_str(&format!("    format      \"{}\"\n", fmt));
             }
         }
-        if let Some(ref mt) = config.mixer_type {
+        if let Some(mt) = &config.mixer_type {
             if !mt.trim().is_empty() {
                 out.push_str(&format!("    mixer_type  \"{}\"\n", mt));
             }
         }
-        if let Some(ref md) = config.mixer_device {
+        if let Some(md) = &config.mixer_device {
             if !md.trim().is_empty() {
                 out.push_str(&format!("    mixer_device \"{}\"\n", md));
+            }
+        }
+        if let Some(mc) = &config.mixer_control {
+            if !mc.trim().is_empty() {
+                out.push_str(&format!("    mixer_control \"{}\"\n", mc));
             }
         }
         if config.dop {
@@ -211,6 +217,7 @@ impl ConfigFragmentManager {
         let mut format: Option<String> = None;
         let mut mixer_type: Option<String> = None;
         let mut mixer_device: Option<String> = None;
+        let mut mixer_control: Option<String> = None;
         let mut dop = false;
 
         for line in content.lines() {
@@ -229,6 +236,7 @@ impl ConfigFragmentManager {
                     "format" => format = Some(val.to_string()),
                     "mixer_type" => mixer_type = Some(val.to_string()),
                     "mixer_device" => mixer_device = Some(val.to_string()),
+                    "mixer_control" => mixer_control = Some(val.to_string()),
                     "dop" => dop = val.eq_ignore_ascii_case("yes"),
                     _ => {}
                 }
@@ -242,6 +250,7 @@ impl ConfigFragmentManager {
             format,
             mixer_type,
             mixer_device,
+            mixer_control,
             dop,
         }
     }
@@ -421,6 +430,7 @@ mod tests {
             format: Some("44100:16:2".to_string()),
             mixer_type: Some("hardware".to_string()),
             mixer_device: None,
+            mixer_control: None,
             dop: false,
         };
         mgr.create(&cfg).unwrap();
@@ -447,11 +457,12 @@ mod tests {
 
         let cfg = DeviceConfig {
             name: "DoP Device".to_string(),
-            output_type: "alsa".to_string(),
             device: None,
+            output_type: "alsa".to_string(),
             format: None,
             mixer_type: None,
             mixer_device: None,
+            mixer_control: None,
             dop: true,
         };
         mgr.create(&cfg).unwrap();
@@ -474,20 +485,22 @@ mod tests {
 
         let cfg1 = DeviceConfig {
             name: "ALSA One".to_string(),
-            output_type: "alsa".to_string(),
             device: None,
+            output_type: "alsa".to_string(),
             format: None,
             mixer_type: None,
             mixer_device: None,
+            mixer_control: None,
             dop: false,
         };
         let cfg2 = DeviceConfig {
             name: "Pulse Two".to_string(),
             output_type: "pulse".to_string(),
-            device: Some("pulse_output".to_string()),
             format: None,
+            device: None,
             mixer_type: None,
             mixer_device: None,
+            mixer_control: None,
             dop: false,
         };
         mgr.create(&cfg1).unwrap();
@@ -511,10 +524,11 @@ mod tests {
         let cfg = DeviceConfig {
             name: "Original".to_string(),
             output_type: "alsa".to_string(),
-            device: None,
             format: None,
+            device: None,
             mixer_type: None,
             mixer_device: None,
+            mixer_control: None,
             dop: false,
         };
         mgr.create(&cfg).unwrap();
@@ -522,10 +536,11 @@ mod tests {
         let updated = DeviceConfig {
             name: "Renamed".to_string(),
             output_type: "pulse".to_string(),
-            device: Some("new-device".to_string()),
             format: None,
+            device: Some("new-device".to_string()),
             mixer_type: None,
             mixer_device: None,
+            mixer_control: None,
             dop: false,
         };
         mgr.update("Original", &updated).unwrap();
@@ -554,10 +569,11 @@ mod tests {
         let cfg = DeviceConfig {
             name: "ToDelete".to_string(),
             output_type: "alsa".to_string(),
-            device: None,
             format: None,
+            device: None,
             mixer_type: None,
             mixer_device: None,
+            mixer_control: None,
             dop: false,
         };
         mgr.create(&cfg).unwrap();
@@ -586,10 +602,11 @@ mod tests {
         let cfg = DeviceConfig {
             name: "Exists".to_string(),
             output_type: "alsa".to_string(),
-            device: None,
             format: None,
+            device: None,
             mixer_type: None,
             mixer_device: None,
+            mixer_control: None,
             dop: false,
         };
         mgr.create(&cfg).unwrap();
@@ -608,10 +625,11 @@ mod tests {
         let cfg = DeviceConfig {
             name: "Round Trip".to_string(),
             output_type: "pulse".to_string(),
-            device: Some("alsa_output.pci-0000_00_1f.3.analog-stereo".to_string()),
             format: Some("48000:24:2".to_string()),
+            device: Some("alsa_output.pci-0000_00_1f.3.analog-stereo".to_string()),
             mixer_type: Some("software".to_string()),
             mixer_device: Some("Master".to_string()),
+            mixer_control: Some("PCM".to_string()),
             dop: true,
         };
         mgr.create(&cfg).unwrap();
@@ -625,6 +643,7 @@ mod tests {
         assert_eq!(parsed.format.as_deref(), Some("48000:24:2"));
         assert_eq!(parsed.mixer_type.as_deref(), Some("software"));
         assert_eq!(parsed.mixer_device.as_deref(), Some("Master"));
+        assert_eq!(parsed.mixer_control.as_deref(), Some("PCM"));
         assert!(parsed.dop);
 
         cleanup(&dir);
