@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.13.3...oxide-player-v0.13.4) (2026-08-01)
+
+
+### Bug Fixes
+
+* vis ([03f49ba](https://github.com/OxideAI/oxide-player/commit/03f49ba1105f604aeb2248ff4336829c11f906ec))
+
 ## [0.13.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.13.2...oxide-player-v0.13.3) (2026-08-01)
 
 
