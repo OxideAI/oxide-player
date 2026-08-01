@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.12.1...oxide-player-v0.12.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* volume on BT ([de0ece6](https://github.com/OxideAI/oxide-player/commit/de0ece6e1740b068cf8e261654e2c9b2d32687a7))
+
 ## [0.12.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.12.0...oxide-player-v0.12.1) (2026-08-01)
 
 
