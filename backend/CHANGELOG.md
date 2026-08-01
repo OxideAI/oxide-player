@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.12.2...oxide-player-v0.12.3) (2026-08-01)
+
+
+### Bug Fixes
+
+* add radio ([006fe1d](https://github.com/OxideAI/oxide-player/commit/006fe1d9671586cfcb7acdd249ea8232a57269fc))
+* vizualizer ([5bbcc68](https://github.com/OxideAI/oxide-player/commit/5bbcc68a23cb14b6e237884724d3bc13cd5e61ef))
+
 ## [0.12.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.12.1...oxide-player-v0.12.2) (2026-08-01)
 
 
