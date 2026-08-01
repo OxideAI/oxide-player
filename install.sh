@@ -559,7 +559,10 @@ write_oxide_config() {
   "static_dir": "$SHARE_DIR/dist",
   "camilladsp_config_path": "$CAMILLADSP_CONFIG",
   "camilladsp_ws_url": "$CAMILLADSP_WS",
-  "default_dsp_profiles": []
+  "default_dsp_profiles": [],
+  "visualizer_fft": true,
+  "visualizer_capture_device": "hw:Loopback,1",
+  "visualizer_capture_rate": 44100
 }
 EOF
   run chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.json"

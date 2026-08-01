@@ -6,14 +6,14 @@
 //! `adapter.device_addresses()` and updated when operations succeed.
 
 use crate::bluetooth::input::BluetoothInputManager;
-use crate::bluetooth::types::{BtDevice, BtEvent, BtEventKind};
+use crate::bluetooth::types::BtDevice;
 use anyhow::{Context, Result};
 use bluer::{Adapter, AdapterEvent, Address, Device};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use futures_util::StreamExt;
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock};
 
 /// Manages the Bluetooth device lifecycle via BlueZ D‑Bus.
 #[derive(Clone)]
@@ -26,7 +26,6 @@ struct Inner {
     adapter_name: RwLock<Option<String>>,
     /// Address → BtDevice.  Populated from `adapter.device_addresses()`.
     devices: RwLock<HashMap<String, BtDevice>>,
-    event_tx: broadcast::Sender<BtEvent>,
     discovery_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     _event_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     input: BluetoothInputManager,
@@ -36,13 +35,11 @@ impl BluetoothManager {
     /// Create a new `BluetoothManager`.  Best‑effort: if BlueZ is unavailable
     /// the manager stays usable — all device operations return clear errors.
     pub async fn new() -> Self {
-        let (event_tx, _) = broadcast::channel(32);
         let mgr = BluetoothManager {
             inner: Arc::new(Inner {
                 session: Mutex::new(None),
                 adapter_name: RwLock::new(None),
                 devices: RwLock::new(HashMap::new()),
-                event_tx,
                 discovery_handle: Mutex::new(None),
                 _event_task: Mutex::new(None),
                 input: BluetoothInputManager::new(),
@@ -180,9 +177,6 @@ impl BluetoothManager {
             .with_context(|| format!("device '{address}' not found on adapter"))
     }
 
-    fn emit(&self, event: BtEvent) {
-        let _ = self.inner.event_tx.send(event);
-    }
 
     // ── background tasks ─────────────────────────────────────────────
 
@@ -263,10 +257,6 @@ impl BluetoothManager {
             entry.paired = true;
         }
 
-        self.emit(BtEvent {
-            kind: BtEventKind::Paired,
-            device: self.device_or_placeholder(address).await,
-        });
         Ok(())
     }
 
@@ -280,16 +270,9 @@ impl BluetoothManager {
             entry.connected = true;
         }
 
-        self.emit(BtEvent {
-            kind: BtEventKind::Connected,
-            device: self.device_or_placeholder(address).await,
-        });
         Ok(())
     }
 
-    pub async fn connect_profile(&self, _address: &str, _profile: &str) -> Result<()> {
-        anyhow::bail!("connect_profile is not yet implemented");
-    }
 
     pub async fn disconnect(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
@@ -299,10 +282,6 @@ impl BluetoothManager {
             entry.connected = false;
         }
 
-        self.emit(BtEvent {
-            kind: BtEventKind::Disconnected,
-            device: self.device_or_placeholder(address).await,
-        });
         Ok(())
     }
 
@@ -330,10 +309,6 @@ impl BluetoothManager {
             entry.alias = Some(name.to_string());
         }
 
-        self.emit(BtEvent {
-            kind: BtEventKind::Paired, // Reuse Paired event for cache update
-            device: self.device_or_placeholder(address).await,
-        });
         Ok(())
     }
 
@@ -386,10 +361,6 @@ impl BluetoothManager {
                 if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
                     entry.connected = true;
                 }
-                self.emit(BtEvent {
-                    kind: BtEventKind::Connected,
-                    device: self.device_or_placeholder(address).await,
-                });
                 return Ok(());
             }
             Err(e) => e,
@@ -404,10 +375,6 @@ impl BluetoothManager {
                 if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
                     entry.connected = true;
                 }
-                self.emit(BtEvent {
-                    kind: BtEventKind::Connected,
-                    device: self.device_or_placeholder(address).await,
-                });
                 return Ok(());
             }
             Err(e) => e,
@@ -424,10 +391,6 @@ impl BluetoothManager {
             entry.connected = true;
         }
         
-        self.emit(BtEvent {
-            kind: BtEventKind::Connected,
-            device: self.device_or_placeholder(address).await,
-        });
         
         Ok(())
     }
@@ -453,20 +416,6 @@ impl BluetoothManager {
             .collect()
     }
 
-    pub async fn connected_devices(&self) -> Vec<BtDevice> {
-        self.inner
-            .devices
-            .read()
-            .await
-            .values()
-            .filter(|d| d.connected)
-            .cloned()
-            .collect()
-    }
-
-    pub fn subscribe_events(&self) -> broadcast::Receiver<BtEvent> {
-        self.inner.event_tx.subscribe()
-    }
 
     pub fn input(&self) -> BluetoothInputManager {
         self.inner.input.clone()
@@ -474,25 +423,6 @@ impl BluetoothManager {
 
     // -- helper --
 
-    async fn device_or_placeholder(&self, address: &str) -> BtDevice {
-        self.inner
-            .devices
-            .read()
-            .await
-            .get(address)
-            .cloned()
-            .unwrap_or_else(|| BtDevice {
-                address: address.to_string(),
-                name: None,
-                alias: None,
-                class: None,
-                icon: None,
-                rssi: None,
-                connected: false,
-                paired: false,
-                trusted: false,
-            })
-    }
 
     // -- event callbacks (called from the discovery task) --
 
@@ -515,10 +445,6 @@ impl BluetoothManager {
                             connected: false,
                             paired: false,
                             trusted: false,
-                        });
-                        self.emit(BtEvent {
-                            kind: BtEventKind::DeviceFound,
-                            device: self.device_or_placeholder(&addr_str).await,
                         });
                         return;
                     }
@@ -544,19 +470,9 @@ impl BluetoothManager {
             }
         }
 
-        self.emit(BtEvent {
-            kind: BtEventKind::DeviceFound,
-            device: self.device_or_placeholder(&addr_str).await,
-        });
     }
 
     async fn on_device_lost(&self, addr: Address) {
-        let addr_str = addr.to_string();
-        if let Some(d) = self.inner.devices.write().await.remove(&addr_str) {
-            self.emit(BtEvent {
-                kind: BtEventKind::DeviceLost,
-                device: d,
-            });
-        }
+        self.inner.devices.write().await.remove(&addr.to_string());
     }
 }
