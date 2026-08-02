@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.3...oxide-player-v0.15.4) (2026-08-02)
+
+
+### Bug Fixes
+
+* library location reset bug ([0a65d7d](https://github.com/OxideAI/oxide-player/commit/0a65d7d4c1942437f93d9a6cf93cad5e98f4fdab))
+* library location reset bug ([7df386f](https://github.com/OxideAI/oxide-player/commit/7df386f129f8863ccc175450ec00df1d11eb7057))
+
 ## [0.15.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.2...oxide-player-v0.15.3) (2026-08-02)
 
 
