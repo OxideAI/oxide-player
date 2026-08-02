@@ -630,6 +630,27 @@ EOF
   run chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" 2>/dev/null || true
 }
 
+#
+# Visualizer fifo output: MPD writes a copy of the played stream to a fifo that
+# the backend's FFT visualizer reads. Unlike ALSA loopback capture this works
+# in every output mode (Bluetooth / DSP loopback / analog) and avoids
+# snd-aloop substream contention with CamillaDSP's capture.
+#
+write_visualizer_fifo() {
+  local fifo_conf="$DATA_DIR/mpd-outputs.d/visualizer-fifo.conf"
+  log "Writing visualizer fifo output ($fifo_conf)"
+  run mkdir -p "$DATA_DIR/mpd-outputs.d"
+  cat > "$fifo_conf" <<EOF
+audio_output {
+    type        "fifo"
+    name        "visualizer"
+    path        "$DATA_DIR/visualizer.fifo"
+    format      "44100:16:2"
+}
+EOF
+  run chown "$SERVICE_USER:$SERVICE_USER" "$fifo_conf" 2>/dev/null || true
+}
+
 
 #
 # Repair an existing MPD config during --update. Older installations may not
@@ -739,7 +760,8 @@ write_oxide_config() {
   "default_dsp_profiles": [],
   "visualizer_fft": true,
   "visualizer_capture_device": "hw:Loopback,1",
-  "visualizer_capture_rate": 44100
+  "visualizer_capture_rate": 44100,
+  "visualizer_fifo": "$DATA_DIR/visualizer.fifo"
 }
 EOF
 )"
@@ -748,18 +770,23 @@ EOF
   # already exists, keep every key it defines and only fill in keys the
   # installer manages that are missing (e.g. defaults added by newer
   # versions). Fresh installs get the full generated config.
-  if [[ -f "$CONFIG_DIR/config.json" ]] && command -v jq >/dev/null 2>&1; then
-    # jq `left * right` keeps the right operand's values on collisions, so
-    # put the existing config on the right: existing keys win, generated keys
-    # fill in what the old config lacks. --slurpfile works on jq 1.6+ and jaq.
-    local merged
-    if merged="$(jq --slurpfile g <(printf '%s\n' "$generated") '$g[0] * .' "$CONFIG_DIR/config.json")"; then
-      log "Preserving existing config; filling in only missing keys"
-      printf '%s\n' "$merged" > "$CONFIG_DIR/config.json"
-      run chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.json"
+  if [[ -f "$CONFIG_DIR/config.json" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      # jq `left * right` keeps the right operand's values on collisions, so
+      # put the existing config on the right: existing keys win, generated keys
+      # fill in what the old config lacks. --slurpfile works on jq 1.6+ and jaq.
+      local merged
+      if merged="$(jq --slurpfile g <(printf '%s\n' "$generated") '$g[0] * .' "$CONFIG_DIR/config.json")"; then
+        log "Preserving existing config; filling in only missing keys"
+        printf '%s\n' "$merged" > "$CONFIG_DIR/config.json"
+        run chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.json"
+        return
+      fi
+      warn "Existing config is not valid JSON; regenerating from defaults"
+    else
+      warn "jq not found; leaving existing config unchanged"
       return
     fi
-    warn "Existing config is not valid JSON; regenerating from defaults"
   fi
   printf '%s\n' "$generated" > "$CONFIG_DIR/config.json"
   run chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.json"
@@ -980,6 +1007,8 @@ do_update() {
   build_frontend
   ensure_mpd_include || true
   ensure_asound_loopback || true
+  write_visualizer_fifo || true
+  write_oxide_config
   setup_bluetooth
   setup_airplay
   install_units
@@ -1032,6 +1061,7 @@ main() {
   setup_bluetooth
   write_mpd_config
   write_camilladsp_config
+  write_visualizer_fifo
   write_oxide_config
   setup_airplay
   install_units
