@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.15.5](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.4...oxide-player-v0.15.5) (2026-08-02)
+
+
+### Bug Fixes
+
+* **frontend:** spread spectrum bars across full canvas width ([d036c53](https://github.com/OxideAI/oxide-player/commit/d036c53d9dc3d6c6a5c2e17f4feb7653bb9bed65))
+* make FFT visualizer work on installed servers ([5130ae7](https://github.com/OxideAI/oxide-player/commit/5130ae76124af22985ff3d69fe0aae9a902c5489))
+* make FFT visualizer work on installed servers ([c9a5a4e](https://github.com/OxideAI/oxide-player/commit/c9a5a4ee5a4f64f64a98c547bea732f739094c63))
+
 ## [0.15.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.3...oxide-player-v0.15.4) (2026-08-02)
 
 
