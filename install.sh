@@ -722,7 +722,8 @@ write_oxide_config() {
     dirs_json+="\"$d\","
   done
   dirs_json="[${dirs_json%,}]"
-  cat > "$CONFIG_DIR/config.json" <<EOF
+  local generated
+  generated="$(cat <<EOF
 {
   "mpd_host": "127.0.0.1",
   "mpd_port": 6600,
@@ -741,6 +742,26 @@ write_oxide_config() {
   "visualizer_capture_rate": 44100
 }
 EOF
+)"
+  # Re-running the installer (reinstall) must not wipe settings the user
+  # edited in the web UI (Music library sources, listen, ...). When a config
+  # already exists, keep every key it defines and only fill in keys the
+  # installer manages that are missing (e.g. defaults added by newer
+  # versions). Fresh installs get the full generated config.
+  if [[ -f "$CONFIG_DIR/config.json" ]] && command -v jq >/dev/null 2>&1; then
+    # jq `left * right` keeps the right operand's values on collisions, so
+    # put the existing config on the right: existing keys win, generated keys
+    # fill in what the old config lacks. --slurpfile works on jq 1.6+ and jaq.
+    local merged
+    if merged="$(jq --slurpfile g <(printf '%s\n' "$generated") '$g[0] * .' "$CONFIG_DIR/config.json")"; then
+      log "Preserving existing config; filling in only missing keys"
+      printf '%s\n' "$merged" > "$CONFIG_DIR/config.json"
+      run chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.json"
+      return
+    fi
+    warn "Existing config is not valid JSON; regenerating from defaults"
+  fi
+  printf '%s\n' "$generated" > "$CONFIG_DIR/config.json"
   run chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.json"
 }
 

@@ -77,5 +77,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Test release asset lookup
         run: tests/install-release-assets.sh
+      - name: Test reinstall preserves user config
+        run: tests/install-config-preserve.sh
       - name: Test release-please configuration
         run: tests/release-please-config.sh
