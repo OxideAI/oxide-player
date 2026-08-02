@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.1...oxide-player-v0.15.2) (2026-08-02)
+
+
+### Bug Fixes
+
+* build ([94839fe](https://github.com/OxideAI/oxide-player/commit/94839feda9e93391c8966cb73f3fd1e3ce2e84f6))
+* dynamic island on iphone fix ([9834ec8](https://github.com/OxideAI/oxide-player/commit/9834ec8791303036aa65f9a234653090b1b62db6))
+
 ## [0.15.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.0...oxide-player-v0.15.1) (2026-08-02)
 
 
