@@ -48,6 +48,8 @@
 
   --nav-h: 64px;
   --dock-h: 96px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;

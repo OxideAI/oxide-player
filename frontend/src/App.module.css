@@ -8,7 +8,7 @@
 /* —— Floating glass pill nav (Fluid Island) —— */
 .nav {
   position: fixed;
-  top: 1.1rem;
+  top: calc(var(--safe-top) + 0.75rem);
   left: 50%;
   transform: translate3d(-50%, 0, 0);
   z-index: 60;
@@ -145,6 +145,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: var(--safe-top) 1.5rem var(--safe-bottom);
   background: rgba(6, 7, 10, 0.82);
   backdrop-filter: blur(40px) saturate(140%);
   -webkit-backdrop-filter: blur(40px) saturate(140%);
@@ -201,13 +202,14 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: calc(var(--nav-h) + 2.4rem) clamp(1rem, 4vw, 3.5rem) calc(var(--dock-h) + 2rem);
+  padding: calc(var(--nav-h) + var(--safe-top) + 2.4rem) clamp(1rem, 4vw, 3.5rem)
+    calc(var(--dock-h) + var(--safe-bottom) + 2rem);
   scroll-behavior: smooth;
 }
 
 .banner {
   position: fixed;
-  top: calc(var(--nav-h) + 0.4rem);
+  top: calc(var(--safe-top) + var(--nav-h) + 0.4rem);
   left: 50%;
   transform: translateX(-50%);
   z-index: 62;
@@ -244,7 +246,8 @@
 
 @media (max-width: 640px) {
   .main {
-    padding: calc(var(--nav-h) + 1.4rem) 1rem calc(var(--dock-h) + 1.4rem);
+    padding: calc(var(--nav-h) + var(--safe-top) + 1.4rem) 1rem
+      calc(var(--dock-h) + var(--safe-bottom) + 1.4rem);
   }
 }
 
