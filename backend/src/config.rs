@@ -169,6 +169,7 @@ impl Config {
         Ok((config, resolved))
     }
 
+    #[cfg(test)]
     pub(crate) fn default_config() -> Config {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self::default_config_from_dir(&cwd)
