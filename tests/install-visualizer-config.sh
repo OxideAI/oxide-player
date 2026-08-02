@@ -18,6 +18,7 @@ mkdir -p "$CONFIG_DIR"
 chown() { :; }
 source "$repo_root/install.sh"
 write_oxide_config
+write_visualizer_fifo
 
 python3 - "$CONFIG_DIR/config.json" <<'PY'
 import json
@@ -30,6 +31,16 @@ assert config["bluetooth_reconnect_on_startup"] is True, "installed config must 
 assert config["visualizer_fft"] is True, "installed config must enable FFT visualizer"
 assert config["visualizer_capture_device"] == "hw:Loopback,1"
 assert config["visualizer_capture_rate"] == 44100
+assert config["visualizer_fifo"] == f'{config["data_dir"]}/visualizer.fifo'
+
+# The fifo output fragment MPD loads must exist and point at the same path.
+import pathlib
+fragment = pathlib.Path(config["data_dir"]) / "mpd-outputs.d" / "visualizer-fifo.conf"
+assert fragment.exists(), "visualizer fifo output fragment must be written"
+text = fragment.read_text(encoding="utf-8")
+assert 'type        "fifo"' in text
+assert f'path        "{config["visualizer_fifo"]}"' in text
+assert 'format      "44100:16:2"' in text
 PY
 
 printf 'installer visualizer config test passed\n'

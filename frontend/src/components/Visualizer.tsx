@@ -227,20 +227,20 @@ export function Visualizer({ playing, frame, params }: Props) {
 
       switch (p.style) {
         case 'mirrored':
-          drawMirrored(ctx, width, height, smoothed, p, accent, accent2)
+          drawMirrored(ctx, width, height, smoothed, count, p, accent, accent2)
           break
         case 'circular':
-          drawCircular(ctx, width, height, smoothed, p, accent, accent2, phase)
+          drawCircular(ctx, width, height, smoothed, count, p, accent, accent2, phase)
           break
         case 'waveform':
-          drawWaveform(ctx, width, height, smoothed, p, accent, accent2, phase)
+          drawWaveform(ctx, width, height, smoothed, count, p, accent, accent2, phase)
           break
         case 'ring':
-          drawRing(ctx, width, height, smoothed, p, accent, accent2, phase)
+          drawRing(ctx, width, height, smoothed, count, p, accent, accent2, phase)
           break
         case 'bars':
         default:
-          drawBars(ctx, width, height, smoothed, p, accent, accent2, phase)
+          drawBars(ctx, width, height, smoothed, count, p, accent, accent2, phase)
           break
       }
     }
@@ -267,19 +267,21 @@ export function Visualizer({ playing, frame, params }: Props) {
   return <canvas ref={canvasRef} className={styles.canvas} aria-hidden />
 }
 
-function drawBars(
+export function drawBars(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
   values: Float32Array,
+  count: number,
   p: VizParams,
   accent: string,
   accent2: string,
   phase: number,
 ) {
+  if (count <= 0) return
   const gap = p.barGap
-  const barWidth = Math.max(1, (width - gap * (values.length - 1)) / values.length)
-  for (let index = 0; index < values.length; index++) {
+  const barWidth = Math.max(1, (width - gap * (count - 1)) / count)
+  for (let index = 0; index < count; index++) {
     const idle = p.barIdle * (0.5 + 0.5 * Math.sin(phase * 1.3 + index * 0.5))
     const barHeight = height * (p.barIdle + Math.max(idle, values[index]) * p.barPeak)
     const x = index * (barWidth + gap)
@@ -293,19 +295,21 @@ function drawBars(
   }
 }
 
-function drawMirrored(
+export function drawMirrored(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
   values: Float32Array,
+  count: number,
   p: VizParams,
   accent: string,
   accent2: string,
 ) {
+  if (count <= 0) return
   const gap = p.barGap
-  const barWidth = Math.max(1, (width - gap * (values.length - 1)) / values.length)
+  const barWidth = Math.max(1, (width - gap * (count - 1)) / count)
   const center = height / 2
-  for (let index = 0; index < values.length; index++) {
+  for (let index = 0; index < count; index++) {
     const barHeight = height * (0.035 + (p.barIdle * 0.35 + values[index] * p.barPeak * 0.47))
     const x = index * (barWidth + gap)
     const gradient = ctx.createLinearGradient(0, center - barHeight, 0, center + barHeight)
@@ -325,6 +329,7 @@ function drawCircular(
   width: number,
   height: number,
   values: Float32Array,
+  count: number,
   p: VizParams,
   accent: string,
   accent2: string,
@@ -340,8 +345,8 @@ function drawCircular(
   ctx.lineWidth = 2
   ctx.stroke()
 
-  for (let index = 0; index < values.length; index++) {
-    const angle = -Math.PI / 2 + index / values.length * Math.PI * 2
+  for (let index = 0; index < count; index++) {
+    const angle = -Math.PI / 2 + index / count * Math.PI * 2
     const pulse = p.barIdle * 0.3 + values[index] * p.barPeak
     const start = inner
     const end = inner + maxLength * pulse
@@ -369,6 +374,7 @@ function drawWaveform(
   width: number,
   height: number,
   values: Float32Array,
+  count: number,
   p: VizParams,
   accent: string,
   accent2: string,
@@ -385,8 +391,8 @@ function drawWaveform(
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.beginPath()
-  for (let index = 0; index < values.length; index++) {
-    const x = values.length === 1 ? 0 : index / (values.length - 1) * width
+  for (let index = 0; index < count; index++) {
+    const x = count === 1 ? 0 : index / (count - 1) * width
     const phaseOffset = phase * 1.4 + index * 0.72
     const y = center + Math.sin(phaseOffset) * amplitude * (p.barIdle * 0.3 + values[index])
     if (index === 0) ctx.moveTo(x, y)
@@ -406,6 +412,7 @@ function drawRing(
   width: number,
   height: number,
   values: Float32Array,
+  count: number,
   p: VizParams,
   accent: string,
   accent2: string,
@@ -420,8 +427,8 @@ function drawRing(
   ctx.lineWidth = 2
   ctx.stroke()
 
-  for (let index = 0; index < values.length; index++) {
-    const angle = -Math.PI / 2 + index / values.length * Math.PI * 2
+  for (let index = 0; index < count; index++) {
+    const angle = -Math.PI / 2 + index / count * Math.PI * 2
     const pulse = p.barIdle * 0.5 + values[index] * p.barPeak
     const inner = base + 3
     const outer = inner + Math.min(width, height) * 0.2 * pulse

@@ -62,6 +62,16 @@ pub struct Config {
     /// CamillaDSP capture rate (44.1 kHz) so it matches the loopback on Linux.
     #[serde(default)]
     pub visualizer_capture_rate: Option<u32>,
+    /// Optional path to an MPD `fifo` output the visualizer reads instead of
+    /// capturing an ALSA device. MPD feeds the fifo on every enabled output
+    /// (Bluetooth / DSP loopback / analog), so the visualizer animates
+    /// regardless of the active routing — and there is no substream contention
+    /// with CamillaDSP's loopback capture (snd-aloop delivers a substream to
+    /// only one capture client). The installer writes the matching
+    /// `visualizer-fifo.conf` output and sets this key. The fifo is
+    /// S16_LE interleaved stereo at 44.1 kHz (format "44100:16:2").
+    #[serde(default)]
+    pub visualizer_fifo: Option<String>,
     /// Longest side (in px) a cover image is allowed to have after
     /// optimization. Oversized covers are downscaled to fit. 0 keeps the
     /// original dimension (only file-size recompression applies).
@@ -200,6 +210,7 @@ impl Config {
             visualizer_fft: false,
             visualizer_capture_device: None,
             visualizer_capture_rate: None,
+            visualizer_fifo: None,
             cover_max_dimension: default_cover_max_dimension(),
             cover_max_bytes: default_cover_max_bytes(),
             cover_quality: default_cover_quality(),

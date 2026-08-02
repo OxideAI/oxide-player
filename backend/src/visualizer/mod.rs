@@ -157,6 +157,13 @@ impl VisualizerAnalyzer {
     }
 
     fn start(&self, config: &Config) -> Result<()> {
+        // MPD fifo tap takes precedence over ALSA capture when configured: it
+        // works in every output mode and avoids loopback substream contention
+        // with CamillaDSP (snd-aloop delivers a substream to one capture
+        // client only).
+        if let Some(fifo) = config.visualizer_fifo.as_deref() {
+            return self.start_fifo(fifo);
+        }
         let device_name = config
             .visualizer_capture_device
             .clone()
@@ -178,10 +185,26 @@ impl VisualizerAnalyzer {
             .supported_input_configs()
             .ok()
             .and_then(|ranges| {
-                ranges
+                let ranges: Vec<_> = ranges.collect();
+                // 1. The device's default format at the requested rate.
+                if let Some(config) = ranges
+                    .iter()
                     .filter(|range| {
                         range.channels() == default_config.channels()
                             && range.sample_format() == default_config.sample_format()
+                    })
+                    .find_map(|range| range.try_with_sample_rate(requested_rate))
+                {
+                    return Some(config);
+                }
+                // 2. Any buildable format at the requested rate — a device
+                //    whose default format is unsupported at that rate must not
+                //    kill capture.
+                ranges
+                    .iter()
+                    .filter(|range| {
+                        range.channels() == default_config.channels()
+                            && has_stream_builder(range.sample_format())
                     })
                     .find_map(|range| range.try_with_sample_rate(requested_rate))
             })
@@ -203,34 +226,18 @@ impl VisualizerAnalyzer {
         // `window` holds the most recent samples; the callback writes into a
         // ring and a publishing task reads it out on the PUBLISH_HZ cadence.
         let window_size = (rate as f64 * WINDOW_SECONDS).round() as usize;
-        let mut planner = FftPlanner::<f32>::new();
-        let fft = planner.plan_fft_forward(window_size.next_power_of_two());
 
         let shared = SharedState::new(window_size, channels as usize);
         let shared_capture = shared.clone();
 
         let err_tx = tx.clone();
-        let stream = match sample_format {
-            SampleFormat::F32 => build_stream::<f32>(
-                &device,
-                &stream_config,
-                shared_capture,
-                &err_tx,
-            )?,
-            SampleFormat::I16 => build_stream::<i16>(
-                &device,
-                &stream_config,
-                shared_capture,
-                &err_tx,
-            )?,
-            SampleFormat::U16 => build_stream::<u16>(
-                &device,
-                &stream_config,
-                shared_capture,
-                &err_tx,
-            )?,
-            other => anyhow::bail!("unsupported capture sample format: {other:?}"),
-        };
+        let stream = build_stream_for_format(
+            &device,
+            &stream_config,
+            sample_format,
+            shared_capture,
+            &err_tx,
+        )?;
 
         stream.play().map_err(|e| anyhow::anyhow!("play stream: {e}"))?;
         // Keep the stream alive for the process lifetime without holding a
@@ -238,29 +245,33 @@ impl VisualizerAnalyzer {
         // capture runs until the process exits, which is exactly what we want.
         let _ = Box::leak(Box::new(stream));
 
-        // Publisher: pulls the latest window, runs the FFT, groups into BANDS,
-        // and broadcasts. Runs detached; never touches the audio callback's hot
-        // path so capture stays glitch-free.
-         let publish_shared = shared.clone();
-         let publish_tx = tx.clone();
-         let fft_bins = fft.len();
-         tokio::spawn(async move {
-             tracing::debug!("visualizer publisher task started");
-             let mut planner = FftPlanner::<f32>::new();
-             let fft = planner.plan_fft_forward(
-                 publish_shared.window_size.next_power_of_two(),
-             );
-             // Reused scratch buffer — avoids a ~16k-element heap alloc every
-             // frame (40 fps) on the publisher hot path.
-             let padded = publish_shared.window_size.next_power_of_two();
-             let mut scratch = vec![Complex::new(0.0f32, 0.0f32); padded];
-             let mut interval =
-                 tokio::time::interval(std::time::Duration::from_secs_f64(1.0 / PUBLISH_HZ));
-             let mut published = 0u32;
-             loop {
-                 interval.tick().await;
-                 let frame = compute_frame(&publish_shared, &fft, fft_bins, &mut scratch);
-                match publish_tx.send(frame) {
+        self.spawn_publisher(shared, tx);
+
+        tracing::info!(
+            "visualizer FFT capture started on device '{device_name}' @ {rate} Hz, {channels}ch, {BANDS} bands"
+        );
+        Ok(())
+    }
+
+    /// Spawn the FFT publisher: pulls the latest window, runs the FFT, groups
+    /// into BANDS, and broadcasts at PUBLISH_HZ. Runs detached and never
+    /// touches the capture hot path, so capture stays glitch-free.
+    fn spawn_publisher(&self, shared: Arc<SharedState>, tx: broadcast::Sender<SpectrumFrame>) {
+        tokio::spawn(async move {
+            tracing::debug!("visualizer publisher task started");
+            let padded = shared.window_size.next_power_of_two();
+            let mut planner = FftPlanner::<f32>::new();
+            let fft = planner.plan_fft_forward(padded);
+            // Reused scratch buffer — avoids a ~16k-element heap alloc every
+            // frame (40 fps) on the publisher hot path.
+            let mut scratch = vec![Complex::new(0.0f32, 0.0f32); padded];
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs_f64(1.0 / PUBLISH_HZ));
+            let mut published = 0u32;
+            loop {
+                interval.tick().await;
+                let frame = compute_frame(&shared, &fft, padded, &mut scratch);
+                match tx.send(frame) {
                     Ok(n) => {
                         published += 1;
                         if published % 200 == 0 {
@@ -273,11 +284,95 @@ impl VisualizerAnalyzer {
                 }
             }
         });
+    }
 
+    /// Tap the MPD `fifo` output (format "44100:16:2", S16_LE interleaved
+    /// stereo) instead of an ALSA capture device. MPD feeds the fifo in every
+    /// output mode — Bluetooth, DSP loopback, analog — so the visualizer
+    /// animates regardless of the active routing, with no substream contention
+    /// with CamillaDSP. MPD creates the fifo file at startup and may not exist
+    /// yet (the backend autostarts MPD after the analyzer), so the reader
+    /// retries until it appears and reopens after MPD restarts.
+    fn start_fifo(&self, path: &str) -> Result<()> {
+        const RATE: u32 = 44100;
+        const CHANNELS: usize = 2;
+        let window_size = (RATE as f64 * WINDOW_SECONDS).round() as usize;
+        let shared = SharedState::new(window_size, CHANNELS);
+        let shared_reader = shared.clone();
+        let tx = self.inner.tx.clone();
+        let path_owned = path.to_string();
+        // Opening a fifo read-end blocks until a writer (MPD) opens it, so the
+        // reader lives on a dedicated OS thread, not the async runtime.
+        std::thread::Builder::new()
+            .name("visualizer-fifo".into())
+            .spawn(move || {
+                loop {
+                    match std::fs::File::open(&path_owned) {
+                        Ok(file) => {
+                            tracing::info!("visualizer fifo '{path_owned}' open, reading S16_LE stereo");
+                            if let Err(e) = read_fifo(file, &shared_reader, CHANNELS) {
+                                tracing::warn!("visualizer fifo '{path_owned}' read error: {e}");
+                            }
+                            // Writer closed (MPD restart/stop): reopen shortly.
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            tracing::debug!("visualizer fifo '{path_owned}' not present yet, retrying");
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        }
+                        Err(e) => {
+                            tracing::warn!("visualizer fifo '{path_owned}' cannot be opened: {e}");
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        }
+                    }
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("spawn fifo reader thread: {e}"))?;
+
+        self.spawn_publisher(shared, tx);
         tracing::info!(
-            "visualizer FFT capture started on device '{device_name}' @ {rate} Hz, {channels}ch, {BANDS} bands"
+            "visualizer FFT capture started on MPD fifo '{path}' @ {RATE} Hz, {CHANNELS}ch, {BANDS} bands"
         );
         Ok(())
+    }
+}
+
+/// Read S16_LE interleaved PCM from the MPD fifo until the writer closes.
+/// Returns `Ok` on a normal writer close (MPD restarted); hard I/O errors are
+/// surfaced to the caller for logging and reopen.
+fn read_fifo(
+    mut file: std::fs::File,
+    shared: &SharedState,
+    channels: usize,
+) -> std::io::Result<()> {
+    use std::io::Read;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            return Ok(()); // writer closed
+        }
+        push_i16_pcm(shared, &buf[..n], channels);
+    }
+}
+
+/// Decode interleaved S16_LE frames, mix down to mono into the shared window
+/// (oldest samples dropped past `window_size`). Partial trailing frames are
+/// skipped, so misaligned reads cannot corrupt the stream.
+fn push_i16_pcm(shared: &SharedState, data: &[u8], channels: usize) {
+    let mut guard = shared.samples.lock().unwrap();
+    let ch = channels.max(1) as f32;
+    for frame in data.chunks_exact(channels * 2) {
+        let mut sum = 0.0f32;
+        for sample in frame.chunks_exact(2).take(channels) {
+            let raw = i16::from_le_bytes([sample[0], sample[1]]);
+            sum += raw as f32 / 32768.0;
+        }
+        guard.push(sum / ch);
+    }
+    if guard.len() > shared.window_size {
+        let drop = guard.len() - shared.window_size;
+        guard.drain(0..drop);
     }
 }
 /// Match a configured capture device against CPAL's display name or stable ID.
@@ -340,6 +435,60 @@ impl SharedState {
             channels,
             samples: Mutex::new(Vec::with_capacity(window_size)),
         })
+    }
+}
+
+/// Formats the analyzer can build capture streams for, ordered by preference
+/// (lossless-to-f32 first). snd-aloop defaults its capture format to S32_LE —
+/// cpal `I32` — so integer formats must be listed or loopback capture never
+/// starts. Keep in sync with `build_stream_for_format`.
+const BUILDER_FORMATS: [SampleFormat; 12] = [
+    SampleFormat::F32,
+    SampleFormat::I16,
+    SampleFormat::U16,
+    SampleFormat::I32,
+    SampleFormat::I24,
+    SampleFormat::U24,
+    SampleFormat::I8,
+    SampleFormat::U8,
+    SampleFormat::I64,
+    SampleFormat::U64,
+    SampleFormat::F64,
+    SampleFormat::U32,
+];
+
+fn has_stream_builder(format: SampleFormat) -> bool {
+    BUILDER_FORMATS.contains(&format)
+}
+
+/// Dispatch a device's sample format to the matching `build_stream::<T>`.
+/// Exhaustive over every `cpal::SampleFormat` variant: a device whose default
+/// capture format lacks an arm here (e.g. snd-aloop's S32_LE → `I32`) makes
+/// the whole visualizer fail to start with "unsupported capture sample format".
+fn build_stream_for_format(
+    device: &cpal::Device,
+    config: &StreamConfig,
+    sample_format: SampleFormat,
+    shared: Arc<SharedState>,
+    err_tx: &broadcast::Sender<SpectrumFrame>,
+) -> Result<cpal::Stream> {
+    match sample_format {
+        SampleFormat::I8 => build_stream::<i8>(device, config, shared, err_tx),
+        SampleFormat::I16 => build_stream::<i16>(device, config, shared, err_tx),
+        SampleFormat::I24 => build_stream::<cpal::I24>(device, config, shared, err_tx),
+        SampleFormat::I32 => build_stream::<i32>(device, config, shared, err_tx),
+        SampleFormat::I64 => build_stream::<i64>(device, config, shared, err_tx),
+        SampleFormat::U8 => build_stream::<u8>(device, config, shared, err_tx),
+        SampleFormat::U16 => build_stream::<u16>(device, config, shared, err_tx),
+        SampleFormat::U24 => build_stream::<cpal::U24>(device, config, shared, err_tx),
+        SampleFormat::U32 => build_stream::<u32>(device, config, shared, err_tx),
+        SampleFormat::U64 => build_stream::<u64>(device, config, shared, err_tx),
+        SampleFormat::F32 => build_stream::<f32>(device, config, shared, err_tx),
+        SampleFormat::F64 => build_stream::<f64>(device, config, shared, err_tx),
+        // `SampleFormat` is #[non_exhaustive]: a format cpal adds later has no
+        // builder here, and `every_cpal_sample_format_has_a_stream_builder`
+        // must be extended to cover it.
+        other => anyhow::bail!("unsupported capture sample format: {other:?}"),
     }
 }
 
@@ -519,6 +668,84 @@ mod tests {
         let mut scratch = vec![Complex::new(0.0, 0.0); 4096];
         let frame = compute_frame(&shared, &fft, 4096, &mut scratch);
         assert!(frame.bins.iter().copied().fold(0.0, f32::max) > 0.5);
+    }
+
+    #[test]
+    fn fifo_pcm_mixes_to_mono_and_fft_reacts() {
+        // Regression: the deployed player's visualizer could not capture —
+        // snd-aloop delivers a loopback substream to only one capture client
+        // (CamillaDSP holds hw:Loopback,1), and Bluetooth mode never writes
+        // the loopback at all. The MPD fifo tap decodes S16_LE stereo into the
+        // same window the ALSA path uses; this guards the decode + FFT chain.
+        let shared = SharedState::new(4096, 2);
+        let mut pcm = Vec::new();
+        for index in 0..4096 {
+            let v = (index as f32 * 2.0 * std::f32::consts::PI * 440.0 / 44_100.0).sin()
+                * 0.8
+                * 32767.0;
+            // Right channel at half amplitude: mono mix must not cancel.
+            for raw in [v as i16, (v * 0.5) as i16] {
+                pcm.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        // A misaligned first read must not corrupt decoding: the 3-byte prefix
+        // carries no complete frame (dropped), the remainder decodes 4095
+        // frames plus one trailing partial byte that is also dropped.
+        push_i16_pcm(&shared, &pcm[..3], 2);
+        push_i16_pcm(&shared, &pcm[3..], 2);
+        {
+            let samples = shared.samples.lock().unwrap();
+            assert_eq!(samples.len(), 4095);
+        }
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(4096);
+        let mut scratch = vec![Complex::new(0.0, 0.0); 4096];
+        let frame = compute_frame(&shared, &fft, 4096, &mut scratch);
+        assert!(frame.level > 0.2);
+        assert!(frame.bins.iter().any(|value| *value > 0.1));
+    }
+
+    #[test]
+    fn fifo_window_trims_oldest_samples() {
+        let shared = SharedState::new(128, 2);
+        let mut pcm = Vec::new();
+        for _ in 0..512 {
+            pcm.extend_from_slice(&1i16.to_le_bytes());
+            pcm.extend_from_slice(&(-1i16).to_le_bytes());
+        }
+        push_i16_pcm(&shared, &pcm, 2);
+        let samples = shared.samples.lock().unwrap();
+        assert_eq!(samples.len(), 128);
+        // Mono mix of +1/-1 is 0; all samples must decode as silence.
+        assert!(samples.iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn every_cpal_sample_format_has_a_stream_builder() {
+        // Regression: snd-aloop exposes S32_LE as its default capture format
+        // (cpal `I32`); the old dispatch only handled F32/I16/U16, so capture
+        // bailed with "unsupported capture sample format: I32" and the
+        // visualizer never started on installed servers. Every SampleFormat
+        // variant must dispatch to a builder.
+        for format in [
+            SampleFormat::I8,
+            SampleFormat::I16,
+            SampleFormat::I24,
+            SampleFormat::I32,
+            SampleFormat::I64,
+            SampleFormat::U8,
+            SampleFormat::U16,
+            SampleFormat::U24,
+            SampleFormat::U32,
+            SampleFormat::U64,
+            SampleFormat::F32,
+            SampleFormat::F64,
+        ] {
+            assert!(
+                has_stream_builder(format),
+                "missing stream builder for {format:?}"
+            );
+        }
     }
 
     #[test]
