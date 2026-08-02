@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.6](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.5...oxide-player-v0.15.6) (2026-08-02)
+
+
+### Bug Fixes
+
+* dsp ([e008050](https://github.com/OxideAI/oxide-player/commit/e008050ce8a691fe486af22ca9051f40a8225067))
+
 ## [0.15.5](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.4...oxide-player-v0.15.5) (2026-08-02)
 
 
