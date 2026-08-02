@@ -71,6 +71,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/devices/{id}/dsp/disable", post(disable_device_dsp))
         .route("/api/radio", get(radio_list))
         .route("/api/radio", post(radio_add))
+        .route("/api/radio/{id}", put(radio_update))
         .route("/api/radio/{id}", delete(radio_delete))
         .route("/api/radio/{id}/play", post(radio_play))
         .route("/api/dsp", get(dsp_get))
@@ -1297,6 +1298,13 @@ struct AddRadioBody {
     name: String,
     url: String,
     homepage: Option<String>,
+    artwork: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateRadioBody {
+    name: String,
+    artwork: Option<String>,
 }
 
 /// List all user-managed radio stations.
@@ -1309,8 +1317,17 @@ async fn radio_add(
     State(s): State<AppState>,
     Json(b): Json<AddRadioBody>,
 ) -> AppResult<(StatusCode, Json<RadioStation>)> {
-    let station = s.radio().add(&b.name, &b.url, b.homepage)?;
+    let station = s.radio().add(&b.name, &b.url, b.homepage, b.artwork)?;
     Ok((StatusCode::CREATED, Json(station)))
+}
+
+/// Update a radio station's display name and artwork.
+async fn radio_update(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<UpdateRadioBody>,
+) -> AppResult<Json<RadioStation>> {
+    Ok(Json(s.radio().update(&id, &b.name, b.artwork)?))
 }
 
 /// Remove a radio station by id.

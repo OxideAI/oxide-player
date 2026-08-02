@@ -2,11 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor, fireEvent } from '@testing-library/react'
 import type { RadioStation } from '../types'
 
-// Mock the api module so the component's list/add/play/delete calls are
+// Mock the api module so the component's list/add/edit/play/delete calls are
 // observable. Only the methods RadioView touches need spies.
 const listRadio = vi.fn<() => Promise<RadioStation[]>>(() => Promise.resolve([]))
-const addRadio = vi.fn<(name: string, url: string) => Promise<RadioStation>>(() =>
+const addRadio = vi.fn<(name: string, url: string, artwork: string | null) => Promise<RadioStation>>(() =>
   Promise.reject(new Error('unexpected addRadio call')),
+)
+const updateRadio = vi.fn<(id: string, name: string, artwork: string | null) => Promise<RadioStation>>(() =>
+  Promise.reject(new Error('unexpected updateRadio call')),
 )
 const deleteRadio = vi.fn<(id: string) => Promise<unknown>>(() => Promise.resolve({}))
 const playRadio = vi.fn<(id: string) => Promise<unknown>>(() => Promise.resolve({}))
@@ -18,7 +21,10 @@ vi.mock('../api', async (importOriginal) => {
     api: {
       ...actual.api,
       listRadio: () => listRadio(),
-      addRadio: (name: string, url: string) => addRadio(name, url),
+      addRadio: (name: string, url: string, artwork: string | null) =>
+        addRadio(name, url, artwork),
+      updateRadio: (id: string, name: string, artwork: string | null) =>
+        updateRadio(id, name, artwork),
       deleteRadio: (id: string) => deleteRadio(id),
       playRadio: (id: string) => playRadio(id),
     },
@@ -33,6 +39,7 @@ function makeStation(over: Partial<RadioStation> = {}): RadioStation {
     name: 'JFK Ibiza',
     url: 'https://stream.aiir.com/7dsjltmny8cvv',
     homepage: 'https://jfkibiza.es/',
+    artwork: null,
     ...over,
   }
 }
@@ -89,9 +96,58 @@ describe('RadioView', () => {
     fireEvent.change(getByLabelText('Stream URL'), {
       target: { value: '  https://example.com/stream  ' },
     })
+    fireEvent.change(getByLabelText('Artwork URL'), {
+      target: { value: '  https://example.com/art.jpg  ' },
+    })
     fireEvent.click(getByText('Add station'))
-    await waitFor(() => expect(addRadio).toHaveBeenCalledWith('Cool Radio', 'https://example.com/stream'))
+    await waitFor(() =>
+      expect(addRadio).toHaveBeenCalledWith(
+        'Cool Radio',
+        'https://example.com/stream',
+        'https://example.com/art.jpg',
+      ),
+    )
     expect(listRadio).toHaveBeenCalledTimes(2)
+  })
+
+  it('edits a station name and artwork', async () => {
+    updateRadio.mockResolvedValue(
+      makeStation({ name: 'Late Night FM', artwork: 'https://example.com/night.jpg' }),
+    )
+    const { getByLabelText, getByText } = render(<RadioView {...noopProps} />)
+    await waitFor(() => expect(getByText('JFK Ibiza')).toBeTruthy())
+
+    fireEvent.click(getByText('Edit'))
+    fireEvent.change(getByLabelText('Edit station name for JFK Ibiza'), {
+      target: { value: '  Late Night FM  ' },
+    })
+    fireEvent.change(getByLabelText('Artwork URL for JFK Ibiza'), {
+      target: { value: '  https://example.com/night.jpg  ' },
+    })
+    fireEvent.click(getByText('Save changes'))
+
+    await waitFor(() =>
+      expect(updateRadio).toHaveBeenCalledWith(
+        'st-1',
+        'Late Night FM',
+        'https://example.com/night.jpg',
+      ),
+    )
+    expect(listRadio).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects invalid artwork URLs without calling the api', async () => {
+    const { getByLabelText, getByText } = render(<RadioView {...noopProps} />)
+    await waitFor(() => expect(getByText('JFK Ibiza')).toBeTruthy())
+    fireEvent.click(getByText('Edit'))
+    fireEvent.change(getByLabelText('Artwork URL for JFK Ibiza'), {
+      target: { value: 'ftp://example.com/art.jpg' },
+    })
+    fireEvent.click(getByText('Save changes'))
+    await waitFor(() =>
+      expect(getByText('Artwork URL must start with http:// or https://')).toBeTruthy(),
+    )
+    expect(updateRadio).not.toHaveBeenCalled()
   })
 
   it('plays a station on Play click', async () => {

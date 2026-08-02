@@ -21,18 +21,21 @@ fn seed_stations() -> Vec<RadioStation> {
             name: "JFK Ibiza".to_string(),
             url: "https://stream.aiir.com/7dsjltmny8cvv".to_string(),
             homepage: Some("https://jfkibiza.es/".to_string()),
+            artwork: None,
         },
         RadioStation {
             id: uuid::Uuid::new_v4().to_string(),
             name: "100% ACID JAZZ".to_string(),
             url: "https://mpc1.mediacp.eu:8356/stream".to_string(),
             homepage: Some("https://www.internet-radio.com/station/100acidjazz/".to_string()),
+            artwork: None,
         },
         RadioStation {
             id: uuid::Uuid::new_v4().to_string(),
             name: "The Loft".to_string(),
             url: "https://usa17.fastcast4u.com/proxy/fbpxpddt?mp=/1".to_string(),
             homepage: Some("https://www.jazzandvocalloft.org/".to_string()),
+            artwork: None,
         },
     ]
 }
@@ -44,6 +47,23 @@ pub struct RadioStation {
     pub name: String,
     pub url: String,
     pub homepage: Option<String>,
+    /// Optional remote artwork shown for the station in the radio view.
+    #[serde(default)]
+    pub artwork: Option<String>,
+}
+
+fn normalize_artwork(artwork: Option<String>) -> AppResult<Option<String>> {
+    let artwork = artwork
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(value) = &artwork {
+        if !(value.starts_with("http://") || value.starts_with("https://")) {
+            return Err(AppError::BadRequest(
+                "station artwork must start with http:// or https://".into(),
+            ));
+        }
+    }
+    Ok(artwork)
 }
 
 /// Thread-safe store of user radio stations. Every mutation persists to disk
@@ -106,8 +126,15 @@ impl RadioManager {
     }
 
     /// Add a station. Trims inputs; rejects empty names, non-http(s) URLs, and
-    /// duplicate URLs.
-    pub fn add(&self, name: &str, url: &str, homepage: Option<String>) -> AppResult<RadioStation> {
+    /// duplicate URLs. Artwork is an optional http(s) image URL.
+
+    pub fn add(
+        &self,
+        name: &str,
+        url: &str,
+        homepage: Option<String>,
+        artwork: Option<String>,
+    ) -> AppResult<RadioStation> {
         let name = name.trim().to_string();
         let url = url.trim().to_string();
         if name.is_empty() {
@@ -118,6 +145,7 @@ impl RadioManager {
                 "station url must start with http:// or https://".into(),
             ));
         }
+        let artwork = normalize_artwork(artwork)?;
         {
             let stations = self.stations.read().expect("radio lock poisoned");
             if stations.iter().any(|s| s.url == url) {
@@ -131,6 +159,7 @@ impl RadioManager {
             homepage: homepage
                 .map(|h| h.trim().to_string())
                 .filter(|h| !h.is_empty()),
+            artwork,
         };
         self.stations
             .write()
@@ -138,6 +167,32 @@ impl RadioManager {
             .push(station.clone());
         self.save().map_err(|e| AppError::Library(e.to_string()))?;
         Ok(station)
+    }
+
+    /// Update a station's display name and artwork without changing its stream.
+    pub fn update(
+        &self,
+        id: &str,
+        name: &str,
+        artwork: Option<String>,
+    ) -> AppResult<RadioStation> {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return Err(AppError::BadRequest("station name is empty".into()));
+        }
+        let artwork = normalize_artwork(artwork)?;
+        let updated = {
+            let mut stations = self.stations.write().expect("radio lock poisoned");
+            let station = stations
+                .iter_mut()
+                .find(|station| station.id == id)
+                .ok_or_else(|| AppError::NotFound(format!("radio station {id}")))?;
+            station.name = name;
+            station.artwork = artwork;
+            station.clone()
+        };
+        self.save().map_err(|e| AppError::Library(e.to_string()))?;
+        Ok(updated)
     }
 
     /// Remove a station by id. NotFound when the id is unknown.
@@ -210,16 +265,31 @@ mod tests {
     }
 
     #[test]
+    fn legacy_station_file_defaults_artwork_to_none() {
+        let dir = temp_dir();
+        std::fs::write(
+            dir.path().join(STATIONS_FILE),
+            r#"[{"id":"legacy","name":"Legacy FM","url":"https://example.com/stream","homepage":null}]"#,
+        )
+        .unwrap();
+
+        let station = RadioManager::load(dir.path()).list().pop().unwrap();
+        assert_eq!(station.id, "legacy");
+        assert_eq!(station.artwork, None);
+    }
+
+    #[test]
     fn add_roundtrips_through_disk() {
         let dir = temp_dir();
         let manager = RadioManager::load(dir.path());
 
         let added = manager
-            .add("My Station", " https://example.com/stream.mp3 ", None)
+            .add("My Station", " https://example.com/stream.mp3 ", None, None)
             .expect("add");
         assert_eq!(added.name, "My Station");
         assert_eq!(added.url, "https://example.com/stream.mp3");
         assert_eq!(added.homepage, None);
+        assert_eq!(added.artwork, None);
         assert!(!added.id.is_empty());
         let reloaded = RadioManager::load(dir.path());
         assert_eq!(reloaded.list().len(), 4);
@@ -227,17 +297,54 @@ mod tests {
     }
 
     #[test]
+    fn update_name_and_artwork_roundtrip() {
+        let dir = temp_dir();
+        let manager = RadioManager::load(dir.path());
+        let original = manager.list().into_iter().next().unwrap();
+
+        let updated = manager
+            .update(
+                &original.id,
+                "  Late Night FM  ",
+                Some(" https://example.com/art.jpg ".to_string()),
+            )
+            .expect("update");
+        assert_eq!(updated.name, "Late Night FM");
+        assert_eq!(updated.url, original.url);
+        assert_eq!(updated.artwork.as_deref(), Some("https://example.com/art.jpg"));
+
+        let reloaded = RadioManager::load(dir.path());
+        assert_eq!(reloaded.get(&original.id), Some(updated));
+    }
+
+    #[test]
+    fn update_rejects_empty_name_and_bad_artwork() {
+        let dir = temp_dir();
+        let manager = RadioManager::load(dir.path());
+        let id = manager.list().into_iter().next().unwrap().id;
+
+        assert!(matches!(
+            manager.update(&id, " ", None),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            manager.update(&id, "Station", Some("ftp://example.com/art.jpg".to_string())),
+            Err(AppError::BadRequest(_))
+        ));
+    }
+
+    #[test]
     fn add_rejects_bad_inputs() {
         let dir = temp_dir();
         let manager = RadioManager::load(dir.path());
 
-        let empty_name = manager.add("   ", "https://x.example/", None);
+        let empty_name = manager.add("   ", "https://x.example/", None, None);
         assert!(matches!(empty_name, Err(AppError::BadRequest(_))));
 
-        let bad_scheme = manager.add("X", "ftp://x.example/", None);
+        let bad_scheme = manager.add("X", "ftp://x.example/", None, None);
         assert!(matches!(bad_scheme, Err(AppError::BadRequest(_))));
 
-        let missing_scheme = manager.add("X", "example.com/stream", None);
+        let missing_scheme = manager.add("X", "example.com/stream", None, None);
         assert!(matches!(missing_scheme, Err(AppError::BadRequest(_))));
     }
 
@@ -245,8 +352,10 @@ mod tests {
     fn add_rejects_duplicate_url() {
         let dir = temp_dir();
         let manager = RadioManager::load(dir.path());
-        manager.add("A", "https://example.com/stream.mp3", None).unwrap();
-        let dup = manager.add("B", "https://example.com/stream.mp3", None);
+        manager
+            .add("A", "https://example.com/stream.mp3", None, None)
+            .unwrap();
+        let dup = manager.add("B", "https://example.com/stream.mp3", None, None);
         assert!(matches!(dup, Err(AppError::BadRequest(_))));
         assert_eq!(manager.list().len(), 4, "three seeds + one addition");
     }

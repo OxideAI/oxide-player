@@ -121,6 +121,70 @@
   border-color: var(--accent);
 }
 
+.art {
+  width: 3rem;
+  height: 3rem;
+  flex: 0 0 3rem;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(145deg, rgba(110, 231, 183, 0.32), rgba(139, 156, 255, 0.3)),
+    var(--bg-solid);
+  color: var(--text);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.18);
+}
+
+.artFallback {
+  opacity: 0.82;
+}
+
+.artImage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  min-width: min(220px, 100%);
+  flex: 1;
+  color: var(--text-dim);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.editPanel {
+  display: flex;
+  align-items: end;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+}
+
+.editPanel .input {
+  width: 100%;
+  min-width: 0;
+}
+
+.editActions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
 .ident {
   flex: 1;
   min-width: 0;
@@ -208,6 +272,32 @@
   50% {
     opacity: 0.35;
     transform: scale(0.8);
+  }
+}
+
+@media (max-width: 640px) {
+  .addRow .input {
+    min-width: 100%;
+  }
+
+  .row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .actions {
+    width: 100%;
+    margin-left: 3.8rem;
+    flex-wrap: wrap;
+  }
+
+  .editPanel {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .editActions {
+    justify-content: flex-end;
   }
 }
 

@@ -184,11 +184,17 @@ export const api = {
 
   // —— Radio stations ——
   listRadio: () => fetch('/api/radio').then((r) => json<RadioStation[]>(r)),
-  addRadio: (name: string, url: string) =>
+  addRadio: (name: string, url: string, artwork: string | null = null) =>
     fetch('/api/radio', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, url }),
+      body: JSON.stringify({ name, url, artwork }),
+    }).then((r) => json<RadioStation>(r)),
+  updateRadio: (id: string, name: string, artwork: string | null) =>
+    fetch(`/api/radio/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, artwork }),
     }).then((r) => json<RadioStation>(r)),
   deleteRadio: (id: string) =>
     fetch(`/api/radio/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) =>

@@ -181,6 +181,7 @@ export interface RadioStation {
   name: string
   url: string
   homepage: string | null
+  artwork: string | null
 }
 
 export interface Config {
