@@ -2,10 +2,26 @@
   "include-component-in-tag": true,
   "packages": {
     ".": {
-      "release-type": "rust",
+      "release-type": "go",
       "package-name": "oxide-player",
       "changelog-path": "backend/CHANGELOG.md",
-      "extra-files": ["frontend/package.json"]
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "backend/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "backend/Cargo.lock",
+          "jsonpath": "$.package[?(@.name==\"oxide-player\")].version"
+        },
+        {
+          "type": "json",
+          "path": "frontend/package.json",
+          "jsonpath": "$.version"
+        }
+      ]
     }
   }
 }
