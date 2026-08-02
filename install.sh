@@ -458,7 +458,6 @@ Wants=bluetooth.service
 Type=oneshot
 ExecStart=$bluetoothctl_bin power on
 ExecStart=$bluetoothctl_bin pairable on
-ExecStart=$bluetoothctl_bin pairable-timeout 0
 ExecStart=$bluetoothctl_bin discoverable on
 ExecStart=$bluetoothctl_bin discoverable-timeout 0
 RemainAfterExit=yes
@@ -638,7 +637,7 @@ EOF
 # setup. Keep the file owner and mode unchanged by updating it in place.
 ensure_mpd_include() {
   local conf="$MPD_CONFIG"
-  local include="include \"$DATA_DIR/mpd-outputs.d/*.conf\""
+  local managed_include="include \"$DATA_DIR/mpd-outputs.d/*.conf\""
 
   if [ ! -f "$conf" ]; then
     warn "MPD config $conf does not exist — skipping managed output include repair."
@@ -649,35 +648,35 @@ ensure_mpd_include() {
     write_mpd_config
     return 0
   fi
-  if grep -Fqx "$include" "$conf"; then
+  if grep -Fqx "$managed_include" "$conf"; then
     log "MPD config already includes managed outputs: $conf"
     return 1
   fi
 
   local tmp="${conf}.oxide-player.tmp"
-  awk -v include="$include" '
+  awk -v managed_include="$managed_include" '
     BEGIN { done = 0 }
     {
       if ($0 ~ /^[[:space:]]*include[[:space:]]+"/ &&
           $0 ~ /mpd-outputs[.]d/ &&
           $0 ~ /[*][.]conf/) {
         if (!done) {
-          print include
+          print managed_include
           done = 1
         }
         next
       }
       if (!done && $0 ~ /^[[:space:]]*audio_output[[:space:]]*[{]/) {
-        print include
+        print managed_include
         done = 1
       }
       print
     }
     END {
-      if (!done) print include
+      if (!done) print managed_include
     }
   ' "$conf" > "$tmp"
-  if [ ! -s "$tmp" ] || ! grep -Fq "$include" "$tmp"; then
+  if [ ! -s "$tmp" ] || ! grep -Fq "$managed_include" "$tmp"; then
     rm -f "$tmp"
     die "refusing to replace $conf: generated MPD config is empty or missing the managed output include"
   fi
@@ -686,7 +685,7 @@ ensure_mpd_include() {
     die "cannot update MPD config $conf"
   fi
   rm -f "$tmp"
-  if [ ! -s "$conf" ] || ! grep -Fq "$include" "$conf"; then
+  if [ ! -s "$conf" ] || ! grep -Fq "$managed_include" "$conf"; then
     die "MPD config $conf failed post-write validation"
   fi
   log "Added managed output include to $conf"
