@@ -71,9 +71,11 @@ jobs:
 
 
   installer:
-    name: Installer release asset selection
+    name: Release configuration checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Test release asset lookup
         run: tests/install-release-assets.sh
+      - name: Test release-please configuration
+        run: tests/release-please-config.sh

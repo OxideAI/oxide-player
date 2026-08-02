@@ -1,9 +1,10 @@
 {
   "include-component-in-tag": true,
   "packages": {
-    "backend": {
+    ".": {
       "release-type": "rust",
       "package-name": "oxide-player",
+      "changelog-path": "backend/CHANGELOG.md",
       "extra-files": ["frontend/package.json"]
     }
   }
