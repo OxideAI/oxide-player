@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.0...oxide-player-v0.15.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* radio station editable ([38cba7f](https://github.com/OxideAI/oxide-player/commit/38cba7fcc2bfa73a4ecee81f8d7ca59443bf574d))
+
 ## [0.15.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.14.0...oxide-player-v0.15.0) (2026-08-01)
 
 
