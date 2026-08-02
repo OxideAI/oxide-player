@@ -152,6 +152,8 @@
   position: relative;
   width: 42px;
   height: 42px;
+  flex: 0 0 auto;
+  aspect-ratio: 1 / 1;
   border-radius: 50%;
   display: grid;
   place-items: center;
