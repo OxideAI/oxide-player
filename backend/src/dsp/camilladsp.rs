@@ -273,9 +273,13 @@ fn is_localhost(host: &str) -> bool {
 }
 
 async fn tcp_reachable(host: &str, port: u16) -> bool {
+    // `timeout` returns Result<io::Result<..>, Elapsed>: a refused connection
+    // is Ok(Err(..)), so the OUTER is_ok() alone would report it as reachable.
+    // Check both layers.
     tokio::time::timeout(Duration::from_secs(2), TcpStream::connect((host, port)))
         .await
-        .is_ok()
+        .map(|res| res.is_ok())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -457,5 +461,25 @@ mod tests {
         let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.devices.playback.device, "hw:USB,0");
         assert_eq!(m.active_device().await.as_deref(), Some("hw:USB,0"));
+    }
+
+    // Regression: tcp_reachable used `.is_ok()` on the *outer* timeout Result,
+    // so a refused connection (Ok(Err(..))) was reported as reachable. The
+    // backend then believed CamillaDSP was up when it was down: autostart and
+    // on-apply relaunch were skipped, and reloads silently went nowhere —
+    // "DSP applied" with no DSP running.
+    #[tokio::test]
+    async fn tcp_reachable_is_false_when_port_is_closed() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener); // nothing accepts now -> connection refused
+        assert!(!tcp_reachable("127.0.0.1", port).await);
+    }
+
+    #[tokio::test]
+    async fn tcp_reachable_is_true_when_port_is_open() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(tcp_reachable("127.0.0.1", port).await);
     }
 }
