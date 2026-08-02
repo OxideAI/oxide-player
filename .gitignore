@@ -37,3 +37,4 @@ covers/
 # Playwright MCP session artifacts
 .playwright-mcp/
 .agents/
+/.omp
