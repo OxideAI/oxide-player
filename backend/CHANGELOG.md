@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.2...oxide-player-v0.15.3) (2026-08-02)
+
+
+### Bug Fixes
+
+* **frontend:** resolve mobile now-playing issues ([71687ad](https://github.com/OxideAI/oxide-player/commit/71687ad1bbff9250b3259cefd8978e756fe79164))
+* **frontend:** resolve mobile now-playing issues ([2f532c5](https://github.com/OxideAI/oxide-player/commit/2f532c5fc363bec71656e657912b505c761e99a7))
+
 ## [0.15.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.15.1...oxide-player-v0.15.2) (2026-08-02)
 
 
