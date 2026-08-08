@@ -195,6 +195,31 @@
   transform: none;
 }
 
+.danger {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: var(--r-pill);
+  padding: 0.6rem 1.3rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 0.45s var(--ease), color 0.45s var(--ease),
+    box-shadow 0.45s var(--ease);
+}
+.danger:hover {
+  background: var(--danger-soft);
+  box-shadow: 0 20px 50px -16px rgba(244, 114, 182, 0.5);
+}
+.danger:active {
+  transform: scale(0.97);
+}
+.danger:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+
 .dirList {
   list-style: none;
   margin: 0;

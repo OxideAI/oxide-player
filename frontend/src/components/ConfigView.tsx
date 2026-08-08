@@ -18,6 +18,8 @@ export function ConfigView() {
   const [newDir, setNewDir] = useState('')
   const [scanning, setScanning] = useState(false)
   const [saving, setSaving] = useState<Section | null>(null)
+  const [shuttingDown, setShuttingDown] = useState(false)
+  const [restarting, setRestarting] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -100,6 +102,39 @@ export function ConfigView() {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setScanning(false)
+    }
+  }
+
+  const shutdown = async () => {
+    if (!window.confirm('Shut down the Oxide server? This stops playback and the server will go offline.')) {
+      return
+    }
+    setShuttingDown(true)
+    setError(null)
+    setNotice(null)
+    try {
+      await api.shutdown()
+      // The server is going away; there is no response to wait for.
+      setNotice('Server is shutting down.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setShuttingDown(false)
+    }
+  }
+
+  const restart = async () => {
+    if (!window.confirm('Restart the Oxide server? Playback will pause briefly.')) {
+      return
+    }
+    setRestarting(true)
+    setError(null)
+    setNotice(null)
+    try {
+      await api.restart()
+      setNotice('Server is restarting.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setRestarting(false)
     }
   }
 
@@ -308,6 +343,26 @@ export function ConfigView() {
           <span className={styles.live}>live</span>
         </div>
         <DspView />
+      </section>
+
+      <section className={styles.card}>
+        <div className={styles.cardHead}>
+          <h3 className={styles.cardTitle}>Server power</h3>
+          <span className={styles.restartTag}>stops playback</span>
+        </div>
+        <p className={styles.hint}>
+          Restart or shut down the oxide-player process. Restart requires a supervising
+          systemd unit to bring the server back up; shutdown leaves it offline until
+          started again.
+        </p>
+        <div className={styles.saveRow}>
+          <button className={styles.save} onClick={restart} disabled={restarting || shuttingDown}>
+            {restarting ? 'Restarting...' : 'Restart server'}
+          </button>
+          <button className={styles.danger} onClick={shutdown} disabled={shuttingDown || restarting}>
+            {shuttingDown ? 'Shutting down...' : 'Shut down server'}
+          </button>
+        </div>
       </section>
 
       {version && (

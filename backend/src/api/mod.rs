@@ -92,6 +92,8 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/config", put(config_put))
         .route("/api/config/library-dirs", post(config_add_dir))
         .route("/api/config/library-dirs", delete(config_remove_dir))
+        .route("/api/system/shutdown", post(system_shutdown))
+        .route("/api/system/restart", post(system_restart))
         .merge(bluetooth::router())
         .fallback_service(
             ServeDir::new(static_dir.clone())
@@ -344,6 +346,22 @@ async fn version_get() -> AppResult<Json<serde_json::Value>> {
 /// Serialized view of the current config for the Settings UI.
 async fn config_get(State(s): State<AppState>) -> AppResult<Json<crate::config::Config>> {
     Ok(Json(s.config().await))
+}
+
+/// Gracefully stop the oxide-player process. The HTTP server is shut down via
+/// the same path as SIGINT/SIGTERM (playback is stopped on exit), so the
+/// response may be cut short as the connection closes.
+async fn system_shutdown(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    s.request_exit();
+    Ok(Json(serde_json::json!({ "status": "shutting down" })))
+}
+
+/// Restart the oxide-player process. The process exits with a non-zero code so
+/// a systemd unit with `Restart=on-failure` brings it back up. Without a
+/// supervising systemd unit this simply stops the server.
+async fn system_restart(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    s.request_restart();
+    Ok(Json(serde_json::json!({ "status": "restarting" })))
 }
 
 /// Replace the whole config (client sends the object it got from

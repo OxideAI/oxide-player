@@ -8,8 +8,9 @@ use crate::radio::RadioManager;
 use crate::types::{PlaybackState, PlayerStatus, QueueResponse, StatusEvent};
 use crate::visualizer::VisualizerAnalyzer;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Notify, RwLock};
 
 fn bluetooth_address_from_device(device: Option<&str>) -> Option<String> {
     let value = device?.strip_prefix("bluealsa:DEV=")?;
@@ -50,6 +51,13 @@ struct Inner {
     /// Whether device config fragments were created/updated/deleted since last
     /// MPD restart.
     pub config_restart_pending: std::sync::atomic::AtomicBool,
+    /// Signalled when the server should shut down (via the API or a signal).
+    /// `axum::serve`'s graceful shutdown future awaits this alongside the OS
+    /// signal so a `POST /api/system/shutdown` cleanly stops the process.
+    pub exit_requested: Notify,
+    /// Process exit code to use when `exit_requested` fires. 0 = clean shutdown;
+    /// non-zero = restart under systemd (`Restart=on-failure`).
+    pub exit_code: AtomicI32,
 }
 
 impl AppState {
@@ -86,6 +94,8 @@ impl AppState {
                 scan_lock: tokio::sync::Mutex::new(()),
                 device_configs,
                 config_restart_pending: std::sync::atomic::AtomicBool::new(false),
+                exit_requested: Notify::new(),
+                exit_code: AtomicI32::new(0),
             }),
         };
         let dsp = state.inner.dsp.clone();
@@ -157,6 +167,30 @@ impl AppState {
 
     pub fn set_config_restart_pending(&self, pending: bool) {
         self.inner.config_restart_pending.store(pending, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Wake the graceful-shutdown future so the HTTP server stops and the
+    /// process exits cleanly (the same path as SIGINT/SIGTERM).
+    pub fn request_exit(&self) {
+        self.inner.exit_code.store(0, Ordering::Relaxed);
+        self.inner.exit_requested.notify_waiters();
+    }
+
+    /// Request a restart: stop the process with a non-zero exit code so a
+    /// systemd unit with `Restart=on-failure` brings it back up.
+    pub fn request_restart(&self) {
+        self.inner.exit_code.store(1, Ordering::Relaxed);
+        self.inner.exit_requested.notify_waiters();
+    }
+
+    /// The exit code to use once `wait_for_exit` resolves.
+    pub fn exit_code(&self) -> i32 {
+        self.inner.exit_code.load(Ordering::Relaxed)
+    }
+
+    /// Resolves when a shutdown has been requested (via the API or a signal).
+    pub async fn wait_for_exit(&self) {
+        self.inner.exit_requested.notified().await;
     }
 
     pub fn visualizer(&self) -> &VisualizerAnalyzer {

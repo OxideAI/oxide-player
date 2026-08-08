@@ -272,6 +272,13 @@ export const api = {
       body: JSON.stringify({ path }),
     }).then((r) => json<unknown>(r)),
 
+  // Gracefully stop the oxide-player process.
+  shutdown: () =>
+    fetch('/api/system/shutdown', { method: 'POST' }).then((r) => json<unknown>(r)),
+  // Restart the oxide-player process (requires a supervising systemd unit).
+  restart: () =>
+    fetch('/api/system/restart', { method: 'POST' }).then((r) => json<unknown>(r)),
+
   // —— Visualizer tuning (persisted on disk, not the browser) ——
   getVizParams: () =>
     fetch('/api/visualizer/params').then((r) => json<Record<string, number | string>>(r)),
