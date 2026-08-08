@@ -20,6 +20,10 @@ export function ConfigView() {
   const [saving, setSaving] = useState<Section | null>(null)
   const [shuttingDown, setShuttingDown] = useState(false)
   const [restarting, setRestarting] = useState(false)
+  // Which destructive action is awaiting confirmation in the in-app modal.
+  // `null` = no modal open. Replaces window.confirm, which is unreliable
+  // (blocked/auto-dismissed in some browsers and PWA/iframe contexts).
+  const [confirmAction, setConfirmAction] = useState<'restart' | 'shutdown' | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -106,10 +110,8 @@ export function ConfigView() {
   }
 
   const shutdown = async () => {
-    if (!window.confirm('Shut down the Oxide server? This stops playback and the server will go offline.')) {
-      return
-    }
     setShuttingDown(true)
+    setConfirmAction(null)
     setError(null)
     setNotice(null)
     try {
@@ -123,10 +125,8 @@ export function ConfigView() {
   }
 
   const restart = async () => {
-    if (!window.confirm('Restart the Oxide server? Playback will pause briefly.')) {
-      return
-    }
     setRestarting(true)
+    setConfirmAction(null)
     setError(null)
     setNotice(null)
     try {
@@ -356,14 +356,45 @@ export function ConfigView() {
           started again.
         </p>
         <div className={styles.saveRow}>
-          <button className={styles.save} onClick={restart} disabled={restarting || shuttingDown}>
+          <button
+            className={styles.save}
+            onClick={() => setConfirmAction('restart')}
+            disabled={restarting || shuttingDown}
+          >
             {restarting ? 'Restarting...' : 'Restart server'}
           </button>
-          <button className={styles.danger} onClick={shutdown} disabled={shuttingDown || restarting}>
+          <button
+            className={styles.danger}
+            onClick={() => setConfirmAction('shutdown')}
+            disabled={shuttingDown || restarting}
+          >
             {shuttingDown ? 'Shutting down...' : 'Shut down server'}
           </button>
         </div>
       </section>
+
+      {confirmAction && (
+        <div className={styles.confirmOverlay} onClick={() => setConfirmAction(null)}>
+          <div className={styles.confirmBox} onClick={(e) => e.stopPropagation()}>
+            <p className={styles.confirmText}>
+              {confirmAction === 'restart'
+                ? 'Restart the Oxide server? Playback will pause briefly.'
+                : 'Shut down the Oxide server? This stops playback and the server will go offline.'}
+            </p>
+            <div className={styles.confirmActions}>
+              <button className={styles.iconBtn} onClick={() => setConfirmAction(null)}>
+                Cancel
+              </button>
+              <button
+                className={styles.danger}
+                onClick={confirmAction === 'restart' ? restart : shutdown}
+              >
+                {confirmAction === 'restart' ? 'Restart' : 'Shut down'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {version && (
         <p className={styles.dim}>
