@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.16.3...oxide-player-v0.16.4) (2026-08-09)
+
+
+### Bug Fixes
+
+* libs ([f02596a](https://github.com/OxideAI/oxide-player/commit/f02596aedf0cf0651d7eb694880eb5169437f846))
+
 ## [0.16.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.16.2...oxide-player-v0.16.3) (2026-08-09)
 
 
