@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.16.2...oxide-player-v0.16.3) (2026-08-09)
+
+
+### Bug Fixes
+
+* playback issue ([ce630b3](https://github.com/OxideAI/oxide-player/commit/ce630b373ec451286218810e039cd3970c205826))
+
 ## [0.16.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.16.1...oxide-player-v0.16.2) (2026-08-09)
 
 
