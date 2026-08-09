@@ -455,8 +455,28 @@ struct DirBody {
     path: String,
 }
 
-/// Add a music library source folder. Must be an absolute path. Persists and
-/// immediately rescans so the new source is picked up without a restart.
+fn canonical_library_dir(path: &std::path::Path) -> AppResult<std::path::PathBuf> {
+    if !path.is_absolute() {
+        return Err(AppError::BadRequest(
+            "library dir must be an absolute path".to_string(),
+        ));
+    }
+    if !path.is_dir() {
+        return Err(AppError::BadRequest(format!(
+            "library dir is not a valid folder: {}",
+            path.display()
+        )));
+    }
+    path.canonicalize().map_err(|e| {
+        AppError::BadRequest(format!(
+            "cannot resolve library dir {}: {e}",
+            path.display()
+        ))
+    })
+}
+
+/// Add a music library source folder. Must be an existing directory. Persists
+/// and immediately rescans so the new source is picked up without a restart.
 ///
 /// Dedupe: a folder already covered by an existing source is rejected — if
 /// `path` is inside an already-added dir (or already added), nothing changes
@@ -467,20 +487,25 @@ async fn config_add_dir(
     State(s): State<AppState>,
     Json(b): Json<DirBody>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let path = std::path::PathBuf::from(&b.path);
-    if !path.is_absolute() {
-        return Err(AppError::BadRequest(
-            "library dir must be an absolute path".to_string(),
-        ));
-    }
+    let path = canonical_library_dir(std::path::Path::new(&b.path))?;
     let mut cfg = s.config().await;
-    // Dedupes against existing sources (rejects child-of-existing and exact
+    let previous_dirs = cfg.library_dirs.clone();
+    // Dedupe against existing sources (rejects child-of-existing and exact
     // duplicates; drops child sources when `path` is their parent).
     let subsumed = cfg.add_library_dir(path);
     if subsumed.is_none() {
         return Ok(Json(serde_json::json!({ "scanned": 0, "duplicate": true })));
     }
     let subsumed = subsumed.unwrap();
+    // Share the folder before changing config, deleting tracks, or rescanning.
+    // If persistence fails, restore the previous share set as well.
+    crate::shared_folders::sync(&cfg.data_dir, &cfg.library_dirs)
+        .map_err(|e| AppError::Library(e.to_string()))?;
+    let data_dir = cfg.data_dir.clone();
+    if let Err(error) = s.set_config(cfg).await {
+        let _ = crate::shared_folders::sync(&data_dir, &previous_dirs);
+        return Err(AppError::Library(error.to_string()));
+    }
     let mut removed_tracks = 0u64;
     if !subsumed.is_empty() {
         let db = s.db().clone();
@@ -488,28 +513,46 @@ async fn config_add_dir(
             removed_tracks += db.delete_by_source(d).map_err(|e| AppError::Library(e.to_string()))?;
         }
     }
-    s.set_config(cfg).await
-        .map_err(|e| AppError::Library(e.to_string()))?;
     let count = run_scan(&s, true).await?;
     Ok(Json(serde_json::json!({ "scanned": count, "removed": removed_tracks })))
 }
 
 /// Remove a music library source folder by absolute path. Drops every track
-/// that came from that source so its albums leave the library (issue #46), then
-/// keeps MPD's index in sync.
+/// that came from that source and removes its share before syncing MPD.
 async fn config_remove_dir(
     State(s): State<AppState>,
     Json(b): Json<DirBody>,
 ) -> AppResult<StatusCode> {
-    let path = std::path::PathBuf::from(&b.path);
+    let mut path = std::path::PathBuf::from(&b.path);
+    if !path.is_absolute() {
+        return Err(AppError::BadRequest(
+            "library dir must be an absolute path".to_string(),
+        ));
+    }
+    if path.exists() {
+        path = path.canonicalize().map_err(|e| {
+            AppError::BadRequest(format!(
+                "cannot resolve library dir {}: {e}",
+                path.display()
+            ))
+        })?;
+    }
     let mut cfg = s.config().await;
     let before = cfg.library_dirs.len();
+    let previous_dirs = cfg.library_dirs.clone();
     cfg.library_dirs.retain(|d| d != &path);
     if cfg.library_dirs.len() == before {
         return Err(AppError::NotFound(format!("library dir {}", path.display())));
     }
-    s.set_config(cfg).await
+    // Remove the share before deleting tracks or resyncing MPD. Restore it if
+    // config persistence fails so the share and source list remain consistent.
+    let data_dir = cfg.data_dir.clone();
+    crate::shared_folders::sync(&data_dir, &cfg.library_dirs)
         .map_err(|e| AppError::Library(e.to_string()))?;
+    if let Err(error) = s.set_config(cfg).await {
+        let _ = crate::shared_folders::sync(&data_dir, &previous_dirs);
+        return Err(AppError::Library(error.to_string()));
+    }
     // Remove tracks produced by this source and resync MPD's index.
     let db = s.db().clone();
     let removed = db.delete_by_source(&path).map_err(|e| AppError::Library(e.to_string()))?;
@@ -1421,6 +1464,10 @@ mod tests {
     use tower::ServiceExt;
 
     async fn test_app() -> axum::Router {
+        test_app_with_config(Config::default_config()).await
+    }
+
+    async fn test_app_with_config(config: Config) -> axum::Router {
         let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
         db.migrate().unwrap();
         let dsp = DspManager::new(
@@ -1432,16 +1479,28 @@ mod tests {
             None,
         );
         let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
-        let visualizer = crate::visualizer::VisualizerAnalyzer::new(&Config::default_config());
+        let visualizer = crate::visualizer::VisualizerAnalyzer::new(&config);
         let bt = crate::bluetooth::BluetoothManager::new().await;
-        let state = AppState::new(Config::default_config(), db, dsp, mpd, visualizer, bt, None);
+        let state = AppState::new(config, db, dsp, mpd, visualizer, bt, None);
         super::router(state).await
+    }
+
+    #[test]
+    fn library_source_must_be_an_existing_directory() {
+        let missing = std::env::temp_dir().join(format!(
+            "oxide-library-source-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&missing);
+        let error = super::canonical_library_dir(&missing).unwrap_err();
+        assert!(matches!(error, crate::error::AppError::BadRequest(_)));
     }
 
     #[tokio::test]
     async fn version_endpoint_returns_single_version() {
         let app = test_app().await;
         let req = Request::builder()
+
             .uri("/api/version")
             .body(Body::empty())
             .unwrap();
@@ -1457,6 +1516,53 @@ mod tests {
             env!("CARGO_PKG_VERSION"),
             "version must match CARGO_PKG_VERSION"
         );
+    }
+    #[tokio::test]
+    async fn adding_and_removing_source_updates_shared_folders() {
+        let root = std::env::temp_dir().join(format!(
+            "oxide-library-share-api-{}",
+            std::process::id()
+        ));
+        let first = root.join("first");
+        let second = root.join("second");
+        let data_dir = root.join("data");
+        let static_dir = root.join("static");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::create_dir_all(&static_dir).unwrap();
+
+        let mut config = Config::default_config();
+        config.data_dir = data_dir.clone();
+        config.static_dir = static_dir;
+        config.library_dirs = vec![first.clone()];
+        let app = test_app_with_config(config).await;
+
+        let add = Request::builder()
+            .method("POST")
+            .uri("/api/config/library-dirs")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({ "path": second }).to_string()))
+            .unwrap();
+        let response = app.clone().oneshot(add).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let share_file = data_dir.join("smb-shares.conf");
+        let shared = std::fs::read_to_string(&share_file).unwrap();
+        assert!(shared.contains(second.to_str().unwrap()));
+
+        let remove = Request::builder()
+            .method("DELETE")
+            .uri("/api/config/library-dirs")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({ "path": second }).to_string()))
+            .unwrap();
+        let response = app.oneshot(remove).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let shared = std::fs::read_to_string(&share_file).unwrap();
+        assert!(!shared.contains(second.to_str().unwrap()));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

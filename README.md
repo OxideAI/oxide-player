@@ -66,14 +66,14 @@ Data/library: /var/lib/oxide-player
 Logs:         journalctl -u oxide-player -f
 ```
 
-Copy music into the `Music` share, then choose **Settings → Music library sources → Rescan library**. If the library is empty after files were copied with `sudo`, repair ownership and permissions and rescan:
+Copy music into the `Music` share. Additional folders added under **Settings → Music library sources** are validated, exposed as their own SMB shares, and rescanned automatically; removing a source removes its share. If the library is empty after files were copied with `sudo`, repair ownership and permissions and rescan:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh \
   | sudo bash -s -- --fix-perms
 ```
 
-Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `MPD_CONFIG`, `SAMBA_CONFIG`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, `AIRPLAY_NAME`, `AIRPLAY_CONFIG`, and `SERVICE_USER`.
+Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `MPD_CONFIG`, `SAMBA_CONFIG`, `SAMBA_SHARES_CONFIG`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, `AIRPLAY_NAME`, `AIRPLAY_CONFIG`, and `SERVICE_USER`.
 
 ### iPhone and iPad playback
 

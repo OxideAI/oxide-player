@@ -25,6 +25,7 @@ AIRPLAY_NAME="${AIRPLAY_NAME:-Oxide Player}"
 AIRPLAY_CONFIG="${AIRPLAY_CONFIG:-${CONFIG_DIR}/shairport-sync.conf}"
 ASOUND_CONFIG="${ASOUND_CONFIG:-/etc/asound.conf}"
 SAMBA_CONFIG="${SAMBA_CONFIG:-/etc/samba/smb.conf}"
+SAMBA_SHARES_CONFIG="${SAMBA_SHARES_CONFIG:-${DATA_DIR}/smb-shares.conf}"
 SERVICE_USER="${SERVICE_USER:-oxide}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 SUDOERS_RULE="${SUDOERS_RULE:-/etc/sudoers.d/oxide-power}"
@@ -65,10 +66,10 @@ Options:
   --help, -h   Show this help.
 
 Environment variables (all optional):
-  REPO_URL, BRANCH, INSTALL_FROM_DIR, BIN_DIR, SHARE_DIR, CONFIG_DIR,
   DATA_DIR, MPD_CONFIG, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
   CAMILLADSP_WS, AIRPLAY_NAME, AIRPLAY_CONFIG, ASOUND_CONFIG, SAMBA_CONFIG,
-  SERVICE_USER, BUILD_DIR, RELEASE_ASSET_RETRIES, RELEASE_ASSET_RETRY_DELAY
+  SAMBA_SHARES_CONFIG, SERVICE_USER, BUILD_DIR, RELEASE_ASSET_RETRIES,
+  RELEASE_ASSET_RETRY_DELAY
 EOF
   exit 0
 }
@@ -325,7 +326,6 @@ setup_hostname() {
 }
 
 setup_samba() {
-  local share_name="Music"
   local share_path="$MPD_MUSIC_DIR"
 
   apt_install samba
@@ -344,6 +344,12 @@ setup_samba() {
    security = user
    map to guest = Bad User
    guest account = nobody
+   include = $SAMBA_SHARES_CONFIG
+SAMBAEOF
+
+  run mkdir -p "$share_path" "$(dirname "$SAMBA_SHARES_CONFIG")"
+  cat > "$SAMBA_SHARES_CONFIG" <<SHAREEOF
+# Managed by oxide-player. The backend updates this file when library sources change.
 
 [Music]
    path = $share_path
@@ -354,10 +360,10 @@ setup_samba() {
    force group = $SERVICE_USER
    create mask = 0644
    directory mask = 0755
-SAMBAEOF
+SHAREEOF
+  run chown "$SERVICE_USER:$SERVICE_USER" "$SAMBA_SHARES_CONFIG"
 
   # Ensure the music dir exists with correct ownership
-  run mkdir -p "$share_path"
   run chown -R "$SERVICE_USER:$SERVICE_USER" "$share_path"
   run chmod 755 "$share_path"
 
@@ -365,6 +371,17 @@ SAMBAEOF
   run systemctl enable smbd || true
   run systemctl restart smbd || warn "smbd restart failed — check samba config"
   log "Samba share 'Music' → $share_path (guest writable, force-user=$SERVICE_USER)"
+}
+
+ensure_samba_shares() {
+  [ -f "$SAMBA_CONFIG" ] || return 0
+  if grep -Fq 'netbios name = OXIDE-PLAYER' "$SAMBA_CONFIG"; then
+    # Migrate the installer-managed legacy [Music] block to the writable
+    # fragment used by the library-source API.
+    setup_samba
+  else
+    warn "Samba config is not Oxide-managed; leaving it unchanged (library-source shares need an include)"
+  fi
 }
 
 setup_avahi() {
@@ -1024,6 +1041,7 @@ do_update() {
   build_frontend
   ensure_mpd_include || true
   ensure_asound_loopback || true
+  ensure_samba_shares || true
   write_visualizer_fifo || true
   write_oxide_config
   setup_bluetooth

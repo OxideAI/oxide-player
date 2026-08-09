@@ -8,6 +8,7 @@ mod visualizer;
 mod library;
 mod mpd;
 mod radio;
+mod shared_folders;
 mod state;
 mod types;
 

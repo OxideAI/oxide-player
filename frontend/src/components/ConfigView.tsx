@@ -77,7 +77,11 @@ export function ConfigView() {
       const res = await api.addLibraryDir(path)
       setNewDir('')
       await load()
-      setNotice(res.duplicate ? 'Folder is already a source.' : `Rescanned ${res.scanned} track(s).`)
+      setNotice(
+        res.duplicate
+          ? 'Folder is already a source.'
+          : `Added shared folder and rescanned ${res.scanned} track(s).`,
+      )
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -89,7 +93,7 @@ export function ConfigView() {
     try {
       await api.removeLibraryDir(path)
       await load()
-      setNotice('Removed source folder.')
+      setNotice('Removed source folder and share.')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
