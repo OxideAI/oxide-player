@@ -6,24 +6,34 @@ const STORE_NAME = 'snapshots'
 const LIBRARY_KEY = 'library-v1'
 const LOCAL_KEY = 'oxide:library:v1'
 
-interface Snapshot {
+export interface LibraryCacheSnapshot {
   tracks: Track[]
+  etag: string | null
 }
 
-function localRead(): Track[] | null {
+interface StoredSnapshot {
+  tracks: Track[]
+  etag?: string | null
+}
+
+function normalize(snapshot: StoredSnapshot | null | undefined): LibraryCacheSnapshot | null {
+  return snapshot && Array.isArray(snapshot.tracks)
+    ? { tracks: snapshot.tracks, etag: snapshot.etag ?? null }
+    : null
+}
+
+function localRead(): LibraryCacheSnapshot | null {
   try {
     const raw = localStorage.getItem(LOCAL_KEY)
-    if (!raw) return null
-    const snapshot = JSON.parse(raw) as Snapshot
-    return Array.isArray(snapshot.tracks) ? snapshot.tracks : null
+    return raw ? normalize(JSON.parse(raw) as StoredSnapshot) : null
   } catch {
     return null
   }
 }
 
-function localWrite(tracks: Track[]): void {
+function localWrite(snapshot: LibraryCacheSnapshot): void {
   try {
-    localStorage.setItem(LOCAL_KEY, JSON.stringify({ tracks }))
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(snapshot))
   } catch {
     // Storage is optional: the network remains the source of truth.
   }
@@ -40,25 +50,26 @@ function openDb(): Promise<IDBDatabase> {
   })
 }
 
-export async function readLibraryCache(): Promise<Track[] | null> {
+export async function readLibraryCache(): Promise<LibraryCacheSnapshot | null> {
   if (typeof indexedDB === 'undefined') return localRead()
   try {
     const db = await openDb()
-    const snapshot = await new Promise<Snapshot | undefined>((resolve, reject) => {
+    const stored = await new Promise<StoredSnapshot | undefined>((resolve, reject) => {
       const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(LIBRARY_KEY)
-      request.onsuccess = () => resolve(request.result as Snapshot | undefined)
+      request.onsuccess = () => resolve(request.result as StoredSnapshot | undefined)
       request.onerror = () => reject(request.error)
     })
     db.close()
-    return snapshot && Array.isArray(snapshot.tracks) ? snapshot.tracks : null
+    return normalize(stored)
   } catch {
     return localRead()
   }
 }
 
-export async function writeLibraryCache(tracks: Track[]): Promise<void> {
+export async function writeLibraryCache(tracks: Track[], etag: string | null): Promise<void> {
+  const snapshot: LibraryCacheSnapshot = { tracks, etag }
   if (typeof indexedDB === 'undefined') {
-    localWrite(tracks)
+    localWrite(snapshot)
     return
   }
   try {
@@ -67,12 +78,21 @@ export async function writeLibraryCache(tracks: Track[]): Promise<void> {
       const request = db
         .transaction(STORE_NAME, 'readwrite')
         .objectStore(STORE_NAME)
-        .put({ tracks } satisfies Snapshot, LIBRARY_KEY)
+        .put(snapshot satisfies StoredSnapshot, LIBRARY_KEY)
       request.onsuccess = () => resolve()
       request.onerror = () => reject(request.error)
     })
     db.close()
   } catch {
-    localWrite(tracks)
+    localWrite(snapshot)
   }
+}
+
+export async function removeTrackFromLibraryCache(trackId: number): Promise<void> {
+  const snapshot = await readLibraryCache()
+  if (snapshot === null || !snapshot.tracks.some((track) => track.id === trackId)) return
+  await writeLibraryCache(
+    snapshot.tracks.filter((track) => track.id !== trackId),
+    snapshot.etag,
+  )
 }

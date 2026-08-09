@@ -79,9 +79,17 @@ export interface PlayerStatus {
 // Mirrors the backend's `StatusEvent` (serde internally-tagged enum). The
 // variant struct is flattened into the object next to `type` — there is no
 // `Status`/`Queue` wrapper key.
+export interface PlaybackNotice {
+  id: number
+  track_id: number
+  label: string
+  reason: 'missing' | 'unplayable'
+}
+
 export type StatusEvent =
   | ({ type: 'status' } & PlayerStatus)
   | ({ type: 'queue' } & QueueResponse)
+  | ({ type: 'notice' } & PlaybackNotice)
 
 export type DspMode = 'bit_perfect' | 'resample'
 export type ResamplePreset = 'balanced' | 'high' | 'extreme'

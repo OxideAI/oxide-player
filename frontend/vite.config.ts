@@ -35,18 +35,6 @@ export default defineConfig({
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
-          // The library snapshot is safe to serve stale: LibraryView paints
-          // it immediately, then refreshes from the backend and rewrites the
-          // local snapshot when a connection is available.
-          {
-            urlPattern: ({ url }) => url.pathname === '/api/library',
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'oxide-library',
-              expiration: { maxEntries: 2, maxAgeSeconds: 60 * 60 * 24 * 30 },
-              cacheableResponse: { statuses: [200] },
-            },
-          },
           // Album keys are stable across library reloads. Stale-while-
           // revalidate keeps artwork instant from disk while allowing a
           // rescan to replace it in the background.
@@ -59,13 +47,12 @@ export default defineConfig({
               cacheableResponse: { statuses: [200] },
             },
           },
-          // Stateful endpoints (status/queue/playback) are never cached, so
-          // the UI never shows stale play/pause state while offline.
+          // Stateful endpoints and library requests are never cached here;
+          // LibraryView owns the validator-aware library snapshot.
           {
             urlPattern: ({ url }) =>
               url.pathname.startsWith('/api/') &&
-              !url.pathname.startsWith('/api/cover/') &&
-              url.pathname !== '/api/library',
+              !url.pathname.startsWith('/api/cover/'),
             handler: 'NetworkOnly',
           },
         ],

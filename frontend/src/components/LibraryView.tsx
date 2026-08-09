@@ -45,6 +45,7 @@ export function LibraryView({
 }: Props) {
   const [tracks, setTracks] = useState<Track[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [playingUri, setPlayingUri] = useState<string | null>(null)
@@ -72,31 +73,33 @@ export function LibraryView({
   }, [nowPlayingUri])
 
   const load = useCallback(async () => {
-    setLoading(true)
     setError(null)
+    setRefreshing(true)
 
-    // Start both reads together. A saved snapshot paints immediately while
-    // the backend refreshes it in the background.
-    const cachedPromise = readLibraryCache()
-    const latestPromise = api.library()
-
-    const cached = await cachedPromise
+    const cached = await readLibraryCache()
     if (cached !== null) {
-      setTracks(cached)
+      setTracks(cached.tracks)
       setLoading(false)
     }
 
     try {
-      const latest = await latestPromise
-      setTracks(latest)
-      setLoading(false)
-      void writeLibraryCache(latest)
-    } catch (e) {
-      if (cached === null) {
-        setError(e instanceof Error ? e.message : String(e))
+      const latest =
+        typeof api.librarySnapshot === 'function'
+          ? await api.librarySnapshot(cached?.etag ?? undefined)
+          : {
+              tracks: await api.library(),
+              etag: null,
+              notModified: false,
+            }
+      if (!latest.notModified && latest.tracks !== null) {
+        setTracks(latest.tracks)
+        void writeLibraryCache(latest.tracks, latest.etag)
       }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }, [])
 
@@ -177,14 +180,16 @@ export function LibraryView({
   }
 
   const count =
-    loading
+    loading && tracks.length === 0
       ? 'loading…'
       : current
         ? `${current.tracks.length} tracks`
         : `${filteredFolders.length} / ${folders.length} albums`
 
+  const busy = loading || refreshing
+
   return (
-    <div className={styles.wrap}>
+    <div className={styles.wrap} aria-busy={busy}>
       {toast && <div className={styles.toast}>{toast}</div>}
 
       <div className={styles.toolbar}>
@@ -217,9 +222,9 @@ export function LibraryView({
         <span className={styles.count}>{count}</span>
       </div>
 
-      {error && <div className={styles.error}>{error}</div>}
+      {error && <div className={styles.error} role={tracks.length > 0 ? 'status' : 'alert'}>{error}</div>}
 
-      {!loading && tracks.length === 0 && (
+      {!loading && !error && tracks.length === 0 && (
         <div className={styles.empty}>
           <div className={styles.emptyMark}>♪</div>
           <p>The library is empty.</p>
@@ -229,7 +234,7 @@ export function LibraryView({
         </div>
       )}
 
-      {!loading && tracks.length > 0 && !current && (
+      {tracks.length > 0 && !current && (
         <div className={styles.grid}>
           {filteredFolders.map((f, i) => (
             <Reveal key={f.key} delay={Math.min(i * 35, 350)}>
@@ -255,7 +260,7 @@ export function LibraryView({
         </div>
       )}
 
-      {!loading && current && (
+      {tracks.length > 0 && current && (
         <div className={styles.album}>
           <div className={styles.albumHead}>
             <span className={styles.albumShell}>
@@ -280,37 +285,37 @@ export function LibraryView({
 
           <ul className={styles.list}>
             {visibleTracks.map((t) => (
-                <li
-                  key={t.id}
-                  data-track-id={t.id}
-                  className={
-                    nowId === t.id
-                      ? isPlaying
-                        ? styles.rowPlaying
-                        : styles.rowPaused
-                      : styles.row
-                  }
-                  onClick={() => play(t)}
-                >
-                  <span className={styles.tPos}>
-                    {nowId === t.id ? (
-                      <span className={styles.rowEq} aria-hidden>
-                        <i />
-                        <i />
-                        <i />
-                      </span>
-                    ) : (
-                      (t.track ?? '') || '·'
-                    )}
-                  </span>
-                  <span className={styles.tTitle}>{displayTitle(t)}</span>
-                  <span className={styles.tArtist}>{t.artist ?? '—'}</span>
-                  <span className={styles.tTime}>{fmtTime(t.duration)}</span>
-                  <span className={styles.rowMenu}>
-                    <TrackMenu tracks={[t]} playing={nowId === t.id && isPlaying} onAdded={notify} onError={setError} />
-                  </span>
-                </li>
-              ))}
+              <li
+                key={t.id}
+                data-track-id={t.id}
+                className={
+                  nowId === t.id
+                    ? isPlaying
+                      ? styles.rowPlaying
+                      : styles.rowPaused
+                    : styles.row
+                }
+                onClick={() => play(t)}
+              >
+                <span className={styles.tPos}>
+                  {nowId === t.id ? (
+                    <span className={styles.rowEq} aria-hidden>
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                  ) : (
+                    (t.track ?? '') || '·'
+                  )}
+                </span>
+                <span className={styles.tTitle}>{displayTitle(t)}</span>
+                <span className={styles.tArtist}>{t.artist ?? '—'}</span>
+                <span className={styles.tTime}>{fmtTime(t.duration)}</span>
+                <span className={styles.rowMenu}>
+                  <TrackMenu tracks={[t]} playing={nowId === t.id && isPlaying} onAdded={notify} onError={setError} />
+                </span>
+              </li>
+            ))}
           </ul>
         </div>
       )}

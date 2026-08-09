@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PlayerStatus, QueueResponse, StatusEvent } from './types'
+import type { PlaybackNotice, PlayerStatus, QueueResponse, StatusEvent } from './types'
 import { api } from './api'
 
 export interface PlayerState {
   status: PlayerStatus | null
   queue: QueueResponse | null
+  notice: PlaybackNotice | null
   connected: boolean
   error: string | null
 }
@@ -31,6 +32,7 @@ export function usePlayerStatus(): PlayerState {
   const [state, setState] = useState<PlayerState>({
     status: null,
     queue: null,
+    notice: null,
     connected: false,
     error: null,
   })
@@ -89,6 +91,8 @@ export function usePlayerStatus(): PlayerState {
           setState((s) => ({ ...s, status: event }))
         } else if (event.type === 'queue') {
           setState((s) => ({ ...s, queue: event }))
+        } else if (event.type === 'notice') {
+          setState((s) => (s.notice?.id === event.id ? s : { ...s, notice: event }))
         }
       }
 
