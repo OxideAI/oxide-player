@@ -19,11 +19,11 @@ pub struct Config {
     pub mpd_config: Option<PathBuf>,
     /// Absolute path to MPD's `music_directory`. The library DB stores
     /// absolute file paths, but MPD addresses tracks by URIs *relative* to its
-    /// music directory (e.g. `MyMusic/Artist/Album.flac`). When this is set we
-    /// convert the absolute path to that relative URI; when unset, playback
-    /// falls back to the matching `library_dirs` root. For CUE tracks we append
-    /// `.cue/trackNNNN` so the individual split track is played. An absolute
-    /// path is used only when no configured root matches.
+    /// music directory (e.g. `MyMusic/Artist/Album.flac`). When this is set,
+    /// every library track must live under that directory; otherwise playback
+    /// fails with a configuration error. When unset, playback falls back to
+    /// the matching `library_dirs` root. For CUE tracks we append
+    /// `.cue/trackNNNN` so the individual split track is played.
     #[serde(default)]
     pub mpd_music_directory: Option<PathBuf>,
     /// Reconnect paired Bluetooth output devices when the server starts.

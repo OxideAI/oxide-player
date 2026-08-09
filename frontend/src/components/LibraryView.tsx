@@ -192,7 +192,7 @@ export function LibraryView({
 
       {error && <div className={styles.error}>{error}</div>}
 
-      {!loading && !error && tracks.length === 0 && (
+      {!loading && tracks.length === 0 && (
         <div className={styles.empty}>
           <div className={styles.emptyMark}>♪</div>
           <p>The library is empty.</p>
@@ -202,7 +202,7 @@ export function LibraryView({
         </div>
       )}
 
-      {!loading && !error && tracks.length > 0 && !current && (
+      {!loading && tracks.length > 0 && !current && (
         <div className={styles.grid}>
           {filteredFolders.map((f, i) => (
             <Reveal key={f.key} delay={Math.min(i * 35, 350)}>
@@ -228,7 +228,7 @@ export function LibraryView({
         </div>
       )}
 
-      {!loading && !error && current && (
+      {!loading && current && (
         <div className={styles.album}>
           <div className={styles.albumHead}>
             <span className={styles.albumShell}>

@@ -491,7 +491,7 @@ struct PlayBody {
 async fn play(State(s): State<AppState>, Json(b): Json<PlayBody>) -> AppResult<StatusCode> {
     match b.uri {
         Some(uri) => {
-            let (mpd_uri, is_cue) = resolve_play_uri(&s, &uri, b.track_id).await;
+            let (mpd_uri, is_cue) = resolve_play_uri(&s, &uri, b.track_id).await?;
             // CUE splits are addressed directly; applying the per-track
             // start/end offset would seek into the wrong position.
             if is_cue {
@@ -1037,12 +1037,24 @@ fn relative_uri_from_library_dirs(abs: &str, library_dirs: &[std::path::PathBuf]
 
 /// MPD addresses tracks by a path *relative to its `music_directory`* (e.g.
 /// `MyMusic/Artist/Album.flac`), not by absolute OS paths. We convert the
-/// library DB's absolute `path` accordingly when `mpd_music_directory` is
-/// configured, or use the matching `library_dirs` root as a safe fallback.
-/// For CUE-split tracks MPD exposes each split as
-/// `<file>.cue/trackNNNN`, so we return that and signal that no start/end
-/// offset should be applied (the split already isolates the track).
-async fn resolve_play_uri(s: &AppState, uri: &str, track_id: Option<i64>) -> (String, bool) {
+/// library DB's absolute `path` to that relative URI when `mpd_music_directory`
+/// is configured. When it is unset we fall back to the matching `library_dirs`
+/// root (a safe fallback for source installs where the two roots coincide).
+///
+/// A track whose file lies *outside* MPD's `music_directory` cannot be played
+/// by MPD at all — it will reject any URI with "No such song" (ACK 50). Rather
+/// than emit a library-relative URI that MPD can't resolve (the classic
+/// `library_dirs` ≠ `mpd_music_directory` misconfiguration), we return a clear
+/// error so the user fixes the config instead of hitting a confusing MPD error.
+///
+/// For CUE-split tracks MPD exposes each split as `<file>.cue/trackNNNN`, so we
+/// return that and signal that no start/end offset should be applied (the split
+/// already isolates the track).
+async fn resolve_play_uri(
+    s: &AppState,
+    uri: &str,
+    track_id: Option<i64>,
+) -> AppResult<(String, bool)> {
     let cfg = s.config().await;
     let music_dir = cfg.mpd_music_directory.as_deref();
 
@@ -1056,21 +1068,23 @@ async fn resolve_play_uri(s: &AppState, uri: &str, track_id: Option<i64>) -> (St
 
     let abs = match path {
         Some(p) => p,
-        None => return (uri.to_string(), false),
+        None => return Ok((uri.to_string(), false)),
     };
 
     let rel = match music_dir {
         Some(dir) => match std::path::Path::new(&abs).strip_prefix(dir) {
             Ok(rel) => rel.to_string_lossy().to_string(),
-            Err(_) => relative_uri_from_library_dirs(&abs, &cfg.library_dirs).unwrap_or_else(|| {
-                tracing::warn!(
-                    "mpd_music_directory ({}) and library roots do not match track path ({}); \
-                     passing the absolute path through, MPD add may fail",
-                    dir.display(),
-                    abs
-                );
-                abs.clone()
-            }),
+            Err(_) => {
+                // The track lives outside MPD's music_directory. MPD cannot
+                // play it regardless of how we address it, so fail loudly
+                // instead of emitting a broken library-relative URI.
+                return Err(AppError::BadRequest(format!(
+                    "track '{}' is outside MPD's music_directory ('{}'); \
+                     add it to a library folder under MPD's music_directory to play it",
+                    abs,
+                    dir.display()
+                )));
+            }
         },
         None => relative_uri_from_library_dirs(&abs, &cfg.library_dirs).unwrap_or_else(|| {
             tracing::warn!(
@@ -1107,14 +1121,14 @@ async fn resolve_play_uri(s: &AppState, uri: &str, track_id: Option<i64>) -> (St
     } else {
         (rel, false)
     };
-    result
+    Ok(result)
 }
 
 /// Insert `t` immediately after the currently playing song and record it as the
 /// active (highlighted) track. Uses the DB track id from the request; never the
 /// MPD song id, which is a different namespace (see AGENTS.md).
 async fn enqueue(s: &AppState, t: &TrackRef) -> AppResult<()> {
-    let (mpd_uri, is_cue) = resolve_play_uri(s, &t.uri, t.track_id).await;
+    let (mpd_uri, is_cue) = resolve_play_uri(s, &t.uri, t.track_id).await?;
     if is_cue {
         s.mpd().play_next(&mpd_uri, 0.0, None).await?;
     } else {
@@ -1148,7 +1162,7 @@ async fn clear_play(State(s): State<AppState>, Json(b): Json<serde_json::Value>)
     // First track becomes the new queue; play it. Remaining ones are appended in
     // order after it (reverse-inserted for the same ordering reason as above).
     let first = &tracks[0];
-    let (mpd_uri, is_cue) = resolve_play_uri(&s, &first.uri, first.track_id).await;
+    let (mpd_uri, is_cue) = resolve_play_uri(&s, &first.uri, first.track_id).await?;
     if is_cue {
         s.mpd().play_uri(&mpd_uri).await?;
     } else {
@@ -1174,7 +1188,7 @@ async fn playlist_add(
 ) -> AppResult<StatusCode> {
     require_playlist(&s, &name).await?;
     for t in into_tracks(b.tracks) {
-        let (mpd_uri, _) = resolve_play_uri(&s, &t.uri, t.track_id).await;
+        let (mpd_uri, _) = resolve_play_uri(&s, &t.uri, t.track_id).await?;
         s.mpd().add_to_playlist(&name, &mpd_uri).await?;
     }
     Ok(StatusCode::OK)
@@ -1492,10 +1506,77 @@ mod tests {
             "Artist/Album.flac",
             Some(track_id),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(uri, "Artist/Album.flac");
         assert!(!is_cue);
+    }
+
+    /// Regression: when the library root (`library_dirs`) differs from MPD's
+    /// `music_directory`, a track whose file lives under the library root but
+    /// outside MPD's music_directory cannot be played by MPD at all. We must
+    /// surface a clear error instead of emitting a library-relative URI that
+    /// MPD rejects with "No such song" (ACK 50). Reproduces the deep-subfolder
+    /// play failure (e.g. a USB drive mounted at /mnt/music1 while MPD's
+    /// music_directory is /var/lib/oxide-player/music).
+    #[tokio::test]
+    async fn play_uri_errors_when_track_outside_mpd_music_directory() {
+        let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let track_id = db
+            .insert_track(
+                "Lady Blackbird/Black Acid Soul/01 Blackbird.m4a",
+                "/mnt/music1/Lady Blackbird/Black Acid Soul/01 Blackbird.m4a",
+                Some("Blackbird"),
+                Some("Lady Blackbird"),
+                Some("Black Acid Soul"),
+                None,
+                None,
+                None,
+                Some(1),
+                Some(180.0),
+                Some("m4a"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("/mnt/music1"),
+            )
+            .unwrap();
+        let mut config = Config::default_config();
+        config.mpd_music_directory = Some(std::path::PathBuf::from("/var/lib/oxide-player/music"));
+        config.library_dirs = vec![std::path::PathBuf::from("/mnt/music1")];
+        let dsp = DspManager::new(
+            std::env::temp_dir().join("oxide_test_play_uri_mismatch_dsp.yaml"),
+            None,
+            "".to_string(),
+            44100,
+            false,
+            None,
+        );
+        let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
+        let visualizer = crate::visualizer::VisualizerAnalyzer::new(&config);
+        let bt = crate::bluetooth::BluetoothManager::new().await;
+        let state = AppState::new(config, db, dsp, mpd, visualizer, bt, None);
+
+        let err = super::resolve_play_uri(
+            &state,
+            "Lady Blackbird/Black Acid Soul/01 Blackbird.m4a",
+            Some(track_id),
+        )
+        .await
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("outside MPD's music_directory"),
+            "expected a clear config error, got: {msg}"
+        );
     }
     fn config(name: &str, output_type: &str, device: Option<&str>) -> DeviceConfig {
         DeviceConfig {

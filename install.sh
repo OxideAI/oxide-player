@@ -864,9 +864,10 @@ ExecStart=$BIN_DIR/oxide-player -c $CONFIG_DIR/config.json
 Nice=-5
 Restart=on-failure
 RestartSec=3
-# Allow binding to port 80 (privileged port) as non-root user
+# Allow binding to port 80 (privileged port) as non-root user.
+# Do NOT add CapabilityBoundingSet here: it drops CAP_SETUID/CAP_SETGID and
+# breaks the backend's `sudo -n systemctl reboot|poweroff` power buttons.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 
 [Install]

@@ -178,6 +178,18 @@ describe('LibraryView track click (issue #32)', () => {
     )
   })
 
+  it('keeps the library visible when clear-and-play fails', async () => {
+    const track = makeTrack()
+    library.mockResolvedValue([track])
+    clearAndPlay.mockRejectedValueOnce(new Error('track is outside MPD music_directory'))
+
+    const { container, findByText } = renderAlbumView([track])
+    fireEvent.click(await rowForTrack(container, track.id))
+
+    expect(await findByText('track is outside MPD music_directory')).toBeTruthy()
+    expect(container.querySelector(`li[data-track-id="${track.id}"]`)).toBeTruthy()
+  })
+
   it('surfaces an error when clear-and-play fails', async () => {
     const track = makeTrack()
     library.mockResolvedValue([track])
