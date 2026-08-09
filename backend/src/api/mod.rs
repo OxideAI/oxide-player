@@ -292,7 +292,14 @@ async fn cover(State(s): State<AppState>, Path(key): Path<String>) -> AppResult<
                 "png" => "image/png",
                 _ => "application/octet-stream",
             };
-            return Ok(([(header::CONTENT_TYPE, ct)], bytes).into_response());
+            return Ok((
+                [
+                    (header::CONTENT_TYPE, ct),
+                    (header::CACHE_CONTROL, "public, max-age=31536000, stale-while-revalidate=86400"),
+                ],
+                bytes,
+            )
+                .into_response());
         }
     }
     Err(AppError::NotFound(format!("cover {key}")))

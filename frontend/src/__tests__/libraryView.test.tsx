@@ -88,12 +88,17 @@ async function rowForTrack(container: HTMLElement, id: number): Promise<HTMLElem
 
 describe('LibraryView track click (issue #32)', () => {
   beforeEach(() => {
+    vi.stubGlobal('indexedDB', undefined)
+    localStorage.clear()
     clearAndPlay.mockClear()
     clearAndPlay.mockResolvedValue({})
     play.mockClear()
   })
 
-  afterEach(() => cleanup())
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
 
   it('clears the queue and plays the clicked track (not append via api.play)', async () => {
     const track = makeTrack()
@@ -199,5 +204,25 @@ describe('LibraryView track click (issue #32)', () => {
     fireEvent.click(await rowForTrack(container, track.id))
 
     expect(await findByText('mpd unreachable')).toBeTruthy()
+  })
+  it('paints the saved snapshot before replacing it with live data', async () => {
+    const cached = makeTrack({ id: 1, title: 'Cached title' })
+    const live = makeTrack({ id: 2, title: 'Live title' })
+    localStorage.setItem('oxide:library:v1', JSON.stringify({ tracks: [cached] }))
+
+    let resolveLibrary: (tracks: Track[]) => void = () => {}
+    library.mockReturnValue(
+      new Promise<Track[]>((resolve) => {
+        resolveLibrary = resolve
+      }),
+    )
+
+    const view = renderAlbumView([cached])
+    expect(await view.findByText('Cached title')).toBeTruthy()
+    expect(view.container.querySelector('[data-track-id="2"]')).toBeNull()
+
+    resolveLibrary([live])
+    expect(await view.findByText('Live title')).toBeTruthy()
+    expect(view.container.querySelector('[data-track-id="1"]')).toBeNull()
   })
 })

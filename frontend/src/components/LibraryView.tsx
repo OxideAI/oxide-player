@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Track } from '../types'
 import { api, toPlayRef } from '../api'
 import { fmtTime, displayTitle, folderKey } from '../util'
+import { readLibraryCache, writeLibraryCache } from '../libraryCache'
 import { TrackMenu } from './TrackMenu'
 import { Reveal } from './Reveal'
 import styles from './LibraryView.module.css'
@@ -61,7 +62,10 @@ export function LibraryView({
     if (toastTimer.current !== undefined) window.clearTimeout(toastTimer.current)
   }, [])
 
-  const nowId = nowPlayingId ?? (playingUri ? tracks.find((t) => t.uri === playingUri)?.id ?? null : null)
+  const nowId = useMemo(
+    () => nowPlayingId ?? (playingUri ? tracks.find((t) => t.uri === playingUri)?.id ?? null : null),
+    [nowPlayingId, playingUri, tracks],
+  )
 
   useEffect(() => {
     if (nowPlayingUri) setPlayingUri(null)
@@ -70,10 +74,27 @@ export function LibraryView({
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+
+    // Start both reads together. A saved snapshot paints immediately while
+    // the backend refreshes it in the background.
+    const cachedPromise = readLibraryCache()
+    const latestPromise = api.library()
+
+    const cached = await cachedPromise
+    if (cached !== null) {
+      setTracks(cached)
+      setLoading(false)
+    }
+
     try {
-      setTracks(await api.library())
+      const latest = await latestPromise
+      setTracks(latest)
+      setLoading(false)
+      void writeLibraryCache(latest)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (cached === null) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
     } finally {
       setLoading(false)
     }
@@ -107,18 +128,18 @@ export function LibraryView({
     return arr
   }, [tracks])
 
+  const normalizedQuery = query.trim().toLowerCase()
   const filteredFolders = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return folders
+    if (!normalizedQuery) return folders
     return folders.filter((f) =>
       [f.name, f.artist, f.key]
         .filter(Boolean)
-        .some((v) => v!.toLowerCase().includes(q)) ||
+        .some((v) => v!.toLowerCase().includes(normalizedQuery)) ||
       f.tracks.some((t) =>
-        [t.title, t.artist].filter(Boolean).some((v) => v!.toLowerCase().includes(q)),
+        [t.title, t.artist].filter(Boolean).some((v) => v!.toLowerCase().includes(normalizedQuery)),
       ),
     )
-  }, [folders, query])
+  }, [folders, normalizedQuery])
 
   useEffect(() => {
     if (openFolder !== null && folders.length > 0 && !folders.some((f) => f.key === openFolder))
@@ -129,6 +150,12 @@ export function LibraryView({
     () => (openFolder !== null ? folders.find((f) => f.key === openFolder) ?? null : null),
     [folders, openFolder],
   )
+  const visibleTracks = useMemo(() => {
+    if (!current || !normalizedQuery) return current?.tracks ?? []
+    return current.tracks.filter((t) =>
+      [t.title, t.artist].filter(Boolean).some((v) => v!.toLowerCase().includes(normalizedQuery)),
+    )
+  }, [current, normalizedQuery])
 
   const play = async (t: Track) => {
     setPlayingUri(t.uri)
@@ -210,7 +237,7 @@ export function LibraryView({
                 <span className={styles.tileShell}>
                   <span className={styles.tileCore}>
                     {f.coverKey !== null ? (
-                      <img src={api.coverUrl(f.coverKey)} alt="" loading="lazy" />
+                      <img src={api.coverUrl(f.coverKey)} alt="" loading="lazy" decoding="async" />
                     ) : (
                       <span className={styles.tilePh}>♪</span>
                     )}
@@ -234,7 +261,7 @@ export function LibraryView({
             <span className={styles.albumShell}>
               <span className={styles.albumCore}>
                 {current.coverKey !== null ? (
-                  <img src={api.coverUrl(current.coverKey)} alt="" />
+                  <img src={api.coverUrl(current.coverKey)} alt="" decoding="async" />
                 ) : (
                   <span className={styles.tilePh}>♪</span>
                 )}
@@ -252,13 +279,7 @@ export function LibraryView({
           </div>
 
           <ul className={styles.list}>
-            {current.tracks
-              .filter((t) => {
-                const q = query.trim().toLowerCase()
-                if (!q) return true
-                return [t.title, t.artist].filter(Boolean).some((v) => v!.toLowerCase().includes(q))
-              })
-              .map((t) => (
+            {visibleTracks.map((t) => (
                 <li
                   key={t.id}
                   data-track-id={t.id}

@@ -129,6 +129,8 @@
 }
 .grid > * {
   min-width: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: 230px;
 }
 
 .tile {
