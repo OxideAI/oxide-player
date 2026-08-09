@@ -9,11 +9,13 @@ use mpd_client::commands::SongPosition;
 use mpd_client::tag::Tag;
 use mpd_client::Client;
 use mpd_protocol::command::Command;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::Mutex;
+
+const MPD_SOCKET: &str = "/run/mpd/socket";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -172,15 +174,33 @@ impl Mpd {
         if let Some(client) = self.try_clone().await {
             return Ok(client);
         }
-        let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((self.inner.host.as_str(), self.inner.port)))
-            .await
-            .map_err(|_| AppError::Mpd(format!("connect {}:{} timed out", self.inner.host, self.inner.port)))?
-            .map_err(|e| AppError::Mpd(format!("connect {}:{}: {e}", self.inner.host, self.inner.port)))?;
-        let (client, _handle) = Client::connect(stream)
+
+        // A local Unix socket lets MPD accept absolute filesystem paths. This
+        // is required for library roots that do not share one music_directory.
+        if is_localhost(&self.inner.host) && Path::new(MPD_SOCKET).exists() {
+            if let Ok(Ok(stream)) =
+                tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(MPD_SOCKET)).await
+            {
+                if let Ok((client, handle)) = Client::connect(stream).await {
+                    let mut guard = self.inner.conn.lock().await;
+                    *guard = Some((client, handle));
+                    return Ok(guard.as_ref().unwrap().0.clone());
+                }
+            }
+        }
+
+        let stream = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            TcpStream::connect((self.inner.host.as_str(), self.inner.port)),
+        )
+        .await
+        .map_err(|_| AppError::Mpd(format!("connect {}:{} timed out", self.inner.host, self.inner.port)))?
+        .map_err(|e| AppError::Mpd(format!("connect {}:{}: {e}", self.inner.host, self.inner.port)))?;
+        let (client, handle) = Client::connect(stream)
             .await
             .map_err(|e| AppError::Mpd(format!("mpd handshake: {e}")))?;
         let mut guard = self.inner.conn.lock().await;
-        *guard = Some((client, _handle));
+        *guard = Some((client, handle));
         Ok(guard.as_ref().unwrap().0.clone())
     }
 

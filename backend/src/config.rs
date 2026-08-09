@@ -17,15 +17,6 @@ pub struct Config {
     pub mpd_binary: Option<String>,
     #[serde(default)]
     pub mpd_config: Option<PathBuf>,
-    /// Absolute path to MPD's `music_directory`. The library DB stores
-    /// absolute file paths, but MPD addresses tracks by URIs *relative* to its
-    /// music directory (e.g. `MyMusic/Artist/Album.flac`). When this is set,
-    /// every library track must live under that directory; otherwise playback
-    /// fails with a configuration error. When unset, playback falls back to
-    /// the matching `library_dirs` root. For CUE tracks we append
-    /// `.cue/trackNNNN` so the individual split track is played.
-    #[serde(default)]
-    pub mpd_music_directory: Option<PathBuf>,
     /// Reconnect paired Bluetooth output devices when the server starts.
     /// Enabled by default so a service restart preserves the active speaker.
     #[serde(default = "default_true")]
@@ -191,7 +182,6 @@ impl Config {
             mpd_autostart: true,
             mpd_binary: None,
             mpd_config: None,
-            mpd_music_directory: None,
             bluetooth_reconnect_on_startup: true,
             // Bind to localhost by default; override with --listen (or config)
             // only when you intend to expose the (currently unauthenticated) API

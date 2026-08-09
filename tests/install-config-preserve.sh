@@ -55,6 +55,7 @@ assert config["library_dirs"] == ["/mnt/music1", "/mnt/music2"], \
 assert config["listen"] == "0.0.0.0:8080", \
     f"user listen setting must survive reinstall, got {config['listen']}"
 assert config["visualizer_fft"] is True, "installer-managed keys missing from old config must be filled in"
+assert "mpd_music_directory" not in config, "retired mpd_music_directory key must be removed"
 assert config["visualizer_capture_device"] == "hw:Loopback,1"
 assert config["visualizer_capture_rate"] == 44100
 PY

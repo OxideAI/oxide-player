@@ -27,6 +27,7 @@ ASOUND_CONFIG="${ASOUND_CONFIG:-/etc/asound.conf}"
 SAMBA_CONFIG="${SAMBA_CONFIG:-/etc/samba/smb.conf}"
 SERVICE_USER="${SERVICE_USER:-oxide}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
+SUDOERS_RULE="${SUDOERS_RULE:-/etc/sudoers.d/oxide-power}"
 # oxide-player binds on port 80 by default so the web UI is reachable at
 # http://oxide-player/ or http://oxide-player.local/ without a port number.
 # Ports below 1024 need CAP_NET_BIND_SERVICE (set up automatically in the
@@ -751,7 +752,6 @@ write_oxide_config() {
   "listen": "$LISTEN",
   "data_dir": "$DATA_DIR",
   "mpd_config": "$MPD_CONFIG",
-  "mpd_music_directory": "$MPD_MUSIC_DIR",
   "bluetooth_reconnect_on_startup": true,
   "library_dirs": $dirs_json,
   "static_dir": "$SHARE_DIR/dist",
@@ -774,9 +774,10 @@ EOF
     if command -v jq >/dev/null 2>&1; then
       # jq `left * right` keeps the right operand's values on collisions, so
       # put the existing config on the right: existing keys win, generated keys
-      # fill in what the old config lacks. --slurpfile works on jq 1.6+ and jaq.
+      # fill in what the old config lacks. Remove settings retired by the
+      # current config schema during the same migration.
       local merged
-      if merged="$(jq --slurpfile g <(printf '%s\n' "$generated") '$g[0] * .' "$CONFIG_DIR/config.json")"; then
+      if merged="$(jq --slurpfile g <(printf '%s\n' "$generated") '$g[0] * . | del(.mpd_music_directory)' "$CONFIG_DIR/config.json")"; then
         log "Preserving existing config; filling in only missing keys"
         printf '%s\n' "$merged" > "$CONFIG_DIR/config.json"
         run chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.json"
@@ -796,13 +797,13 @@ EOF
 # so the backend's `POST /api/system/shutdown|restart` can power off/reboot the
 # machine as an unprivileged user.
 write_power_sudoers() {
-  local rule="/etc/sudoers.d/oxide-power"
+  local rule="$SUDOERS_RULE"
   log "Writing sudoers power rule ($rule)"
   cat > "$rule" <<EOF
 $SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff
 EOF
   run chmod 440 "$rule"
-  run visudo -c
+  run visudo -cf "$rule"
 }
 
 install_units() {
@@ -973,7 +974,7 @@ do_uninstall() {
   remove_path "$BIN_DIR/oxide-player"
   remove_path "$SHARE_DIR"
   remove_path "/etc/avahi/services/oxide-player.service"
-  remove_path "/etc/sudoers.d/oxide-power"
+  remove_path "$SUDOERS_RULE"
 
   if [ -f "$ASOUND_CONFIG" ] && grep -Fq '# oxide-player:' "$ASOUND_CONFIG"; then
     remove_path "$ASOUND_CONFIG"

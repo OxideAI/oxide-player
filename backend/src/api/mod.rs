@@ -1023,29 +1023,10 @@ fn into_tracks(b: serde_json::Value) -> Vec<TrackRef> {
     }
 }
 
-/// Infer an MPD-relative URI from configured library roots when the explicit
-/// MPD music directory is absent. This keeps source installs from sending an
-/// absolute local path over MPD's TCP protocol.
-fn relative_uri_from_library_dirs(abs: &str, library_dirs: &[std::path::PathBuf]) -> Option<String> {
-    let path = std::path::Path::new(abs);
-    library_dirs
-        .iter()
-        .filter_map(|dir| path.strip_prefix(dir).ok().map(|rel| (dir, rel)))
-        .max_by_key(|(dir, _)| dir.components().count())
-        .map(|(_, rel)| rel.to_string_lossy().to_string())
-}
 
-/// MPD addresses tracks by a path *relative to its `music_directory`* (e.g.
-/// `MyMusic/Artist/Album.flac`), not by absolute OS paths. We convert the
-/// library DB's absolute `path` to that relative URI when `mpd_music_directory`
-/// is configured. When it is unset we fall back to the matching `library_dirs`
-/// root (a safe fallback for source installs where the two roots coincide).
-///
-/// A track whose file lies *outside* MPD's `music_directory` cannot be played
-/// by MPD at all — it will reject any URI with "No such song" (ACK 50). Rather
-/// than emit a library-relative URI that MPD can't resolve (the classic
-/// `library_dirs` ≠ `mpd_music_directory` misconfiguration), we return a clear
-/// error so the user fixes the config instead of hitting a confusing MPD error.
+/// MPD playback uses the absolute filesystem path stored in the library DB.
+/// This supports library roots that have no common parent. Local MPD must be
+/// reached through its Unix socket because MPD rejects absolute paths over TCP.
 ///
 /// For CUE-split tracks MPD exposes each split as `<file>.cue/trackNNNN`, so we
 /// return that and signal that no start/end offset should be applied (the split
@@ -1055,11 +1036,8 @@ async fn resolve_play_uri(
     uri: &str,
     track_id: Option<i64>,
 ) -> AppResult<(String, bool)> {
-    let cfg = s.config().await;
-    let music_dir = cfg.mpd_music_directory.as_deref();
-
-    // Prefer the DB row for this exact track so we get its `path` and, for CUE,
-    // its `cue_index`.
+    // Prefer the DB row for this exact track so we get its absolute `path` and,
+    // for CUE, its `cue_index`.
     let track = track_id.and_then(|id| s.db().track_by_id(id).ok().flatten());
     let (path, cue_index) = match &track {
         Some(t) => (Some(t.path.clone()), t.cue_index),
@@ -1071,39 +1049,13 @@ async fn resolve_play_uri(
         None => return Ok((uri.to_string(), false)),
     };
 
-    let rel = match music_dir {
-        Some(dir) => match std::path::Path::new(&abs).strip_prefix(dir) {
-            Ok(rel) => rel.to_string_lossy().to_string(),
-            Err(_) => {
-                // The track lives outside MPD's music_directory. MPD cannot
-                // play it regardless of how we address it, so fail loudly
-                // instead of emitting a broken library-relative URI.
-                return Err(AppError::BadRequest(format!(
-                    "track '{}' is outside MPD's music_directory ('{}'); \
-                     add it to a library folder under MPD's music_directory to play it",
-                    abs,
-                    dir.display()
-                )));
-            }
-        },
-        None => relative_uri_from_library_dirs(&abs, &cfg.library_dirs).unwrap_or_else(|| {
-            tracing::warn!(
-                "no configured MPD/library root matches track path ({}); \
-                 passing the absolute path through, MPD add may fail",
-                abs
-            );
-            abs.clone()
-        }),
-    };
-
     let result = if let Some(cue) = cue_index {
         // MPD represents each CUE split as `<file>.cue/trackNNNN`, where `<file>`
-        // is the *audio file's stem* (extension dropped), not the full path.
-        // e.g. `Album.flac` -> `Album.cue/track0001`.
-        match std::path::Path::new(&rel).file_stem() {
+        // is the audio file's stem (extension dropped), not the full path.
+        match std::path::Path::new(&abs).file_stem() {
             Some(stem) => {
                 let stem = stem.to_string_lossy().to_string();
-                let parent = std::path::Path::new(&rel)
+                let parent = std::path::Path::new(&abs)
                     .parent()
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default();
@@ -1114,12 +1066,10 @@ async fn resolve_play_uri(
                 };
                 (cue_uri, true)
             }
-            // No usable stem (e.g. a path that is all extension) — fall back to
-            // the plain relative URI rather than building a malformed CUE URI.
-            None => (rel, false),
+            None => (abs, false),
         }
     } else {
-        (rel, false)
+        (abs, false)
     };
     Ok(result)
 }
@@ -1458,7 +1408,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn play_uri_uses_library_root_when_mpd_root_is_unset() {
+    async fn play_uri_uses_absolute_db_path() {
         let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
         db.migrate().unwrap();
         let track_id = db
@@ -1485,9 +1435,7 @@ mod tests {
                 Some("/music"),
             )
             .unwrap();
-        let mut config = Config::default_config();
-        config.mpd_music_directory = None;
-        config.library_dirs = vec![std::path::PathBuf::from("/music")];
+        let config = Config::default_config();
         let dsp = DspManager::new(
             std::env::temp_dir().join("oxide_test_play_uri_dsp.yaml"),
             None,
@@ -1509,19 +1457,15 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(uri, "Artist/Album.flac");
+        assert_eq!(uri, "/music/Artist/Album.flac");
         assert!(!is_cue);
     }
 
-    /// Regression: when the library root (`library_dirs`) differs from MPD's
-    /// `music_directory`, a track whose file lives under the library root but
-    /// outside MPD's music_directory cannot be played by MPD at all. We must
-    /// surface a clear error instead of emitting a library-relative URI that
-    /// MPD rejects with "No such song" (ACK 50). Reproduces the deep-subfolder
-    /// play failure (e.g. a USB drive mounted at /mnt/music1 while MPD's
-    /// music_directory is /var/lib/oxide-player/music).
+    /// Regression: library sources may have unrelated roots. Playback must use
+    /// the absolute path stored in the DB instead of deriving a URI from one
+    /// assumed MPD music directory.
     #[tokio::test]
-    async fn play_uri_errors_when_track_outside_mpd_music_directory() {
+    async fn play_uri_preserves_deep_unrelated_library_path() {
         let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
         db.migrate().unwrap();
         let track_id = db
@@ -1548,11 +1492,9 @@ mod tests {
                 Some("/mnt/music1"),
             )
             .unwrap();
-        let mut config = Config::default_config();
-        config.mpd_music_directory = Some(std::path::PathBuf::from("/var/lib/oxide-player/music"));
-        config.library_dirs = vec![std::path::PathBuf::from("/mnt/music1")];
+        let config = Config::default_config();
         let dsp = DspManager::new(
-            std::env::temp_dir().join("oxide_test_play_uri_mismatch_dsp.yaml"),
+            std::env::temp_dir().join("oxide_test_play_uri_absolute_dsp.yaml"),
             None,
             "".to_string(),
             44100,
@@ -1564,19 +1506,19 @@ mod tests {
         let bt = crate::bluetooth::BluetoothManager::new().await;
         let state = AppState::new(config, db, dsp, mpd, visualizer, bt, None);
 
-        let err = super::resolve_play_uri(
+        let (uri, is_cue) = super::resolve_play_uri(
             &state,
             "Lady Blackbird/Black Acid Soul/01 Blackbird.m4a",
             Some(track_id),
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-        let msg = err.to_string();
-        assert!(
-            msg.contains("outside MPD's music_directory"),
-            "expected a clear config error, got: {msg}"
+        assert_eq!(
+            uri,
+            "/mnt/music1/Lady Blackbird/Black Acid Soul/01 Blackbird.m4a"
         );
+        assert!(!is_cue);
     }
     fn config(name: &str, output_type: &str, device: Option<&str>) -> DeviceConfig {
         DeviceConfig {
