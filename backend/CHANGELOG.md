@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.17.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.16.5...oxide-player-v0.17.0) (2026-08-09)
+
+
+### Features
+
+* cache library responses and recover bad tracks ([0b13c3f](https://github.com/OxideAI/oxide-player/commit/0b13c3f11eea36014e9d9af9fa141147cb0b58c8))
+* cache library responses and recover bad tracks ([0ecbe8b](https://github.com/OxideAI/oxide-player/commit/0ecbe8be297a5c7886b653a53c4a0c34ef8c7833))
+
+
+### Bug Fixes
+
+* preserve cue track identity during recovery ([10815e3](https://github.com/OxideAI/oxide-player/commit/10815e387ad1d67343b2b2824a2b018a0a22c43a))
+
 ## [0.16.5](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.16.4...oxide-player-v0.16.5) (2026-08-09)
 
 
