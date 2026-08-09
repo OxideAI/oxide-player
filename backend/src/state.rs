@@ -332,9 +332,14 @@ impl AppState {
             return false;
         };
         let target = failure_target(error);
+        let current_is_cue = current_uri.contains(".cue/track");
         let queue_id = match (ms.current_id, target.as_deref()) {
             (Some(queue_id), None) => queue_id,
-            (Some(queue_id), Some(target)) if same_uri_or_suffix(&current_uri, target) => queue_id,
+            (Some(queue_id), Some(target))
+                if current_is_cue || same_uri_or_suffix(&current_uri, target) =>
+            {
+                queue_id
+            }
             (_, Some(target)) => {
                 let Ok(entries) = self.inner.mpd.queue().await else {
                     return false;
@@ -350,7 +355,11 @@ impl AppState {
             }
             _ => return false,
         };
-        let lookup_uri = target.clone().unwrap_or_else(|| current_uri.clone());
+        let lookup_uri = if current_is_cue {
+            current_uri.clone()
+        } else {
+            target.clone().unwrap_or_else(|| current_uri.clone())
+        };
         let cue_index = ms.current_track.map(|track| track as i32);
 
         let mut failed = self.inner.failed_entry.lock().await;
@@ -365,13 +374,14 @@ impl AppState {
         if failed.is_none() {
             let db = self.inner.db.clone();
             let lookup_path = lookup_uri.clone();
+            let target_path = target.clone();
             let track = tokio::task::spawn_blocking(move || {
                 let by_path = if lookup_path.starts_with('/') {
                     db.track_by_path_unique(&lookup_path).ok().flatten()
                 } else {
                     None
                 };
-                by_path
+                let candidate = by_path
                     .or_else(|| db.track_by_cue_address(&lookup_path).ok().flatten())
                     .or_else(|| {
                         cue_index.and_then(|index| {
@@ -384,7 +394,17 @@ impl AppState {
                         db.track_by_uri_suffix_unique(&lookup_path)
                             .ok()
                             .flatten()
-                    })
+                    });
+                if !current_is_cue {
+                    return candidate;
+                }
+                match target_path.as_deref() {
+                    Some(target) => candidate.filter(|track| {
+                        same_uri_or_suffix(&track.path, target)
+                            || same_uri_or_suffix(&track.uri, target)
+                    }),
+                    None => candidate,
+                }
             })
             .await
             .ok()
