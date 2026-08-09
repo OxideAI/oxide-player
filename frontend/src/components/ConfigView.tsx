@@ -351,9 +351,9 @@ export function ConfigView() {
           <span className={styles.restartTag}>stops playback</span>
         </div>
         <p className={styles.hint}>
-          Restart or shut down the oxide-player process. Restart requires a supervising
-          systemd unit to bring the server back up; shutdown leaves it offline until
-          started again.
+          Power off or reboot the machine running oxide-player. Reboot requires a
+          supervising systemd unit to bring the server back up; power off leaves
+          the machine off until started again.
         </p>
         <div className={styles.saveRow}>
           <button
@@ -361,14 +361,14 @@ export function ConfigView() {
             onClick={() => setConfirmAction('restart')}
             disabled={restarting || shuttingDown}
           >
-            {restarting ? 'Restarting...' : 'Restart server'}
+            {restarting ? 'Rebooting...' : 'Reboot server'}
           </button>
           <button
             className={styles.danger}
             onClick={() => setConfirmAction('shutdown')}
             disabled={shuttingDown || restarting}
           >
-            {shuttingDown ? 'Shutting down...' : 'Shut down server'}
+            {shuttingDown ? 'Powering off...' : 'Power off server'}
           </button>
         </div>
       </section>
@@ -378,8 +378,8 @@ export function ConfigView() {
           <div className={styles.confirmBox} onClick={(e) => e.stopPropagation()}>
             <p className={styles.confirmText}>
               {confirmAction === 'restart'
-                ? 'Restart the Oxide server? Playback will pause briefly.'
-                : 'Shut down the Oxide server? This stops playback and the server will go offline.'}
+                ? 'Reboot the machine running the Oxide server? Playback will pause and the machine will restart.'
+                : 'Power off the machine running the Oxide server? This stops playback and the machine will shut down.'}
             </p>
             <div className={styles.confirmActions}>
               <button className={styles.iconBtn} onClick={() => setConfirmAction(null)}>
@@ -389,7 +389,7 @@ export function ConfigView() {
                 className={styles.danger}
                 onClick={confirmAction === 'restart' ? restart : shutdown}
               >
-                {confirmAction === 'restart' ? 'Restart' : 'Shut down'}
+                {confirmAction === 'restart' ? 'Reboot' : 'Power off'}
               </button>
             </div>
           </div>

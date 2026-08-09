@@ -792,8 +792,22 @@ EOF
   run chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.json"
 }
 
+# Grant the service user passwordless `systemctl reboot` and `systemctl poweroff`
+# so the backend's `POST /api/system/shutdown|restart` can power off/reboot the
+# machine as an unprivileged user.
+write_power_sudoers() {
+  local rule="/etc/sudoers.d/oxide-power"
+  log "Writing sudoers power rule ($rule)"
+  cat > "$rule" <<EOF
+$SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff
+EOF
+  run chmod 440 "$rule"
+  run visudo -c
+}
+
 install_units() {
   log "Installing systemd units"
+  write_power_sudoers
   local _cam_host="${CAMILLADSP_WS#ws://}"
   _cam_host="${_cam_host%:*}"
   local _cam_port="${CAMILLADSP_WS##*:}"
@@ -958,6 +972,7 @@ do_uninstall() {
   remove_path "$BIN_DIR/oxide-player"
   remove_path "$SHARE_DIR"
   remove_path "/etc/avahi/services/oxide-player.service"
+  remove_path "/etc/sudoers.d/oxide-power"
 
   if [ -f "$ASOUND_CONFIG" ] && grep -Fq '# oxide-player:' "$ASOUND_CONFIG"; then
     remove_path "$ASOUND_CONFIG"

@@ -100,12 +100,6 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal(state.clone()))
         .await?;
 
-    // A non-zero exit code (set by `POST /api/system/restart`) tells a systemd
-    // unit with `Restart=on-failure` to bring the process back up.
-    let code = state.exit_code();
-    if code != 0 {
-        std::process::exit(code);
-    }
     Ok(())
 }
 
@@ -130,16 +124,7 @@ async fn shutdown_signal(state: AppState) {
         let _ = tokio::signal::ctrl_c().await;
     };
 
-    // Also stop when the API requests a shutdown (POST /api/system/shutdown),
-    // so the process exits cleanly without needing a signal.
-    let api_exit = async {
-        state.wait_for_exit().await;
-    };
-
-    tokio::select! {
-        _ = terminate => {},
-        _ = api_exit => {},
-    }
+    terminate.await;
 
     tracing::info!("shutting down: stopping playback");
     if let Err(e) = state.mpd().stop().await {

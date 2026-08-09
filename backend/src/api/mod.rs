@@ -348,20 +348,39 @@ async fn config_get(State(s): State<AppState>) -> AppResult<Json<crate::config::
     Ok(Json(s.config().await))
 }
 
-/// Gracefully stop the oxide-player process. The HTTP server is shut down via
-/// the same path as SIGINT/SIGTERM (playback is stopped on exit), so the
-/// response may be cut short as the connection closes.
-async fn system_shutdown(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
-    s.request_exit();
-    Ok(Json(serde_json::json!({ "status": "shutting down" })))
+/// Power off the machine. The backend runs as an unprivileged user, so it
+/// escalates via a sudoers rule (installed by install.sh) granting passwordless
+/// `systemctl poweroff`. The response may be cut short as the machine powers down.
+async fn system_shutdown(State(_s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    run_systemctl("poweroff").await?;
+    Ok(Json(serde_json::json!({ "status": "powering off" })))
 }
 
-/// Restart the oxide-player process. The process exits with a non-zero code so
-/// a systemd unit with `Restart=on-failure` brings it back up. Without a
-/// supervising systemd unit this simply stops the server.
-async fn system_restart(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
-    s.request_restart();
-    Ok(Json(serde_json::json!({ "status": "restarting" })))
+/// Reboot the machine. Same privilege path as shutdown, via `systemctl reboot`
+/// and the sudoers rule.
+async fn system_restart(State(_s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    run_systemctl("reboot").await?;
+    Ok(Json(serde_json::json!({ "status": "rebooting" })))
+}
+
+/// Run `systemctl <verb>` as root and surface a non-zero exit as an error. The
+/// backend runs as an unprivileged service user, so it escalates via a sudoers
+/// rule (installed by install.sh) granting passwordless `systemctl reboot` and
+/// `systemctl poweroff`.
+async fn run_systemctl(verb: &str) -> AppResult<()> {
+    let out = tokio::process::Command::new("sudo")
+        .args(["-n", "systemctl", verb])
+        .output()
+        .await
+        .map_err(|e| AppError::Library(format!("failed to run systemctl {verb}: {e}")))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(AppError::Library(format!(
+            "systemctl {verb} failed: {}",
+            if stderr.is_empty() { "permission denied" } else { &stderr }
+        )));
+    }
+    Ok(())
 }
 
 /// Replace the whole config (client sends the object it got from
