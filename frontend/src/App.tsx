@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { usePlayerStatus } from './ws'
+import { removeTrackFromLibraryCache } from './libraryCache'
 import { NowPlaying } from './components/NowPlaying'
 import { KioskView } from './components/KioskView'
 import { LibraryView } from './components/LibraryView'
@@ -63,7 +64,7 @@ export function App() {
   const overlayRef = useRef<HTMLDivElement>(null)
 
   // Live player status + queue, pushed over a single WebSocket (issue #3).
-  const { status, queue, connected } = usePlayerStatus()
+  const { status, queue, notice, connected } = usePlayerStatus()
   const connectionError =
     status === null && !connected ? 'Connecting to player…' : null
   const banner = error ?? connectionError
@@ -181,6 +182,13 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState<string | null>(null)
+  useEffect(() => {
+    if (!notice) return
+    const reason = notice.reason === 'missing' ? 'missing' : 'permanently unplayable'
+    setToast(`Skipped ${notice.label}: ${reason}.`)
+    void removeTrackFromLibraryCache(notice.track_id)
+    setRefreshToken((n) => n + 1)
+  }, [notice?.id])
 
   const openSearch = useCallback((q: string) => {
     setSearchQuery(q)
@@ -210,16 +218,19 @@ export function App() {
 
   if (kiosk) {
     return (
-      <KioskView
-        status={status}
-        queue={queue}
-        onTogglePlay={togglePlay}
-        onNext={next}
-        onPrev={prev}
-        onSeek={seek}
-        onVolume={setVolume}
-        onOpenAlbum={openAlbum}
-      />
+      <>
+        <KioskView
+          status={status}
+          queue={queue}
+          onTogglePlay={togglePlay}
+          onNext={next}
+          onPrev={prev}
+          onSeek={seek}
+          onVolume={setVolume}
+          onOpenAlbum={openAlbum}
+        />
+        <ShortcutToast text={toast} onClear={() => setToast(null)} />
+      </>
     )
   }
 

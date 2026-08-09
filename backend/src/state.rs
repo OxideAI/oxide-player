@@ -5,11 +5,17 @@ use crate::dsp::DspManager;
 use crate::library::LibraryDb;
 use crate::mpd::{Mpd, MpdStatus};
 use crate::radio::RadioManager;
-use crate::types::{PlaybackState, PlayerStatus, QueueResponse, StatusEvent};
+use crate::types::{
+    PlaybackNotice, PlaybackNoticeReason, PlaybackState, PlayerStatus, QueueResponse, StatusEvent,
+};
 use crate::visualizer::VisualizerAnalyzer;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 fn bluetooth_address_from_device(device: Option<&str>) -> Option<String> {
     let value = device?.strip_prefix("bluealsa:DEV=")?;
@@ -28,6 +34,78 @@ pub struct AppState {
     inner: Arc<Inner>,
 }
 
+#[derive(Clone)]
+struct FailedEntry {
+    queue_id: u64,
+    track_id: i64,
+    label: String,
+    handled: bool,
+}
+
+#[derive(Clone, Copy)]
+enum FailureKind {
+    Missing,
+    Unplayable,
+}
+
+fn classify_failure(error: &str) -> Option<FailureKind> {
+    if error.contains("No such song")
+        || error.contains("No such file")
+        || error.contains("No such directory")
+    {
+        return Some(FailureKind::Missing);
+    }
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("unsupported format")
+        || lower.contains("no decoder")
+        || lower.contains("unknown file format")
+        || lower.contains("unrecognized format")
+    {
+        return Some(FailureKind::Unplayable);
+    }
+    None
+}
+
+fn failure_target(error: &str) -> Option<String> {
+    let start = error.find('"')?;
+    let rest = &error[start + 1..];
+    let end = rest.find('"')?;
+    let target = &rest[..end];
+    (!target.is_empty()).then(|| target.to_string())
+}
+
+fn same_uri_or_suffix(left: &str, right: &str) -> bool {
+    left == right
+        || left
+            .strip_prefix('/')
+            .is_some_and(|value| value == right || right.ends_with(&format!("/{value}")))
+        || right
+            .strip_prefix('/')
+            .is_some_and(|value| value == left || left.ends_with(&format!("/{value}")))
+        || left.ends_with(&format!("/{right}"))
+        || right.ends_with(&format!("/{left}"))
+}
+
+fn notice_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+fn bounded_track_label(title: &Option<String>, artist: &Option<String>) -> String {
+    let label = match (
+        title.as_deref().map(str::trim).filter(|value| !value.is_empty()),
+        artist.as_deref().map(str::trim).filter(|value| !value.is_empty()),
+    ) {
+        (Some(title), Some(artist)) => format!("{artist} — {title}"),
+        (Some(title), None) => title.to_string(),
+        (None, Some(artist)) => artist.to_string(),
+        (None, None) => "unknown track".to_string(),
+    };
+    label.chars().take(160).collect()
+}
+
 struct Inner {
     pub config: RwLock<Config>,
     pub config_path: Option<PathBuf>,
@@ -38,10 +116,12 @@ struct Inner {
     pub visualizer: VisualizerAnalyzer,
     pub radio: RadioManager,
     pub status: RwLock<PlayerStatus>,
-    /// Push channel carrying player-status and queue changes to WebSocket
-    /// clients. A late-joining client receives the current snapshot on connect
-    /// (see `api::ws`), so dropped/old messages are harmless.
+    /// Latest player status, queue, and recovery notice are authoritative for
+    /// a newly connected WebSocket client.
     pub event_tx: broadcast::Sender<StatusEvent>,
+    pub latest_notice: RwLock<Option<PlaybackNotice>>,
+    pub notice_seq: AtomicU64,
+    pub failed_entry: Mutex<Option<FailedEntry>>,
     /// Serializes library scans so concurrent scan/refresh requests can't stack
     /// blocking-pool tasks and starve the runtime.
     pub scan_lock: tokio::sync::Mutex<()>,
@@ -83,6 +163,9 @@ impl AppState {
                 radio,
                 status: RwLock::new(PlayerStatus::stopped()),
                 event_tx,
+                latest_notice: RwLock::new(None),
+                notice_seq: AtomicU64::new(notice_seed()),
+                failed_entry: Mutex::new(None),
                 scan_lock: tokio::sync::Mutex::new(()),
                 device_configs,
                 config_restart_pending: std::sync::atomic::AtomicBool::new(false),
@@ -205,6 +288,10 @@ impl AppState {
         self.inner.event_tx.subscribe()
     }
 
+    pub async fn notice_snapshot(&self) -> Option<PlaybackNotice> {
+        self.inner.latest_notice.read().await.clone()
+    }
+
     /// Current queue snapshot (entries + highlighted position).
     pub async fn queue_snapshot(&self) -> QueueResponse {
         match self.inner.mpd.queue().await {
@@ -234,45 +321,188 @@ impl AppState {
         self.inner.scan_lock.lock().await
     }
 
-    pub async fn refresh_status(&self) {
-        let mpd_status = self.inner.mpd.status().await;
-        let outputs = self.inner.mpd.outputs().await;
+    async fn recover_bad_track(&self, ms: &MpdStatus) -> bool {
+        let Some(error) = ms.error.as_deref() else {
+            return false;
+        };
+        let Some(kind) = classify_failure(error) else {
+            return false;
+        };
+        let Some(current_uri) = ms.current_uri.clone() else {
+            return false;
+        };
+        let target = failure_target(error);
+        let current_is_cue = current_uri.contains(".cue/track");
+        let queue_id = match (ms.current_id, target.as_deref()) {
+            (Some(queue_id), None) => queue_id,
+            (Some(queue_id), Some(target))
+                if current_is_cue || same_uri_or_suffix(&current_uri, target) =>
+            {
+                queue_id
+            }
+            (_, Some(target)) => {
+                let Ok(entries) = self.inner.mpd.queue().await else {
+                    return false;
+                };
+                let matches: Vec<_> = entries
+                    .iter()
+                    .filter(|entry| same_uri_or_suffix(&entry.uri, target))
+                    .collect();
+                if matches.len() != 1 {
+                    return false;
+                }
+                matches[0].id
+            }
+            _ => return false,
+        };
+        let lookup_uri = if current_is_cue {
+            current_uri.clone()
+        } else {
+            target.clone().unwrap_or_else(|| current_uri.clone())
+        };
+        let cue_index = ms.current_track.map(|track| track as i32);
 
-        // A deleted/missing file: MPD reports a player error
-        // ("No such song" / "No such file" / "No such directory") and either
-        // stops or auto-skips to the next track. Drop the dead entry from the
-        // library so it stops being clickable; if MPD is stuck on it, advance.
-        // DB work runs off the async runtime via spawn_blocking.
-        if let Ok(ms) = &mpd_status {
-            if let Some(err) = &ms.error {
-                let missing = err.contains("No such song")
-                    || err.contains("No such file")
-                    || err.contains("No such directory");
-                if missing {
-                    let db = self.inner.db.clone();
-                    let uri = ms.current_uri.clone();
-                    let err_text = err.clone();
-                    let removed = tokio::task::spawn_blocking(move || {
-                        let mut removed = false;
-                        if let Some(uri) = &uri {
-                            if db.delete_by_uri_if_missing(uri).unwrap_or(false) {
-                                removed = true;
-                            }
-                        }
-                        if let Some(p) = missing_path_from_error(&err_text) {
-                            if db.delete_by_path_if_missing(&p).unwrap_or(false) {
-                                removed = true;
-                            }
-                        }
-                        removed
+        let mut failed = self.inner.failed_entry.lock().await;
+        if let Some(existing) = failed.as_ref() {
+            if existing.queue_id == queue_id && existing.handled {
+                return false;
+            }
+            if existing.queue_id != queue_id {
+                *failed = None;
+            }
+        }
+        if failed.is_none() {
+            let db = self.inner.db.clone();
+            let lookup_path = lookup_uri.clone();
+            let target_path = target.clone();
+            let track = tokio::task::spawn_blocking(move || {
+                let by_path = if lookup_path.starts_with('/') {
+                    db.track_by_path_unique(&lookup_path).ok().flatten()
+                } else {
+                    None
+                };
+                let candidate = by_path
+                    .or_else(|| db.track_by_cue_address(&lookup_path).ok().flatten())
+                    .or_else(|| {
+                        cue_index.and_then(|index| {
+                            db.track_by_uri_cue(&lookup_path, Some(index))
+                                .ok()
+                                .flatten()
+                        })
                     })
-                    .await
-                    .unwrap_or(false);
-                    if removed {
+                    .or_else(|| {
+                        db.track_by_uri_suffix_unique(&lookup_path)
+                            .ok()
+                            .flatten()
+                    });
+                if !current_is_cue {
+                    return candidate;
+                }
+                match target_path.as_deref() {
+                    Some(target) => candidate.filter(|track| {
+                        same_uri_or_suffix(&track.path, target)
+                            || same_uri_or_suffix(&track.uri, target)
+                    }),
+                    None => candidate,
+                }
+            })
+            .await
+            .ok()
+            .flatten();
+            let Some(track) = track else {
+                return false;
+            };
+            let label = bounded_track_label(&track.title, &track.artist);
+            *failed = Some(FailedEntry {
+                queue_id,
+                track_id: track.id,
+                label,
+                handled: false,
+            });
+        }
+
+        let entry = failed.as_mut().expect("failed entry inserted above");
+        if entry.handled {
+            return false;
+        }
+        let track_id = entry.track_id;
+        let label = entry.label.clone();
+        drop(failed);
+
+        let db = self.inner.db.clone();
+        let removed = match tokio::task::spawn_blocking(move || match kind {
+            FailureKind::Missing => db.delete_track_if_missing(track_id),
+            FailureKind::Unplayable => db.delete_track(track_id),
+        })
+        .await
+        {
+            Ok(Ok(removed)) => removed,
+            _ => return false,
+        };
+        if !removed {
+            if let Some(entry) = self.inner.failed_entry.lock().await.as_mut() {
+                if entry.queue_id == queue_id {
+                    entry.handled = true;
+                }
+            }
+            return false;
+        }
+        if let Some(entry) = self.inner.failed_entry.lock().await.as_mut() {
+            if entry.queue_id == queue_id {
+                entry.handled = true;
+            }
+        }
+
+        let notice = PlaybackNotice {
+            id: self.inner.notice_seq.fetch_add(1, Ordering::Relaxed) + 1,
+            track_id,
+            label,
+            reason: match kind {
+                FailureKind::Missing => PlaybackNoticeReason::Missing,
+                FailureKind::Unplayable => PlaybackNoticeReason::Unplayable,
+            },
+        };
+        *self.inner.latest_notice.write().await = Some(notice.clone());
+        let _ = self.inner.event_tx.send(StatusEvent::Notice(notice));
+
+        let _ = self.inner.mpd.clear_error().await;
+        if self
+            .inner
+            .mpd
+            .status()
+            .await
+            .ok()
+            .and_then(|status| status.current_id)
+            == Some(queue_id)
+        {
+            match self.inner.mpd.queue().await {
+                Ok(entries) => {
+                    let has_next = entries
+                        .iter()
+                        .position(|entry| entry.id == queue_id)
+                        .is_some_and(|pos| pos + 1 < entries.len());
+                    if has_next {
                         let _ = self.inner.mpd.next().await;
-                        let _ = self.inner.mpd.clear_error().await;
+                    } else {
+                        let _ = self.inner.mpd.stop().await;
                     }
                 }
+                Err(_) => {
+                    let _ = self.inner.mpd.stop().await;
+                }
+            }
+        }
+        let _ = self.inner.mpd.clear_error().await;
+        self.broadcast_queue_now().await;
+        true
+    }
+
+    pub async fn refresh_status(&self) {
+        let mut mpd_status = self.inner.mpd.status().await;
+        let outputs = self.inner.mpd.outputs().await;
+        if let Ok(ms) = &mpd_status {
+            if self.recover_bad_track(ms).await {
+                mpd_status = self.inner.mpd.status().await;
             }
         }
 
@@ -441,21 +671,6 @@ impl AppState {
     }
 }
 
-/// MPD's missing-file error names the offending file in quotes, e.g.
-/// `Failed to decode "/abs/A.flac"; Failed to open "/abs/A.flac": No such
-/// file or directory`. Return the first quoted absolute path so we can drop
-/// the matching library entry even after MPD has auto-skipped past it.
-fn missing_path_from_error(err: &str) -> Option<String> {
-    let start = err.find('"')?;
-    let rest = &err[start + 1..];
-    let end = rest.find('"')?;
-    let path = &rest[..end];
-    if path.is_empty() {
-        None
-    } else {
-        Some(path.to_string())
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -673,6 +888,29 @@ mod tests {
         assert!(got_status, "refresh_status must broadcast a Status event");
 
     }
+    #[test]
+    fn classifies_missing_before_unplayable_errors() {
+        assert!(matches!(
+            classify_failure("Failed to open \"x\": No such file or directory"),
+            Some(FailureKind::Missing)
+        ));
+        assert!(matches!(
+            classify_failure("Unsupported format: x"),
+            Some(FailureKind::Unplayable)
+        ));
+        assert!(classify_failure("No error").is_none());
+    }
+
+    #[test]
+    fn bounds_playback_notice_labels() {
+        let title = Some("  Track title  ".to_string());
+        let artist = Some("Artist".to_string());
+        assert_eq!(bounded_track_label(&title, &artist), "Artist — Track title");
+
+        let long = Some("x".repeat(200));
+        assert_eq!(bounded_track_label(&long, &None).chars().count(), 160);
+    }
+
     #[test]
     fn configured_bluetooth_addresses_only_include_bluealsa_outputs() {
         let configs = vec![

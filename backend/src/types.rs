@@ -115,6 +115,23 @@ pub enum StatusEvent {
     Status(PlayerStatus),
     /// Sent on connect and whenever the queue content or playing position changes.
     Queue(QueueResponse),
+    /// Sent when recovery removes one confirmed unplayable library track.
+    Notice(PlaybackNotice),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlaybackNotice {
+    pub id: u64,
+    pub track_id: i64,
+    pub label: String,
+    pub reason: PlaybackNoticeReason,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackNoticeReason {
+    Missing,
+    Unplayable,
 }
 
 impl PlayerStatus {

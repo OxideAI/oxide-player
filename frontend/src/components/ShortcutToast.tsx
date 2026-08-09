@@ -9,10 +9,9 @@ interface ShortcutToastProps {
 export function ShortcutToast({ text, onClear }: ShortcutToastProps) {
   useEffect(() => {
     if (!text) return
-    const t = setTimeout(onClear, 1200)
+    const t = setTimeout(onClear, 4000)
     return () => clearTimeout(t)
   }, [text, onClear])
-
   if (!text) return null
   return (
     <div className={styles.toast} role="status" aria-live="polite">

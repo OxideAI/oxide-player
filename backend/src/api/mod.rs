@@ -4,16 +4,17 @@ use crate::devices::config_fragment::{
 use crate::radio::RadioStation;
 use crate::dsp::profile::DspProfile;
 use crate::error::{AppError, AppResult};
+use crate::library::db::LibrarySnapshot;
 use crate::state::AppState;
-use crate::types::{PlaybackState, Track};
+use crate::types::PlaybackState;
 use axum::extract::{Path, Query, Request, State, ws::WebSocketUpgrade};
 use axum::handler::HandlerWithoutStateExt;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
-use axum::{Json, Router};
 use tower_http::services::ServeDir;
 use serde::{Deserialize, Serialize};
+use axum::{Json, Router};
 
 mod bluetooth;
 
@@ -107,12 +108,10 @@ async fn status(State(s): State<AppState>) -> AppResult<Json<crate::types::Playe
     Ok(Json(s.status_snapshot().await))
 }
 
-/// Stream player status and queue changes over a WebSocket. On connect the
-/// client receives the current snapshot (one `Status` + one `Queue` event) so it
-/// is in sync immediately, then every subsequent change is forwarded as a JSON
-/// `StatusEvent`. Lagging clients (slower than the 32-slot backlog) drop old
-/// messages and resync on their next reconnect, which is acceptable: push
-/// updates are best-effort and the snapshot on connect is authoritative.
+/// Stream player status, queue changes, and recovery notices over a WebSocket.
+/// On connect the client receives the current snapshot (one `Status`, one
+/// `Queue`, and the latest `Notice` when present), then subsequent events.
+/// Lagging clients drop old messages but receive the retained notice on reconnect.
 async fn ws(
     ws: WebSocketUpgrade,
     State(s): State<AppState>,
@@ -124,13 +123,18 @@ async fn ws(
         let (mut writer, _reader) = socket.split();
         let mut rx = s.subscribe_events();
 
-        // Seed the client with the current state before draining the stream.
+        // Seed the client with the current authoritative snapshot before
+        // draining the stream.
         let snapshot_status = s.status_snapshot().await;
         let snapshot_queue = s.queue_snapshot().await;
-        for event in [
+        let mut snapshot = vec![
             crate::types::StatusEvent::Status(snapshot_status),
             crate::types::StatusEvent::Queue(snapshot_queue),
-        ] {
+        ];
+        if let Some(notice) = s.notice_snapshot().await {
+            snapshot.push(crate::types::StatusEvent::Notice(notice));
+        }
+        for event in snapshot {
             match serde_json::to_string(&event) {
                 Ok(text) => {
                     if writer
@@ -261,8 +265,49 @@ struct LibraryQuery {
 async fn library_list(
     State(s): State<AppState>,
     Query(q): Query<LibraryQuery>,
-) -> AppResult<Json<Vec<Track>>> {
-    Ok(Json(s.db().search(q.q.as_deref(), q.artist.as_deref(), q.album.as_deref(), None)?))
+    headers: axum::http::HeaderMap,
+) -> AppResult<Response> {
+    let unfiltered = q.q.is_none() && q.artist.is_none() && q.album.is_none();
+    if !unfiltered {
+        return Ok(Json(s.db().search(
+            q.q.as_deref(),
+            q.artist.as_deref(),
+            q.album.as_deref(),
+            None,
+        )?).into_response());
+    }
+
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok());
+    let response = match s.db().unfiltered_snapshot(if_none_match)? {
+        LibrarySnapshot::NotModified { etag } => {
+            let mut response = Response::new(axum::body::Body::empty());
+            *response.status_mut() = StatusCode::NOT_MODIFIED;
+            response.headers_mut().insert(
+                header::ETAG,
+                HeaderValue::from_str(&etag).expect("generated etag is valid"),
+            );
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-cache"),
+            );
+            response
+        }
+        LibrarySnapshot::Fresh { etag, tracks } => {
+            let mut response = Json(tracks).into_response();
+            response.headers_mut().insert(
+                header::ETAG,
+                HeaderValue::from_str(&etag).expect("generated etag is valid"),
+            );
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-cache"),
+            );
+            response
+        }
+    };
+    Ok(response)
 }
 
 async fn library_albums(State(s): State<AppState>) -> AppResult<Json<Vec<String>>> {

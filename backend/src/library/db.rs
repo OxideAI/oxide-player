@@ -4,7 +4,11 @@ use rusqlite::OptionalExtension;
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const TRACK_COLS: &str = "id, uri, path, title, artist, album, album_artist, genre, year, \
 track, duration, format, sample_rate, bit_depth, channels, has_cover, cover_key, cue_index, \
@@ -17,11 +21,44 @@ tracks.format, tracks.sample_rate, tracks.bit_depth, tracks.channels, tracks.has
 tracks.cover_key, tracks.cue_index, tracks.start_time, tracks.end_time, tracks.file_mtime, \
 tracks.source";
 
+#[derive(Debug)]
+pub enum LibrarySnapshot {
+    NotModified { etag: String },
+    Fresh { etag: String, tracks: Vec<Track> },
+}
+
 #[derive(Clone)]
 pub struct LibraryDb {
     conn: Arc<Mutex<Connection>>,
+    revision: Arc<AtomicU64>,
+    nonce: u64,
 }
 
+static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
+
+fn process_nonce() -> u64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    now ^ ((std::process::id() as u64) << 32) ^ NEXT_NONCE.fetch_add(1, Ordering::Relaxed)
+}
+
+
+fn if_none_match_matches(header: &str, current: &str) -> bool {
+    let current = current.strip_prefix("W/").unwrap_or(current).trim();
+    header.trim() == "*"
+        || header.split(',').any(|candidate| {
+            let candidate = candidate.trim();
+            candidate.strip_prefix("W/").unwrap_or(candidate).trim() == current
+        })
+}
+
+fn path_tail_matches(left: &str, right: &str) -> bool {
+    let left = left.trim_start_matches('/');
+    let right = right.trim_start_matches('/');
+    left == right || left.ends_with(&format!("/{right}")) || right.ends_with(&format!("/{left}"))
+}
 impl LibraryDb {
     pub fn open(path: &Path) -> AppResult<Self> {
         if let Some(parent) = path.parent() {
@@ -30,7 +67,31 @@ impl LibraryDb {
         let conn = Connection::open(path).map_err(|e| AppError::Library(e.to_string()))?;
         Ok(LibraryDb {
             conn: Arc::new(Mutex::new(conn)),
+            revision: Arc::new(AtomicU64::new(0)),
+            nonce: process_nonce(),
         })
+    }
+
+    fn etag(&self, revision: u64) -> String {
+        format!("\"oxide-{:#x}-{revision:#x}\"", self.nonce)
+    }
+
+    fn bump_revision(&self) {
+        self.revision.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn unfiltered_snapshot(
+        &self,
+        if_none_match: Option<&str>,
+    ) -> AppResult<LibrarySnapshot> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let revision = self.revision.load(Ordering::Acquire);
+        let etag = self.etag(revision);
+        if if_none_match.is_some_and(|header| if_none_match_matches(header, &etag)) {
+            return Ok(LibrarySnapshot::NotModified { etag });
+        }
+        let tracks = self.search_with_conn(&conn, None, None, None, None)?;
+        Ok(LibrarySnapshot::Fresh { etag, tracks })
     }
 
     pub fn migrate(&self) -> AppResult<()> {
@@ -173,6 +234,7 @@ impl LibraryDb {
             ],
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
+        self.bump_revision();
         Ok(conn.last_insert_rowid())
     }
 
@@ -202,11 +264,15 @@ impl LibraryDb {
 
     pub fn set_cover(&self, id: i64, has_cover: bool, cover_key: Option<&str>) -> AppResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "UPDATE tracks SET has_cover = ?1, cover_key = ?2 WHERE id = ?3",
-            params![has_cover as i32, cover_key, id],
-        )
-        .map_err(|e| AppError::Library(e.to_string()))?;
+        let changed = conn
+            .execute(
+                "UPDATE tracks SET has_cover = ?1, cover_key = ?2 WHERE id = ?3",
+                params![has_cover as i32, cover_key, id],
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        if changed > 0 {
+            self.bump_revision();
+        }
         Ok(())
     }
 
@@ -279,20 +345,33 @@ impl LibraryDb {
             None => return Ok(None),
         };
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let pattern = format!("{stem}.%");
-        let track = conn
-            .query_row(
-                &format!(
-                    "SELECT {TRACK_COLS} FROM tracks \
-                     WHERE uri LIKE ? AND cue_index = ? \
-                     ORDER BY cue_index IS NOT NULL, id LIMIT 1"
-                ),
-                params![pattern, cue_index],
-                |r| Ok(row_to_track(r)),
-            )
-            .optional()
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {TRACK_COLS} FROM tracks WHERE cue_index = ?"
+            ))
             .map_err(|e| AppError::Library(e.to_string()))?;
-        Ok(track)
+        let mut rows = stmt
+            .query([cue_index])
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let mut matched = None;
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| AppError::Library(e.to_string()))?
+        {
+            let track = row_to_track(row);
+            let track_stem = track
+                .uri
+                .rsplit_once('.')
+                .map(|(stem, _)| stem)
+                .unwrap_or(&track.uri);
+            if path_tail_matches(&stem, track_stem) {
+                if matched.is_some() {
+                    return Ok(None);
+                }
+                matched = Some(track);
+            }
+        }
+        Ok(matched)
     }
 
     pub fn track_by_id(&self, id: i64) -> AppResult<Option<Track>> {
@@ -386,6 +465,61 @@ impl LibraryDb {
         Ok(track)
     }
 
+    /// Look up a unique track by its stored absolute backing path. Recovery
+    /// refuses ambiguous paths so one decoder error cannot remove a sibling.
+    pub fn track_by_path_unique(&self, path: &str) -> AppResult<Option<Track>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {TRACK_COLS} FROM tracks WHERE path = ? LIMIT 2"
+            ))
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let mut rows = stmt
+            .query([path])
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let first = rows
+            .next()
+            .map_err(|e| AppError::Library(e.to_string()))?
+            .map(row_to_track);
+        if rows
+            .next()
+            .map_err(|e| AppError::Library(e.to_string()))?
+            .is_some()
+        {
+            return Ok(None);
+        }
+        Ok(first)
+    }
+
+    /// Like `track_by_uri_suffix`, but returns no result when more than one
+    /// library row matches. Playback recovery must never pick an arbitrary
+    /// sibling from an ambiguous URI.
+    pub fn track_by_uri_suffix_unique(&self, mpd_uri: &str) -> AppResult<Option<Track>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {TRACK_COLS} FROM tracks \
+                 WHERE ? LIKE '%/' || uri OR ? = uri \
+                 ORDER BY length(uri) DESC LIMIT 2"
+            ))
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let mut rows = stmt
+            .query(params![mpd_uri, mpd_uri])
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let first = rows
+            .next()
+            .map_err(|e| AppError::Library(e.to_string()))?
+            .map(row_to_track);
+        if rows
+            .next()
+            .map_err(|e| AppError::Library(e.to_string()))?
+            .is_some()
+        {
+            return Ok(None);
+        }
+        Ok(first)
+    }
+
     /// Delete tracks whose backing file is no longer in the scanned set
     /// (deleted or newly ignored via `.mpdignore`). Returns the number removed.
     /// Delete the non-CUE (whole-file) row for `uri`, if one exists while CUE
@@ -400,6 +534,9 @@ impl LibraryDb {
                 params![uri, uri],
             )
             .map_err(|e| AppError::Library(e.to_string()))?;
+        if n > 0 {
+            self.bump_revision();
+        }
         Ok(n as u64)
     }
 
@@ -446,6 +583,7 @@ impl LibraryDb {
             let sql = format!("DELETE FROM tracks WHERE id IN ({placeholders})");
             conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))
                 .map_err(|e| AppError::Library(e.to_string()))?;
+            self.bump_revision();
         }
         Ok(ids.len() as u64)
     }
@@ -459,6 +597,9 @@ impl LibraryDb {
         let n = conn
             .execute("DELETE FROM tracks WHERE source = ?", [s])
             .map_err(|e| AppError::Library(e.to_string()))?;
+        if n > 0 {
+            self.bump_revision();
+        }
         Ok(n as u64)
     }
 
@@ -479,77 +620,53 @@ impl LibraryDb {
         Ok(path)
     }
 
-
-    /// If the track(s) for `uri` point at a file that no longer exists, remove
-    /// them. Returns true when something was deleted. Used when MPD reports a
-    /// missing file mid-playback so the dead entry leaves the library.
-    pub fn delete_by_uri_if_missing(&self, uri: &str) -> AppResult<bool> {
+    /// Delete exactly one row after confirming its backing path is absent.
+    pub fn delete_track_if_missing(&self, id: i64) -> AppResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let path: Option<String> = conn
-            .query_row(
-                "SELECT path FROM tracks WHERE uri = ? LIMIT 1",
-                [uri],
-                |r| r.get(0),
-            )
+            .query_row("SELECT path FROM tracks WHERE id = ?", [id], |r| r.get(0))
             .optional()
             .map_err(|e| AppError::Library(e.to_string()))?;
-        if let Some(p) = path {
-            if !Path::new(&p).exists() {
-                conn.execute("DELETE FROM tracks WHERE uri = ?", [uri])
-                    .map_err(|e| AppError::Library(e.to_string()))?;
+        if path.is_some_and(|p| !Path::new(&p).exists()) {
+            let deleted = conn
+                .execute("DELETE FROM tracks WHERE id = ?", [id])
+                .map_err(|e| AppError::Library(e.to_string()))?;
+            if deleted > 0 {
+                self.bump_revision();
                 return Ok(true);
             }
         }
         Ok(false)
     }
 
-    /// Like [`Self::delete_by_uri_if_missing`] but matched by the absolute
-    /// `path` (as reported in MPD's error string). Removes the track(s) only
-    /// when the backing file is gone. Returns true when something was deleted.
-    pub fn delete_by_path_if_missing(&self, path: &str) -> AppResult<bool> {
+    /// Delete exactly one library row without touching its physical file.
+    pub fn delete_track(&self, id: i64) -> AppResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let exists: Option<bool> = conn
-            .query_row(
-                "SELECT path FROM tracks WHERE path = ? LIMIT 1",
-                [path],
-                |r| Ok(Path::new(&r.get::<_, String>(0)?).exists()),
-            )
-            .optional()
+        let deleted = conn
+            .execute("DELETE FROM tracks WHERE id = ?", [id])
             .map_err(|e| AppError::Library(e.to_string()))?;
-        if let Some(missing) = exists {
-            if missing {
-                conn.execute("DELETE FROM tracks WHERE path = ?", [path])
-                    .map_err(|e| AppError::Library(e.to_string()))?;
-                return Ok(true);
-            }
+        if deleted > 0 {
+            self.bump_revision();
         }
-        Ok(false)
+        Ok(deleted > 0)
     }
 
-    pub fn search(
+
+    fn search_with_conn(
         &self,
+        conn: &Connection,
         q: Option<&str>,
         artist: Option<&str>,
         album: Option<&str>,
         limit: Option<usize>,
     ) -> AppResult<Vec<Track>> {
-        let mut sql = String::from(
-            "SELECT {TRACK_COLS_PLACEHOLDER} FROM tracks",
-        );
+        let mut sql = String::from("SELECT {TRACK_COLS_PLACEHOLDER} FROM tracks");
         sql = sql.replace(
             "{TRACK_COLS_PLACEHOLDER}",
             if q.is_some() { TRACK_COLS_Q } else { TRACK_COLS },
         );
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(q) = q {
-            // Prefix FTS query: each whitespace-separated token becomes a bare
-            // prefix term ('beat' -> 'beat*') so a partial word matches from
-            // its start. The term is deliberately NOT wrapped in double quotes:
-            // FTS5 treats a *bound* MATCH parameter as if already quoted, which
-            // would turn '"beat"*' into a phrase (no prefix match). Tokens are
-            // stripped of non-alphanumeric chars at the edges, so the result is
-            // safe to interpolate. Join brings `rank` (bm25 relevance) into
-            // scope for ordering, replacing the old `LIKE '%q%'` full scan.
             let match_expr: String = q
                 .split_whitespace()
                 .map(|t| {
@@ -564,7 +681,6 @@ impl LibraryDb {
                 .collect::<Vec<_>>()
                 .join(" ");
             if match_expr.is_empty() {
-                // No searchable tokens (e.g. only punctuation) -> no matches.
                 return Ok(Vec::new());
             }
             sql.push_str(
@@ -593,18 +709,25 @@ impl LibraryDb {
             args.push(Box::new(limit as i64));
         }
 
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| AppError::Library(e.to_string()))?;
         let rows = stmt
             .query_map(rusqlite::params_from_iter(args.iter()), |r| Ok(row_to_track(r)))
             .map_err(|e| AppError::Library(e.to_string()))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(|e| AppError::Library(e.to_string()))?);
-        }
-        Ok(out)
+        rows.map(|row| row.map_err(|e| AppError::Library(e.to_string())))
+            .collect()
+    }
+
+    pub fn search(
+        &self,
+        q: Option<&str>,
+        artist: Option<&str>,
+        album: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<Track>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        self.search_with_conn(&conn, q, artist, album, limit)
     }
 
     pub fn list_albums(&self) -> AppResult<Vec<String>> {
@@ -721,6 +844,15 @@ mod search_tests {
             None, None, None, None, Some(1), None,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn if_none_match_accepts_weak_lists_and_wildcard() {
+        let etag = "\"oxide-1-2\"";
+        assert!(if_none_match_matches(etag, etag));
+        assert!(if_none_match_matches(" W/\"oxide-1-2\", \"other\" ", etag));
+        assert!(if_none_match_matches("*", etag));
+        assert!(!if_none_match_matches("\"other\"", etag));
     }
 
     #[test]
@@ -890,6 +1022,11 @@ mod search_tests {
         assert_eq!(t.title.as_deref(), Some("Cue Track"));
         assert!(t.has_cover, "resolved split keeps its cover metadata");
         assert_eq!(t.cover_key.as_deref(), Some("al_coverkey"));
+        let absolute = db
+            .track_by_cue_address("/mnt/music/Music/Album.cue/track0002")
+            .unwrap()
+            .expect("absolute CUE address should resolve by suffix");
+        assert_eq!(absolute.id, id2);
     }
 
     #[test]

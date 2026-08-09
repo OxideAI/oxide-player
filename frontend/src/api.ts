@@ -53,6 +53,18 @@ export const api = {
     const qs = q ? `?q=${encodeURIComponent(q)}` : ''
     return fetch(`/api/library${qs}`).then((r) => json<Track[]>(r))
   },
+  librarySnapshot: async (etag?: string) => {
+    const headers = etag ? { 'If-None-Match': etag } : undefined
+    const response = await fetch('/api/library', { headers })
+    if (response.status === 304) {
+      return { tracks: null, etag: response.headers.get('ETag'), notModified: true }
+    }
+    return {
+      tracks: await json<Track[]>(response),
+      etag: response.headers.get('ETag'),
+      notModified: false,
+    }
+  },
   albums: () => fetch('/api/library/albums').then((r) => json<string[]>(r)),
   albumSources: () =>
     fetch('/api/library/albums/sources').then((r) => json<AlbumSources[]>(r)),
