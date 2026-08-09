@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.5](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.16.4...oxide-player-v0.16.5) (2026-08-09)
+
+
+### Bug Fixes
+
+* PWA fixes ([5367a65](https://github.com/OxideAI/oxide-player/commit/5367a65225fd93cdad04fdfcffba2e9feaf4c0ee))
+
 ## [0.16.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.16.3...oxide-player-v0.16.4) (2026-08-09)
 
 
