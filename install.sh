@@ -525,8 +525,8 @@ pcm.oxide_loopback {
         ipc_key 0x4f584944
         slave {
             pcm "hw:Loopback,0,0"
-            format S32_LE
-            rate 44100
+            format S16_LE
+            rate 48000
             channels 2
             period_size 1024
             buffer_size 4096
@@ -581,8 +581,8 @@ pcm.oxide_loopback {
         ipc_key 0x4f584944
         slave {
             pcm "hw:Loopback,0,0"
-            format S32_LE
-            rate 44100
+            format S16_LE
+            rate 48000
             channels 2
             period_size 1024
             buffer_size 4096
@@ -641,6 +641,7 @@ audio_output {
     type          "alsa"
     name          "camilladsp-loopback"
     device        "oxide_loopback"
+    format        "48000:16:2"
     dop           "no"
 }
 EOF
@@ -738,13 +739,13 @@ devices:
     type: Alsa
     channels: 2
     device: hw:Loopback,1
-    format: S32_LE
+    format: S16_LE
   playback:
     type: Alsa
     channels: 2
     device: default
-    format: S32_LE
-  samplerate: 44100
+    format: S16_LE
+  samplerate: 48000
   chunksize: 1024
   queuelimit: 4
 mixers: {}

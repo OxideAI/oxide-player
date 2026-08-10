@@ -7,7 +7,7 @@ use std::collections::HashMap;
 /// Key differences from earlier versions:
 /// - `samplerate`, `chunksize`, `queuelimit`, `capture_samplerate`, `resampler`
 ///   are all inside the `devices` block (not at the top level).
-/// - Device types use `Alsa` (not `Raw`), format uses `S32_LE` (not `S32LE`).
+/// - Device types use `Alsa`, format uses `S16_LE`.
 /// - Pipeline steps are `Filter` (named references) or `Mixer`, not inline
 ///   Resampler/Biquad steps.
 /// - Resampling is configured via `devices.resampler` and `devices.capture_samplerate`
@@ -157,13 +157,13 @@ pub fn render_camilladsp_config(
                 dev_type: "Alsa".to_string(),
                 channels,
                 device: capture_device.to_string(),
-                format: "S32_LE".to_string(),
+                format: "S16_LE".to_string(),
             },
             playback: Device {
                 dev_type: "Alsa".to_string(),
                 channels,
                 device: playback_device.to_string(),
-                format: "S32_LE".to_string(),
+                format: "S16_LE".to_string(),
             },
         },
         mixers: HashMap::new(),
@@ -239,9 +239,22 @@ mod tests {
         let p = base_profile();
         let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
         assert_eq!(cfg.devices.capture.dev_type, "Alsa");
-        assert_eq!(cfg.devices.capture.format, "S32_LE");
+        assert_eq!(cfg.devices.capture.format, "S16_LE");
         assert_eq!(cfg.devices.playback.dev_type, "Alsa");
-        assert_eq!(cfg.devices.playback.format, "S32_LE");
+        assert_eq!(cfg.devices.playback.format, "S16_LE");
+    }
+    #[test]
+    fn bluetooth_pcm_uses_a2dp_compatible_16_bit_format() {
+        let p = base_profile();
+        let cfg = render_camilladsp_config(
+            &p,
+            "hw:Loopback,1",
+            "bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp",
+            48000,
+        );
+        assert_eq!(cfg.devices.samplerate, 48000);
+        assert_eq!(cfg.devices.capture.format, "S16_LE");
+        assert_eq!(cfg.devices.playback.format, "S16_LE");
     }
 
     #[test]
@@ -345,8 +358,6 @@ mod tests {
     fn serde_roundtrip() {
         let mut p = base_profile();
         p.mode = DspMode::Resample;
-        p.target_rate = Some(96000);
-        p.preset = ResamplePreset::High;
         p.eq_bands = vec![EqBand {
             band_type: EqBandType::Peaking,
             freq: 1000.0,
@@ -359,7 +370,7 @@ mod tests {
         let _: CamillaConfig = serde_yaml::from_str(&yaml).expect("deserialize");
         // Quick sanity checks on the YAML output
         assert!(yaml.contains("type: Alsa"), "should use Alsa not Raw:\n{yaml}");
-        assert!(yaml.contains("S32_LE"), "should use S32_LE:\n{yaml}");
+        assert!(yaml.contains("S16_LE"), "should use S16_LE:\n{yaml}");
         assert!(yaml.contains("AsyncSinc"), "should use AsyncSinc:\n{yaml}");
         assert!(yaml.contains("chunksize: 1024"), "should have chunksize:\n{yaml}");
         assert!(yaml.contains("queuelimit:"), "should have queuelimit:\n{yaml}");

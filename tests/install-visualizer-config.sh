@@ -19,9 +19,12 @@ chown() { :; }
 source "$repo_root/install.sh"
 write_oxide_config
 write_visualizer_fifo
+mkdir -p "$(dirname "$CAMILLADSP_CONFIG")"
+write_camilladsp_config
 
 python3 - "$CONFIG_DIR/config.json" <<'PY'
 import json
+import os
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as f:
@@ -41,6 +44,10 @@ text = fragment.read_text(encoding="utf-8")
 assert 'type        "fifo"' in text
 assert f'path        "{config["visualizer_fifo"]}"' in text
 assert 'format      "44100:16:2"' in text
+camilla = pathlib.Path(os.environ["CAMILLADSP_CONFIG"])
+camilla_text = camilla.read_text(encoding="utf-8")
+assert "format: S16_LE" in camilla_text
+assert "samplerate: 48000" in camilla_text
 PY
 
 printf 'installer visualizer config test passed\n'

@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::Message;
 
 pub const DEFAULT_CAPTURE_DEVICE: &str = "hw:Loopback,1";
-pub const DEFAULT_CAPTURE_RATE: u32 = 44100;
+pub const DEFAULT_CAPTURE_RATE: u32 = 48000;
 
 #[derive(Clone)]
 pub struct DspManager {
