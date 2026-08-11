@@ -277,6 +277,9 @@ mod tests {
 
     #[test]
     fn eq_adds_one_filter_per_band_applied_to_both_channels() {
+        // Render applies effective() — which sorts EQ bands ascending by
+        // freq — so a Peaking band at 1kHz entered before a LowShelf at
+        // 200Hz is rendered with the LowShelf first.
         let mut p = base_profile();
         p.eq_bands = vec![
             EqBand {
@@ -296,18 +299,19 @@ mod tests {
         assert_eq!(cfg.filters.len(), 2);
         assert_eq!(cfg.pipeline.len(), 2);
 
-        // First filter is a Peaking biquad
+        // First (lowest-freq) band: Lowshelf at 200 Hz.
         let f0 = &cfg.filters["eq_band_0"];
         assert_eq!(f0.filter_type, "Biquad");
-        assert_eq!(f0.parameters.param_type, "Peaking");
-        assert_eq!(f0.parameters.freq, 1000.0);
-        assert_eq!(f0.parameters.gain, 3.0);
+        assert_eq!(f0.parameters.param_type, "Lowshelf");
+        assert_eq!(f0.parameters.freq, 200.0);
+        assert_eq!(f0.parameters.gain, -2.0);
 
-        // Second filter is a Lowshelf biquad
+        // Second band: Peaking at 1 kHz.
         let f1 = &cfg.filters["eq_band_1"];
-        assert_eq!(f1.parameters.param_type, "Lowshelf");
-        assert_eq!(f1.parameters.freq, 200.0);
-        assert_eq!(f1.parameters.gain, -2.0);
+        assert_eq!(f1.filter_type, "Biquad");
+        assert_eq!(f1.parameters.param_type, "Peaking");
+        assert_eq!(f1.parameters.freq, 1000.0);
+        assert_eq!(f1.parameters.gain, 3.0);
 
         // Pipeline references both bands on channels [0, 1]
         match &cfg.pipeline[0] {

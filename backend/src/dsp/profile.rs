@@ -103,17 +103,33 @@ impl DspProfile {
     /// Normalize the profile so bit-perfect mode never *resamples* (R10):
     /// it drops the target rate / preset but keeps any EQ bands so a
     /// parametric EQ can be applied without a sample-rate change.
+    ///
+    /// EQ bands are also sorted ascending by `freq` so the rendered
+    /// pipeline and any frequency-response graph present a canonical,
+    /// monotonic order regardless of how the user entered them.
     pub fn effective(&self) -> DspProfile {
+        let mut eq_bands = self.eq_bands.clone();
+        eq_bands.sort_by(|a, b| {
+            a.freq
+                .partial_cmp(&b.freq)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         if self.mode == DspMode::BitPerfect {
             DspProfile {
                 device: self.device.clone(),
                 mode: DspMode::BitPerfect,
                 target_rate: None,
                 preset: ResamplePreset::default(),
-                eq_bands: self.eq_bands.clone(),
+                eq_bands,
             }
         } else {
-            self.clone()
+            DspProfile {
+                device: self.device.clone(),
+                mode: DspMode::Resample,
+                target_rate: self.target_rate,
+                preset: self.preset,
+                eq_bands,
+            }
         }
     }
 }
@@ -187,5 +203,27 @@ mod tests {
             q: 1.0,
         }];
         assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn effective_sorts_eq_bands_by_freq_ascending() {
+        let mut p = base("DAC");
+        p.mode = DspMode::Resample;
+        p.target_rate = Some(48000);
+        p.eq_bands = vec![
+            EqBand { band_type: EqBandType::Peaking, freq: 8000.0, gain: 2.0, q: 1.0 },
+            EqBand { band_type: EqBandType::LowShelf, freq: 80.0, gain: 3.0, q: 0.9 },
+            EqBand { band_type: EqBandType::Peaking, freq: 1000.0, gain: -2.0, q: 1.4 },
+        ];
+        let eff = p.effective();
+        let freqs: Vec<f64> = eff.eq_bands.iter().map(|b| b.freq).collect();
+        assert_eq!(freqs, vec![80.0, 1000.0, 8000.0]);
+        // bit-perfect mode keeps the sort but drops rate/preset
+        let mut bp = p.clone();
+        bp.mode = DspMode::BitPerfect;
+        let bp_eff = bp.effective();
+        let bp_freqs: Vec<f64> = bp_eff.eq_bands.iter().map(|b| b.freq).collect();
+        assert_eq!(bp_freqs, vec![80.0, 1000.0, 8000.0]);
+        assert!(bp_eff.target_rate.is_none());
     }
 }

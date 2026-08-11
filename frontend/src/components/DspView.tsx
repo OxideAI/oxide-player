@@ -1,14 +1,27 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { DspProfile, EqBand, EqBandType, ResamplePreset } from '../types'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { DspMode, DspProfile, EqBand, EqBandType, ResamplePreset } from '../types'
 import { api } from '../api'
+import { EqGraph } from './EqGraph'
 import styles from './DspView.module.css'
 
 const PRESETS: ResamplePreset[] = ['balanced', 'high', 'extreme']
 const BAND_TYPES: EqBandType[] = ['peaking', 'low_shelf', 'high_shelf']
 const SAMPLE_RATES = [44100, 48000, 88200, 96000, 176400, 192000]
 
-function clone(p: DspProfile): DspProfile {
-  return { ...p, eq_bands: p.eq_bands.map((b) => ({ ...b })) }
+/** Stable per-band identity used as React key when the band list is reordered. */
+type BandRow = EqBand & { _id: number }
+
+let _bandSeq = 1
+const nextBandId = () => _bandSeq++
+
+/** Draft profile that carries stable band row ids so live re-sorting never
+ *  loses React element identity (and thus focus) mid-keystroke. */
+type Draft = {
+  device: string
+  mode: DspMode
+  target_rate: number | null
+  preset: ResamplePreset
+  eq_bands: BandRow[]
 }
 
 function defaultProfile(device: string): DspProfile {
@@ -24,38 +37,78 @@ function ProfileEditor({
   onSave: (p: DspProfile) => Promise<unknown>
   onRemove?: () => void
 }) {
-  const [draft, setDraft] = useState<DspProfile>(() => clone(profile))
+  // Draft carries stable _id'd band rows so re-sorting the band list by freq
+  // never resets React element identity (and thus input focus).
+  const toRows = useCallback(
+    (p: DspProfile): Draft => ({
+      device: p.device,
+      mode: p.mode,
+      target_rate: p.target_rate,
+      preset: p.preset,
+      eq_bands: p.eq_bands.map((b) => ({ ...b, _id: nextBandId() })),
+    }),
+    [],
+  )
+  const [draft, setDraft] = useState<Draft>(() => toRows(profile))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => setDraft(clone(profile)), [profile])
+  useEffect(() => setDraft(toRows(profile)), [profile, toRows])
 
-  const update = (patch: Partial<DspProfile>) => setDraft((d) => ({ ...d, ...patch }))
+  // Sorted bands for display & graph. Live re-sort is deferred to the freq
+  // input's blur so typing a frequency mid-edit never yanks the focused row
+  // out from under the user; add/remove/type changes do an immediate sort.
+  const sortedBands = useMemo(
+    () => [...draft.eq_bands].sort((a, b) => a.freq - b.freq),
+    [draft.eq_bands],
+  )
 
-  const updateBand = (i: number, patch: Partial<EqBand>) =>
+  const update = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }))
+
+  const updateBand = (id: number, patch: Partial<EqBand>) =>
     setDraft((d) => ({
       ...d,
-      eq_bands: d.eq_bands.map((b, j) => (j === i ? { ...b, ...patch } : b)),
+      eq_bands: d.eq_bands.map((b) => (b._id === id ? { ...b, ...patch } : b)),
     }))
+
+  const sortBandsByFreq = () =>
+    setDraft((d) => ({ ...d, eq_bands: [...d.eq_bands].sort((a, b) => a.freq - b.freq) }))
 
   const addBand = () =>
     setDraft((d) => ({
       ...d,
-      eq_bands: [...d.eq_bands, { type: 'peaking', freq: 1000, gain: 0, q: 1 }],
+      eq_bands: [
+        ...d.eq_bands,
+        { type: 'peaking', freq: 1000, gain: 0, q: 1, _id: nextBandId() },
+      ],
     }))
 
-  const removeBand = (i: number) =>
-    setDraft((d) => ({ ...d, eq_bands: d.eq_bands.filter((_, j) => j !== i) }))
+  const removeBand = (id: number) =>
+    setDraft((d) => ({ ...d, eq_bands: d.eq_bands.filter((b) => b._id !== id) }))
 
   const save = async () => {
     if (!draft.device.trim()) {
       setError('Device name is required.')
       return
     }
+    // Canonical ascending-by-freq order on Apply; the backend re-sorts in
+    // effective() as a second guarantee, so stored state is always sorted.
+    const ordered: DspProfile = {
+      device: draft.device,
+      mode: draft.mode,
+      target_rate: draft.target_rate,
+      preset: draft.preset,
+      eq_bands: sortedBands.map((b) => ({
+        type: b.type,
+        freq: b.freq,
+        gain: b.gain,
+        q: b.q,
+      })),
+    }
     setSaving(true)
     setError(null)
     try {
-      await onSave(draft)
+      await onSave(ordered)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -135,15 +188,19 @@ function ProfileEditor({
         </button>
       </div>
 
+      {/* Summed EQ frequency response (20Hz–20kHz, ±24 dB), log axis.
+          Bands are sorted ascending by freq, matching the persisted order. */}
+      <EqGraph bands={sortedBands} />
+
       <div className={styles.bands}>
-        {draft.eq_bands.length === 0 && (
+        {sortedBands.length === 0 && (
           <p className={styles.dim}>No EQ bands. Add one to shape the tone (works in both modes).</p>
         )}
-        {draft.eq_bands.map((b, i) => (
-          <div key={i} className={styles.band}>
+        {sortedBands.map((b) => (
+          <div key={b._id} className={styles.band}>
             <select
               value={b.type}
-              onChange={(e) => updateBand(i, { type: e.target.value as EqBandType })}
+              onChange={(e) => updateBand(b._id, { type: e.target.value as EqBandType })}
             >
               {BAND_TYPES.map((t) => (
                 <option key={t} value={t}>
@@ -159,7 +216,8 @@ function ProfileEditor({
                 max={24000}
                 step={1}
                 value={b.freq}
-                onChange={(e) => updateBand(i, { freq: Number(e.target.value) })}
+                onChange={(e) => updateBand(b._id, { freq: Number(e.target.value) })}
+                onBlur={sortBandsByFreq}
               />
             </label>
             <label className={styles.bandField}>
@@ -170,7 +228,7 @@ function ProfileEditor({
                 max={20}
                 step={0.5}
                 value={b.gain}
-                onChange={(e) => updateBand(i, { gain: Number(e.target.value) })}
+                onChange={(e) => updateBand(b._id, { gain: Number(e.target.value) })}
               />
             </label>
             <label className={styles.bandField}>
@@ -180,12 +238,12 @@ function ProfileEditor({
                 step={0.1}
                 min={0.1}
                 value={b.q}
-                onChange={(e) => updateBand(i, { q: Number(e.target.value) })}
+                onChange={(e) => updateBand(b._id, { q: Number(e.target.value) })}
               />
             </label>
             <button
               className={styles.remove}
-              onClick={() => removeBand(i)}
+              onClick={() => removeBand(b._id)}
               aria-label="remove band"
             >
               ✕
