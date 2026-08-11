@@ -12,6 +12,7 @@ const pair = vi.fn<(address: string) => Promise<unknown>>()
 const disconnect = vi.fn<(address: string) => Promise<unknown>>()
 const enableDeviceDsp = vi.fn<(id: number) => Promise<unknown>>()
 const disableDeviceDsp = vi.fn<(id: number) => Promise<unknown>>()
+const restartMpd = vi.fn<() => Promise<unknown>>()
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<{ api: typeof apiClient; ApiError: typeof ApiError }>()
@@ -26,8 +27,9 @@ vi.mock('../api', async (importOriginal) => {
       btWakeConnect: (address: string) => wakeConnect(address),
       btPair: (address: string) => pair(address),
       btDisconnect: (address: string) => disconnect(address),
-      enableDeviceDsp: (id: number) => enableDeviceDsp(id),
       disableDeviceDsp: (id: number) => disableDeviceDsp(id),
+      enableDeviceDsp: (id: number) => enableDeviceDsp(id),
+      restartMpd: () => restartMpd(),
     },
   }
 })
@@ -83,6 +85,7 @@ describe('DevicesView output controls', () => {
     disconnect.mockResolvedValue({})
     enableDeviceDsp.mockResolvedValue({})
     disableDeviceDsp.mockResolvedValue({})
+    restartMpd.mockResolvedValue({})
   })
 
   afterEach(() => {
@@ -90,6 +93,13 @@ describe('DevicesView output controls', () => {
     vi.clearAllMocks()
   })
 
+  it('always offers a manual MPD restart control', async () => {
+    const { getByRole } = render(<DevicesView />)
+    const restart = getByRole('button', { name: 'Restart MPD' })
+
+    fireEvent.click(restart)
+    await waitFor(() => expect(restartMpd).toHaveBeenCalledTimes(1))
+  })
   it('enables DSP for a supported output and disables unsupported controls', async () => {
     listDevices.mockResolvedValue([
       makeOutput(),

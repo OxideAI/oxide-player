@@ -284,7 +284,7 @@ export function DevicesView({
         <div className={styles.banner} role="status">
           <span>MPD reload is pending for the changed output{configs.length > 1 ? 's' : ''}.</span>
           <button className={styles.bannerBtn} disabled={restarting} onClick={() => void restartMpd()}>
-            {restarting ? 'Restarting…' : 'Reload MPD'}
+            {restarting ? 'Restarting…' : 'Restart MPD'}
           </button>
         </div>
       )}
@@ -300,7 +300,9 @@ export function DevicesView({
             <span className={styles.eyebrow}>Playback</span>
             <h3 className={styles.h} id="playback-outputs-heading">Configured outputs</h3>
           </div>
-          {deviceStale && <button className={styles.btnGhost} onClick={() => void refreshSnapshots()}>Retry</button>}
+          <button className={styles.btnGhost} disabled={restarting} onClick={() => void restartMpd()}>
+            {restarting ? 'Restarting…' : 'Restart MPD'}
+          </button>
         </div>
         {deviceLoading && <p className={styles.dim}>Loading output status…</p>}
         {!deviceLoading && playbackOutputs.length === 0 && <p className={styles.dim}>No configured playback outputs are visible in MPD yet.</p>}
