@@ -535,7 +535,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
 
   const configuredAddresses = useMemo(() => new Set(configs.flatMap((config) => btDevices.filter((device) => isBluetoothConfig(config, device.address)).map((device) => device.address))), [btDevices, configs])
   const knownAddresses = new Set(btDevices.map((device) => device.address))
-  const candidates = [...btDevices, ...scanResults.filter((device) => !knownAddresses.has(device.address))].filter((device) => !configuredAddresses.has(device.address))
+  const candidates = [...btDevices, ...scanResults.filter((device) => !knownAddresses.has(device.address))]
 
   return (
     <section className={styles.btSection} aria-labelledby="bluetooth-outputs-heading">
@@ -549,8 +549,9 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
       <ul className={styles.list}>
         {candidates.map((device) => {
           const busyNow = busyAddr === device.address
+          const isConfigured = configuredAddresses.has(device.address)
           return <li key={device.address} className={device.connected ? styles.rowOn : styles.rowOff}>
-            <div><div className={styles.name}>{btDisplayName(device)}{device.connected && <span className={styles.btBadge}>connected</span>}{!device.connected && device.paired && <span className={styles.btBadge}>paired</span>}</div><div className={styles.id}>{device.address}{device.rssi != null && ` · RSSI ${device.rssi}`}</div>{device.connected && <div className={styles.provisioning}>Connected, but no managed playback output is visible yet. Connect again after MPD reload if needed.</div>}</div>
+            <div><div className={styles.name}>{btDisplayName(device)}{device.connected && <span className={styles.btBadge}>connected</span>}{!device.connected && device.paired && <span className={styles.btBadge}>paired</span>}{isConfigured && <span className={styles.btBadge}>configured</span>}</div><div className={styles.id}>{device.address}{device.rssi != null && ` · RSSI ${device.rssi}`}</div>{device.connected && <div className={styles.provisioning}>Connected, but no managed playback output is visible yet. Connect again after MPD reload if needed.</div>}</div>
             <div className={styles.btActions}>{device.connected ? <><button className={styles.on} disabled={busyNow} onClick={() => void runBluetoothAction(device.address, () => api.btWakeConnect(device.address), 'Provisioning failed')}>{busyNow ? '…' : 'Retry provisioning'}</button><button className={styles.btnGhost} disabled={busyNow} onClick={() => void runBluetoothAction(device.address, () => api.btDisconnect(device.address), 'Disconnect failed')}>{busyNow ? '…' : 'Disconnect'}</button></> : device.paired ? <button className={styles.on} disabled={busyNow} onClick={() => void runBluetoothAction(device.address, () => api.btWakeConnect(device.address), 'Connect failed')}>{busyNow ? '…' : 'Connect'}</button> : <button className={styles.on} disabled={busyNow} onClick={() => void runBluetoothAction(device.address, () => api.btPair(device.address), 'Pair failed')}>{busyNow ? '…' : 'Pair'}</button>}<details className={styles.rowMenu} open={advancedAddress === device.address} onToggle={(event) => setAdvancedAddress(event.currentTarget.open ? device.address : null)}><summary className={styles.btnGhost}>More</summary><div aria-hidden={advancedAddress !== device.address}><button className={styles.btnDanger} disabled={busyNow} onClick={() => setConfirm({ action: device.connected ? 'remove' : 'forget', device })}>{device.connected ? 'Remove output' : 'Forget device'}</button></div></details></div>
           </li>
         })}

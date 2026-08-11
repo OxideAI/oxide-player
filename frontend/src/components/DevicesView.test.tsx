@@ -48,6 +48,18 @@ function makeDevice(over: Partial<BtDevice> = {}): BtDevice {
     ...over,
   }
 }
+function makeBluetoothConfig(address = 'AA:BB:CC:DD:EE:FF'): DeviceConfig {
+  return {
+    name: 'Living Room Speaker',
+    output_type: 'bluealsa',
+    device: `bluealsa:DEV=${address},PROFILE=a2dp`,
+    format: '48000:16:2',
+    mixer_type: null,
+    mixer_device: null,
+    dop: false,
+    restart_pending: false,
+  }
+}
 
 function makeOutput(over: Partial<OutputDevice> = {}): OutputDevice {
   return {
@@ -139,6 +151,13 @@ describe('DevicesView Bluetooth actions', () => {
 
     fireEvent.click(getByRole('button', { name: 'Connect' }))
     await waitFor(() => expect(wakeConnect).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF'))
+  })
+  it('keeps Connect available for a configured paired speaker after disconnect', async () => {
+    listBluetoothDevices.mockResolvedValue([makeDevice()])
+    listConfigs.mockResolvedValue([makeBluetoothConfig()])
+
+    const { getByRole } = render(<DevicesView />)
+    await waitFor(() => expect(getByRole('button', { name: 'Connect' })).toBeTruthy())
   })
 
   it('shows Disconnect for a connected device', async () => {
