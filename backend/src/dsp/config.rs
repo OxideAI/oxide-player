@@ -58,21 +58,31 @@ pub struct ResamplerConfig {
 }
 
 /// A named filter definition referenced from pipeline steps.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FilterDef {
     #[serde(rename = "type")]
     pub filter_type: String,
     pub parameters: FilterParameters,
 }
 
-/// Biquad filter parameters.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct FilterParameters {
-    #[serde(rename = "type")]
-    pub param_type: String,
-    pub freq: f64,
-    pub gain: f64,
-    pub q: f64,
+/// A filter's v4 parameters.  The untagged representation preserves the
+/// CamillaDSP YAML shape (`type`/biquad fields for Biquads, plain gain fields
+/// for a Gain filter).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum FilterParameters {
+    Biquad {
+        #[serde(rename = "type")]
+        param_type: String,
+        freq: f64,
+        gain: f64,
+        q: f64,
+    },
+    Gain {
+        gain: f64,
+        inverted: bool,
+        mute: bool,
+    },
 }
 
 /// Pipeline step — v4.1.3 uses `Filter` (named refs) and `Mixer` (named ref).
@@ -119,6 +129,24 @@ pub fn render_camilladsp_config(
     let mut filters: HashMap<String, FilterDef> = HashMap::new();
     let mut pipeline: Vec<PipelineStep> = Vec::new();
 
+    if profile.preamp != 0.0 {
+        filters.insert(
+            "preamp".to_string(),
+            FilterDef {
+                filter_type: "Gain".to_string(),
+                parameters: FilterParameters::Gain {
+                    gain: profile.preamp,
+                    inverted: false,
+                    mute: false,
+                },
+            },
+        );
+        pipeline.push(PipelineStep::Filter {
+            channels: (0..channels).collect(),
+            names: vec!["preamp".to_string()],
+        });
+    }
+
     for (band_idx, band) in profile.eq_bands.iter().enumerate() {
         let (biquad_type, freq, gain, q) = match band.band_type {
             EqBandType::Peaking => ("Peaking", band.freq, band.gain, band.q),
@@ -132,7 +160,7 @@ pub fn render_camilladsp_config(
             name.clone(),
             FilterDef {
                 filter_type: "Biquad".to_string(),
-                parameters: FilterParameters {
+                parameters: FilterParameters::Biquad {
                     param_type: biquad_type.to_string(),
                     freq,
                     gain,
@@ -191,6 +219,7 @@ mod tests {
             mode: DspMode::BitPerfect,
             target_rate: None,
             preset: ResamplePreset::default(),
+            preamp: 0.0,
             eq_bands: vec![],
         }
     }
@@ -276,6 +305,41 @@ mod tests {
     }
 
     #[test]
+    fn preamp_adds_gain_filter_before_eq() {
+        let mut p = base_profile();
+        p.preamp = -6.5;
+        p.eq_bands = vec![EqBand {
+            band_type: EqBandType::Peaking,
+            freq: 1000.0,
+            gain: 3.0,
+            q: 1.0,
+        }];
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "default", 44100);
+        assert_eq!(cfg.filters.len(), 2);
+        assert_eq!(cfg.pipeline.len(), 2);
+        assert_eq!(cfg.filters["preamp"].filter_type, "Gain");
+        match &cfg.filters["preamp"].parameters {
+            FilterParameters::Gain {
+                gain,
+                inverted,
+                mute,
+            } => {
+                assert_eq!(*gain, -6.5);
+                assert!(!inverted);
+                assert!(!mute);
+            }
+            _ => panic!("expected Gain parameters"),
+        }
+        match &cfg.pipeline[0] {
+            PipelineStep::Filter { channels, names } => {
+                assert_eq!(channels, &vec![0u32, 1]);
+                assert_eq!(names, &vec!["preamp".to_string()]);
+            }
+            _ => panic!("expected preamp Filter step"),
+        }
+    }
+
+    #[test]
     fn eq_adds_one_filter_per_band_applied_to_both_channels() {
         // Render applies effective() — which sorts EQ bands ascending by
         // freq — so a Peaking band at 1kHz entered before a LowShelf at
@@ -302,17 +366,36 @@ mod tests {
         // First (lowest-freq) band: Lowshelf at 200 Hz.
         let f0 = &cfg.filters["eq_band_0"];
         assert_eq!(f0.filter_type, "Biquad");
-        assert_eq!(f0.parameters.param_type, "Lowshelf");
-        assert_eq!(f0.parameters.freq, 200.0);
-        assert_eq!(f0.parameters.gain, -2.0);
+        match &f0.parameters {
+            FilterParameters::Biquad {
+                param_type,
+                freq,
+                gain,
+                ..
+            } => {
+                assert_eq!(param_type, "Lowshelf");
+                assert_eq!(*freq, 200.0);
+                assert_eq!(*gain, -2.0);
+            }
+            _ => panic!("expected Biquad parameters"),
+        }
 
         // Second band: Peaking at 1 kHz.
         let f1 = &cfg.filters["eq_band_1"];
         assert_eq!(f1.filter_type, "Biquad");
-        assert_eq!(f1.parameters.param_type, "Peaking");
-        assert_eq!(f1.parameters.freq, 1000.0);
-        assert_eq!(f1.parameters.gain, 3.0);
-
+        match &f1.parameters {
+            FilterParameters::Biquad {
+                param_type,
+                freq,
+                gain,
+                ..
+            } => {
+                assert_eq!(param_type, "Peaking");
+                assert_eq!(*freq, 1000.0);
+                assert_eq!(*gain, 3.0);
+            }
+            _ => panic!("expected Biquad parameters"),
+        }
         // Pipeline references both bands on channels [0, 1]
         match &cfg.pipeline[0] {
             PipelineStep::Filter { channels, names } => {
@@ -362,6 +445,7 @@ mod tests {
     fn serde_roundtrip() {
         let mut p = base_profile();
         p.mode = DspMode::Resample;
+        p.preamp = -6.0;
         p.eq_bands = vec![EqBand {
             band_type: EqBandType::Peaking,
             freq: 1000.0,
@@ -376,6 +460,8 @@ mod tests {
         assert!(yaml.contains("type: Alsa"), "should use Alsa not Raw:\n{yaml}");
         assert!(yaml.contains("S16_LE"), "should use S16_LE:\n{yaml}");
         assert!(yaml.contains("AsyncSinc"), "should use AsyncSinc:\n{yaml}");
+        assert!(yaml.contains("type: Gain"), "should render preamp Gain:\n{yaml}");
+        assert!(yaml.contains("gain: -6.0"), "should include preamp gain:\n{yaml}");
         assert!(yaml.contains("chunksize: 1024"), "should have chunksize:\n{yaml}");
         assert!(yaml.contains("queuelimit:"), "should have queuelimit:\n{yaml}");
     }

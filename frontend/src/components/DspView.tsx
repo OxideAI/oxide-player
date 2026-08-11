@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { DspMode, DspProfile, EqBand, EqBandType, ResamplePreset } from '../types'
+import type {
+  DspMode,
+  DspProfile,
+  DspSettings,
+  EqBand,
+  EqBandType,
+  ResamplePreset,
+} from '../types'
 import { api } from '../api'
 import { EqGraph } from './EqGraph'
 import styles from './DspView.module.css'
@@ -21,11 +28,43 @@ type Draft = {
   mode: DspMode
   target_rate: number | null
   preset: ResamplePreset
+  preamp: number
   eq_bands: BandRow[]
 }
 
 function defaultProfile(device: string): DspProfile {
-  return { device, mode: 'bit_perfect', target_rate: null, preset: 'balanced', eq_bands: [] }
+  return {
+    device,
+    mode: 'bit_perfect',
+    target_rate: null,
+    preset: 'balanced',
+    preamp: 0,
+    eq_bands: [],
+  }
+}
+
+function formatDspNumber(value: number, signed = false): string {
+  const normalized = Object.is(value, -0) ? 0 : value
+  const formatted = normalized.toFixed(2)
+  return signed && normalized >= 0 ? `+${formatted}` : formatted
+}
+
+/** Serialize the import/export subset shared with AutoEQ-style text files. */
+export function formatDspSettings(
+  settings: Pick<DspProfile, 'preamp' | 'eq_bands'>,
+): string {
+  const lines = [`Preamp: ${formatDspNumber(settings.preamp, true)} dB`, '']
+  const filterTypes: Record<EqBandType, string> = {
+    peaking: 'PK',
+    low_shelf: 'LS',
+    high_shelf: 'HS',
+  }
+  settings.eq_bands.forEach((band, index) => {
+    lines.push(
+      `Filter ${String(index + 1).padStart(2, ' ')}: ON ${filterTypes[band.type]} Fc ${formatDspNumber(band.freq)} Hz Gain ${formatDspNumber(band.gain, true)} dB Q ${formatDspNumber(band.q)}`,
+    )
+  })
+  return `${lines.join('\n')}\n`
 }
 
 function ProfileEditor({
@@ -45,12 +84,16 @@ function ProfileEditor({
       mode: p.mode,
       target_rate: p.target_rate,
       preset: p.preset,
+      preamp: p.preamp,
       eq_bands: p.eq_bands.map((b) => ({ ...b, _id: nextBandId() })),
     }),
     [],
   )
   const [draft, setDraft] = useState<Draft>(() => toRows(profile))
   const [saving, setSaving] = useState(false)
+  const [importUrl, setImportUrl] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [importNotice, setImportNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => setDraft(toRows(profile)), [profile, toRows])
@@ -86,6 +129,68 @@ function ProfileEditor({
   const removeBand = (id: number) =>
     setDraft((d) => ({ ...d, eq_bands: d.eq_bands.filter((b) => b._id !== id) }))
 
+  const applyImported = (settings: DspSettings) => {
+    setDraft((d) => ({
+      ...d,
+      preamp: settings.preamp,
+      eq_bands: settings.eq_bands.map((b) => ({ ...b, _id: nextBandId() })),
+    }))
+    setImportNotice(
+      `Imported ${settings.eq_bands.length} filter${settings.eq_bands.length === 1 ? '' : 's'}. Click Apply to activate.`,
+    )
+  }
+
+  const importText = async (text: string) => {
+    setImporting(true)
+    setError(null)
+    setImportNotice(null)
+    try {
+      applyImported(await api.importDspText(text))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const importFile = async (file: File) => {
+    try {
+      await importText(await file.text())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const importUrlSettings = async () => {
+    if (!importUrl.trim()) {
+      setError('A DSP settings URL is required.')
+      return
+    }
+    setImporting(true)
+    setError(null)
+    setImportNotice(null)
+    try {
+      applyImported(await api.importDspUrl(importUrl.trim()))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const exportSettings = () => {
+    const text = formatDspSettings({ preamp: draft.preamp, eq_bands: sortedBands })
+    const blobUrl = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }))
+    const link = document.createElement('a')
+    const name = draft.device.trim().replace(/[^a-z0-9._-]+/gi, '-') || 'dsp-settings'
+    link.href = blobUrl
+    link.download = `${name}-eq.txt`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(blobUrl)
+  }
+
   const save = async () => {
     if (!draft.device.trim()) {
       setError('Device name is required.')
@@ -98,6 +203,7 @@ function ProfileEditor({
       mode: draft.mode,
       target_rate: draft.target_rate,
       preset: draft.preset,
+      preamp: draft.preamp,
       eq_bands: sortedBands.map((b) => ({
         type: b.type,
         freq: b.freq,
@@ -181,6 +287,62 @@ function ProfileEditor({
         </label>
       </fieldset>
 
+      <div className={styles.preampRow}>
+        <label className={styles.field}>
+          <span>Preamp gain (dB)</span>
+          <input
+            aria-label="Preamp gain (dB)"
+            type="number"
+            min={-150}
+            max={150}
+            step={0.1}
+            value={draft.preamp}
+            onChange={(e) => update({ preamp: Number(e.target.value) })}
+          />
+        </label>
+        <p className={styles.help}>Applied before the EQ filters to prevent imported boosts from clipping.</p>
+      </div>
+
+      <div className={styles.importBox}>
+        <div className={styles.importTitle}>Import DSP settings</div>
+        <div className={styles.importControls}>
+          <label className={styles.fileButton}>
+            <span>Choose file</span>
+            <input
+              aria-label="DSP settings file"
+              className={styles.fileInput}
+              type="file"
+              accept=".txt,text/plain"
+              disabled={importing}
+              onChange={(e) => {
+                const file = e.currentTarget.files?.[0]
+                if (file) void importFile(file)
+                e.currentTarget.value = ''
+              }}
+            />
+          </label>
+          <span className={styles.importOr}>or</span>
+          <input
+            className={styles.importUrl}
+            aria-label="DSP settings URL"
+            type="url"
+            placeholder="https://…/equalizer.txt"
+            value={importUrl}
+            disabled={importing}
+            onChange={(e) => setImportUrl(e.target.value)}
+          />
+          <button
+            className={styles.importButton}
+            onClick={() => void importUrlSettings()}
+            disabled={importing || !importUrl.trim()}
+          >
+            {importing ? 'Importing…' : 'Import URL'}
+          </button>
+        </div>
+        <p className={styles.help}>Only Preamp and numbered Filter values are imported. Apply saves them to this profile.</p>
+        {importNotice && <div className={styles.notice}>{importNotice}</div>}
+      </div>
+
       <div className={styles.eqHead}>
         <span>Equalizer</span>
         <button className={styles.add} onClick={addBand}>
@@ -253,9 +415,14 @@ function ProfileEditor({
       </div>
 
       {error && <div className={styles.error}>{error}</div>}
-      <button className={styles.save} onClick={save} disabled={saving}>
-        {saving ? 'Applying…' : 'Apply'}
-      </button>
+      <div className={styles.actions}>
+        <button className={styles.export} onClick={exportSettings}>
+          Export .txt
+        </button>
+        <button className={styles.save} onClick={save} disabled={saving}>
+          {saving ? 'Applying…' : 'Apply'}
+        </button>
+      </div>
     </div>
   )
 }

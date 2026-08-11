@@ -22,7 +22,7 @@ Oxide scans the library into SQLite and serves optimized cover art. Its JSON API
 - Track actions include play next, clear-and-play, adding to a playlist, and viewing file information.
 - Browse MPD playlists and add tracks from the library or a track menu.
 - Add, play, and delete persistent HTTP(S) radio stations. Live stream metadata appears in now playing.
-- Use CamillaDSP for bit-perfect passthrough, resampling presets, and per-device parametric EQ.
+- Use CamillaDSP for bit-perfect passthrough, resampling presets, per-device parametric EQ, preamp gain, and AutoEQ-style DSP settings import/export from text files or URLs.
 - Enable or disable MPD outputs. Persistent device configuration fragments take effect after an MPD restart.
 - On Linux, Bluetooth support covers discovery, pairing, connecting, waking sleeping devices, disconnecting, renaming, removal, and optional A2DP phone input.
 - On Linux, the installer provisions an AirPlay receiver through Shairport Sync; iPhone/iPad devices can stream to the server over the LAN.

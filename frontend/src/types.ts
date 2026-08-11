@@ -107,6 +107,12 @@ export interface DspProfile {
   mode: DspMode
   target_rate: number | null
   preset: ResamplePreset
+  preamp: number
+  eq_bands: EqBand[]
+}
+
+export interface DspSettings {
+  preamp: number
   eq_bands: EqBand[]
 }
 

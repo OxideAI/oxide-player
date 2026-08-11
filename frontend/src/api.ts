@@ -4,6 +4,7 @@ import type {
   Config,
   DeviceConfig,
   DspProfile,
+  DspSettings,
   InputStatusResponse,
   OutputDevice,
   PlayerStatus,
@@ -155,7 +156,6 @@ export const api = {
     }).then((r) => json<unknown>(r)),
   restartMpd: () =>
     fetch('/api/devices/restart-mpd', { method: 'POST' }).then((r) => json<{ status: string }>(r)),
-
   dsp: () => fetch('/api/dsp').then((r) => json<DspProfile[]>(r)),
   setDsp: (profile: DspProfile) =>
     fetch('/api/dsp', {
@@ -163,6 +163,18 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(profile),
     }).then((r) => json<unknown>(r)),
+  importDspText: (text: string) =>
+    fetch('/api/dsp/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }).then((r) => json<DspSettings>(r)),
+  importDspUrl: (url: string) =>
+    fetch('/api/dsp/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    }).then((r) => json<DspSettings>(r)),
 
   playlists: () => fetch('/api/playlists').then((r) => json<string[]>(r)),
   playlist: (name: string) =>

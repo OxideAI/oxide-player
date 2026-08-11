@@ -294,6 +294,7 @@ mod tests {
             mode: DspMode::BitPerfect,
             target_rate: None,
             preset: ResamplePreset::default(),
+            preamp: 0.0,
             eq_bands: vec![],
         }
     }

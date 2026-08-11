@@ -287,3 +287,121 @@
   cursor: default;
   transform: none;
 }
+
+.preampRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.help {
+  margin: 0 0 0.15rem;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  max-width: 58ch;
+}
+
+.importBox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--hairline);
+}
+
+.importTitle {
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.importControls {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.fileButton,
+.importButton {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  padding: 0.42rem 0.8rem;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.4s var(--ease), color 0.4s var(--ease);
+}
+
+.fileButton:hover,
+.importButton:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--accent);
+}
+
+.fileInput {
+  display: none;
+}
+
+.importOr {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.importUrl {
+  flex: 1 1 24ch;
+  min-width: 18ch;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  padding: 0.45rem 0.65rem;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.importUrl:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.importButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.notice {
+  color: var(--accent);
+  font-size: 0.78rem;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.export {
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  padding: 0.58rem 1rem;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 600;
+  transition: background 0.4s var(--ease), color 0.4s var(--ease);
+}
+
+.export:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}

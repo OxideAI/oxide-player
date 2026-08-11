@@ -2,6 +2,7 @@ use crate::devices::config_fragment::{
     validate_config, DeviceConfig as DeviceConfigDto,
 };
 use crate::radio::RadioStation;
+use crate::dsp::{parse_dsp_text, DspSettings};
 use crate::dsp::profile::DspProfile;
 use crate::error::{AppError, AppResult};
 use crate::library::db::LibrarySnapshot;
@@ -76,6 +77,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/radio/{id}", delete(radio_delete))
         .route("/api/radio/{id}/play", post(radio_play))
         .route("/api/dsp", get(dsp_get))
+        .route("/api/dsp/import", post(dsp_import))
         .route("/api/dsp", put(dsp_set))
         .route("/api/playlists", get(playlists))
         .route("/api/playlists", post(save_playlist))
@@ -1058,6 +1060,81 @@ fn is_localhost(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "::1" | "localhost" | "0.0.0.0")
 }
 
+const MAX_DSP_IMPORT_BYTES: usize = 1024 * 1024;
+
+#[derive(Deserialize)]
+struct DspImportBody {
+    text: Option<String>,
+    url: Option<String>,
+}
+
+async fn dsp_import(Json(body): Json<DspImportBody>) -> AppResult<Json<DspSettings>> {
+    let text = match (body.text, body.url) {
+        (Some(text), None) => text,
+        (None, Some(url)) => fetch_dsp_import_url(&url).await?,
+        (Some(_), Some(_)) => {
+            return Err(AppError::BadRequest(
+                "provide either DSP import text or a URL, not both".to_string(),
+            ))
+        }
+        (None, None) => {
+            return Err(AppError::BadRequest(
+                "DSP import text or URL is required".to_string(),
+            ))
+        }
+    };
+    parse_dsp_text(&text)
+        .map(Json)
+        .map_err(|e| AppError::BadRequest(e.to_string()))
+}
+
+async fn fetch_dsp_import_url(url: &str) -> AppResult<String> {
+    let url = url.trim();
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| AppError::BadRequest(format!("invalid DSP import URL: {e}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(AppError::BadRequest(
+            "DSP import URL must use http or https".to_string(),
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent(concat!("oxide-player/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| AppError::BadRequest(format!("cannot prepare DSP import request: {e}")))?;
+    let response = client
+        .get(parsed)
+        .send()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("DSP import URL request failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::BadRequest(format!(
+            "DSP import URL returned HTTP {}",
+            response.status()
+        )));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_DSP_IMPORT_BYTES as u64)
+    {
+        return Err(AppError::BadRequest(format!(
+            "DSP import is too large (maximum is {MAX_DSP_IMPORT_BYTES} bytes)"
+        )));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("cannot read DSP import URL response: {e}")))?;
+    if bytes.len() > MAX_DSP_IMPORT_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "DSP import is too large (maximum is {MAX_DSP_IMPORT_BYTES} bytes)"
+        )));
+    }
+    String::from_utf8(bytes.to_vec())
+        .map_err(|_| AppError::BadRequest("DSP import must be UTF-8 text".to_string()))
+}
+
 async fn dsp_get(State(s): State<AppState>) -> AppResult<Json<Vec<DspProfile>>> {
     Ok(Json(s.dsp().list_profiles().await))
 }
@@ -1440,6 +1517,7 @@ async fn radio_delete(
 /// URI itself, so `resolve_play_uri` is bypassed.
 async fn radio_play(State(s): State<AppState>, Path(id): Path<String>) -> AppResult<StatusCode> {
     let station = s
+
         .radio()
         .get(&id)
         .ok_or_else(|| AppError::NotFound(format!("radio station {id}")))?;
@@ -1517,6 +1595,75 @@ mod tests {
             "version must match CARGO_PKG_VERSION"
         );
     }
+
+    #[tokio::test]
+    async fn dsp_import_endpoint_parses_text_settings() {
+        let app = test_app().await;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/dsp/import")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "text": "Preamp: -0.7 dB\nFilter 1: ON PK Fc 1000 Hz Gain +2 dB Q 1.2\n"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["preamp"], -0.7);
+        assert_eq!(parsed["eq_bands"][0]["type"], "peaking");
+        assert_eq!(parsed["eq_bands"][0]["freq"], 1000.0);
+    }
+
+    #[tokio::test]
+    async fn dsp_import_endpoint_fetches_url() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            let body = b"Preamp: -2 dB\nFilter 1: ON PK Fc 800 Hz Gain +1 dB Q 1\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.write_all(body).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        let app = test_app().await;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/dsp/import")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "url": format!("http://{address}/eq.txt")
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        server.await.unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["preamp"], -2.0);
+        assert_eq!(parsed["eq_bands"][0]["freq"], 800.0);
+    }
     #[tokio::test]
     async fn adding_and_removing_source_updates_shared_folders() {
         let root = std::env::temp_dir().join(format!(
@@ -1541,6 +1688,7 @@ mod tests {
         let add = Request::builder()
             .method("POST")
             .uri("/api/config/library-dirs")
+
             .header("content-type", "application/json")
             .body(Body::from(serde_json::json!({ "path": second }).to_string()))
             .unwrap();

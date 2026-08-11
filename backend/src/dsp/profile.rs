@@ -47,6 +47,8 @@ pub struct DspProfile {
     #[serde(default)]
     pub preset: ResamplePreset,
     #[serde(default)]
+    pub preamp: f64,
+    #[serde(default)]
     pub eq_bands: Vec<EqBand>,
 }
 
@@ -57,6 +59,7 @@ impl DspProfile {
             mode: DspMode::BitPerfect,
             target_rate: None,
             preset: ResamplePreset::default(),
+            preamp: 0.0,
             eq_bands: Vec::new(),
         }
     }
@@ -85,15 +88,22 @@ impl DspProfile {
             }
         }
 
+        if !self.preamp.is_finite() || self.preamp.abs() > 150.0 {
+            bail!("preamp gain must be finite and within ±150 dB");
+        }
+
         for (i, band) in self.eq_bands.iter().enumerate() {
             if band.freq <= 0.0 || band.freq >= 200_000.0 {
                 bail!("eq band {i} freq must be between 1 and 200000 Hz");
             }
-            if band.gain.abs() > 30.0 {
-                bail!("eq band {i} gain must be within ±30 dB");
+            if !band.freq.is_finite() {
+                bail!("eq band {i} freq must be finite");
             }
-            if band.q <= 0.0 {
-                bail!("eq band {i} q must be > 0");
+            if !band.gain.is_finite() || band.gain.abs() > 30.0 {
+                bail!("eq band {i} gain must be finite and within ±30 dB");
+            }
+            if !band.q.is_finite() || band.q <= 0.0 {
+                bail!("eq band {i} q must be > 0 and finite");
             }
         }
 
@@ -120,6 +130,7 @@ impl DspProfile {
                 mode: DspMode::BitPerfect,
                 target_rate: None,
                 preset: ResamplePreset::default(),
+                preamp: self.preamp,
                 eq_bands,
             }
         } else {
@@ -128,6 +139,7 @@ impl DspProfile {
                 mode: DspMode::Resample,
                 target_rate: self.target_rate,
                 preset: self.preset,
+                preamp: self.preamp,
                 eq_bands,
             }
         }
@@ -144,6 +156,7 @@ mod tests {
             mode: DspMode::BitPerfect,
             target_rate: None,
             preset: ResamplePreset::default(),
+            preamp: 0.0,
             eq_bands: vec![],
         }
     }
@@ -206,6 +219,17 @@ mod tests {
     }
 
     #[test]
+    fn preamp_gain_must_be_finite_and_within_camilladsp_range() {
+        let mut p = base("DAC");
+        p.preamp = 151.0;
+        assert!(p.validate().is_err());
+        p.preamp = f64::NAN;
+        assert!(p.validate().is_err());
+        p.preamp = -150.0;
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
     fn effective_sorts_eq_bands_by_freq_ascending() {
         let mut p = base("DAC");
         p.mode = DspMode::Resample;
@@ -225,5 +249,6 @@ mod tests {
         let bp_freqs: Vec<f64> = bp_eff.eq_bands.iter().map(|b| b.freq).collect();
         assert_eq!(bp_freqs, vec![80.0, 1000.0, 8000.0]);
         assert!(bp_eff.target_rate.is_none());
+        assert_eq!(eff.preamp, 0.0);
     }
 }
