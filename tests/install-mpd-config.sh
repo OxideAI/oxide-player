@@ -25,6 +25,75 @@ ensure_mpd_include
 grep -Fqx "music_directory     \"$MPD_MUSIC_DIR\"" "$MPD_CONFIG"
 grep -Fq "include" "$MPD_CONFIG"
 grep -Fq "$DATA_DIR/mpd-outputs.d/*.conf" "$MPD_CONFIG"
+grep -Fq 'name          "camilladsp-loopback"' "$MPD_CONFIG"
+grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
+
+cat > "$MPD_CONFIG" <<'EOF'
+music_directory "/music"
+include "/var/lib/oxide-player/mpd-outputs.d/*.conf"
+
+audio_output {
+    type "alsa"
+    name "camilladsp-loopback"
+    device "oxide_loopback"
+}
+EOF
+ensure_mpd_loopback_mixer
+grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
+
+cat > "$MPD_CONFIG" <<'EOF'
+music_directory "/music"
+audio_output {
+    type "alsa"
+    name "camilladsp-loopback"
+    device "oxide_loopback"
+    mixer_type "hardware"
+}
+EOF
+ensure_mpd_loopback_mixer
+grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
+cat > "$MPD_CONFIG" <<'EOF'
+music_directory "/music"
+audio_output {
+    type "alsa"
+    mixer_type "hardware"
+    name "camilladsp-loopback"
+    device "hw:Loopback,0"
+}
+EOF
+ensure_mpd_loopback_mixer
+test "$(grep -Fc 'mixer_type' "$MPD_CONFIG")" -eq 1
+grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
+cat > "$MPD_CONFIG" <<'EOF'
+music_directory "/music"
+audio_output {
+    type "alsa"
+    name "camilladsp-loopback"
+    device "hw:USB"
+    mixer_type "hardware"
+}
+EOF
+ensure_mpd_loopback_mixer || true
+! grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
+grep -Fq 'mixer_type "hardware"' "$MPD_CONFIG"
+
+
+
+cat > "$MPD_CONFIG" <<'EOF'
+music_directory "/music"
+audio_output {
+    type "alsa"
+    name "USB DAC"
+    device "hw:USB"
+    mixer_type "hardware"
+}
+EOF
+ensure_mpd_loopback_mixer || true
+! grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
+grep -Fq 'mixer_type "hardware"' "$MPD_CONFIG"
+
+printf 'installer MPD loopback mixer test passed\n'
+
 
 cat > "$MPD_CONFIG" <<'EOF'
 music_directory "/music"

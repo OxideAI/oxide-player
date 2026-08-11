@@ -642,6 +642,7 @@ audio_output {
     name          "camilladsp-loopback"
     device        "oxide_loopback"
     format        "48000:16:2"
+    mixer_type    "software"
     dop           "no"
 }
 EOF
@@ -730,6 +731,102 @@ ensure_mpd_include() {
   fi
   log "Added managed output include to $conf"
 }
+
+# Older installs have a managed CamillaDSP loopback output without an
+# explicit mixer. MPD then probes the ALSA PCM mixer ("PCM"), which snd-aloop
+# does not provide, so setvol fails while DSP is active. Repair only Oxide's
+# loopback block and leave user-managed outputs untouched.
+ensure_mpd_loopback_mixer() {
+  local conf="$MPD_CONFIG"
+  if [ ! -f "$conf" ] || [ ! -s "$conf" ]; then
+    return 1
+  fi
+  if ! grep -Eq '^[[:space:]]*name[[:space:]]+"camilladsp-loopback"[[:space:]]*$' "$conf"; then
+    return 1
+  fi
+
+  local tmp
+  tmp="$(mktemp "${conf}.oxide-player.tmp.XXXXXX")" || die "cannot create MPD config temp file"
+  if ! awk '
+    function clear_block( i) {
+      for (i = 1; i <= block_len; i++) delete block[i]
+      block_len = 0
+    }
+    function flush_block( i, line, loopback, mixer_seen, has_name, has_device) {
+      if (!in_output) return
+
+      has_name = 0
+      has_device = 0
+      for (i = 1; i <= block_len; i++) {
+        if (block[i] ~ /^[[:space:]]*name[[:space:]]+"camilladsp-loopback"[[:space:]]*$/) {
+          has_name = 1
+        }
+        if (block[i] ~ /^[[:space:]]*device[[:space:]]+"(oxide_loopback|hw:Loopback,0)"[[:space:]]*$/) {
+          has_device = 1
+        }
+      }
+      loopback = has_name && has_device
+      if (!loopback) {
+        for (i = 1; i <= block_len; i++) print block[i]
+        clear_block()
+        in_output = 0
+        return
+      }
+
+      mixer_seen = 0
+      for (i = 1; i <= block_len; i++) {
+        line = block[i]
+        if (line ~ /^[[:space:]]*mixer_type[[:space:]]+"/) {
+          mixer_seen = 1
+          if (line ~ /^[[:space:]]*mixer_type[[:space:]]+"software"[[:space:]]*$/) {
+            print line
+          } else {
+            print "    mixer_type    \"software\""
+          }
+        } else {
+          if (line ~ /^[[:space:]]*}[[:space:]]*$/ && !mixer_seen) {
+            print "    mixer_type    \"software\""
+          }
+          print line
+        }
+      }
+      clear_block()
+      in_output = 0
+    }
+    /^[[:space:]]*audio_output[[:space:]]*[{]/ {
+      if (in_output) flush_block()
+      in_output = 1
+      block_len = 1
+      block[block_len] = $0
+      next
+    }
+    in_output {
+      block[++block_len] = $0
+      if ($0 ~ /^[[:space:]]*}[[:space:]]*$/) flush_block()
+      next
+    }
+    { print }
+    END {
+      if (in_output) flush_block()
+    }
+  ' "$conf" > "$tmp"; then
+    rm -f "$tmp"
+    die "cannot parse MPD config $conf"
+  fi
+
+  if cmp -s "$tmp" "$conf"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! cat "$tmp" > "$conf"; then
+    rm -f "$tmp"
+    die "cannot update CamillaDSP loopback mixer in $conf"
+  fi
+  rm -f "$tmp"
+  log "Repaired CamillaDSP loopback mixer in $conf"
+  return 0
+}
+
 
 write_camilladsp_config() {
   log "Writing CamillaDSP config ($CAMILLADSP_CONFIG)"
@@ -1041,6 +1138,7 @@ do_update() {
   build_backend
   build_frontend
   ensure_mpd_include || true
+  ensure_mpd_loopback_mixer || true
   ensure_asound_loopback || true
   ensure_samba_shares || true
   write_visualizer_fifo || true
