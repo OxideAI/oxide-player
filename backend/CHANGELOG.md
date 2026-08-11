@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.2...oxide-player-v0.17.3) (2026-08-11)
+
+
+### Bug Fixes
+
+* DSP graph ([6ab6df2](https://github.com/OxideAI/oxide-player/commit/6ab6df247e844fcf7cc442af85af609930c384a4))
+
 ## [0.17.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.1...oxide-player-v0.17.2) (2026-08-10)
 
 
