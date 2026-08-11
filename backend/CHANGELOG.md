@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.6](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.5...oxide-player-v0.17.6) (2026-08-11)
+
+
+### Bug Fixes
+
+* bth ([3a7311a](https://github.com/OxideAI/oxide-player/commit/3a7311aa31ce83493a394aac64e1eb1d73588faf))
+
 ## [0.17.5](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.4...oxide-player-v0.17.5) (2026-08-11)
 
 
