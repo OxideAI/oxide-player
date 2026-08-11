@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.5](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.4...oxide-player-v0.17.5) (2026-08-11)
+
+
+### Bug Fixes
+
+* redesign settings ([b9adf54](https://github.com/OxideAI/oxide-player/commit/b9adf54c4be31fb3fcb830fb5c079d4bd7e9f728))
+
 ## [0.17.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.3...oxide-player-v0.17.4) (2026-08-11)
 
 
