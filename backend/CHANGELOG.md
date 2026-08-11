@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.3...oxide-player-v0.17.4) (2026-08-11)
+
+
+### Features
+
+* add DSP import/export and pregain ([8a89986](https://github.com/OxideAI/oxide-player/commit/8a899867f01c72986b9489e3a9ac9d43991afaed))
+
 ## [0.17.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.2...oxide-player-v0.17.3) (2026-08-11)
 
 
