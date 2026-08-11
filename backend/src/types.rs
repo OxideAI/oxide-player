@@ -16,6 +16,68 @@ pub struct OutputDevice {
     pub enabled: bool,
 }
 
+/// Enriched per-output facts returned by `GET /api/devices`.
+///
+/// This is deliberately separate from [`OutputDevice`], which is the live
+/// status/WebSocket contract and must remain small and stable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeviceOutput {
+    pub id: u32,
+    pub name: String,
+    pub enabled: bool,
+    pub role: DeviceOutputRole,
+    pub selectable: bool,
+    /// Stable across MPD runtime-ID changes whenever the output is managed.
+    pub selection_key: String,
+    pub configured: bool,
+    /// True means MPD currently reports this output, not that a physical DAC
+    /// was probed successfully.
+    pub available: bool,
+    /// Only meaningful for Bluetooth outputs. Other output types leave this
+    /// unset because physical connection probing is not available.
+    pub connected: Option<bool>,
+    /// MPD's enabled state is the backend's per-output active fact. Route
+    /// health still belongs to the status/reduction layer.
+    pub active: bool,
+    pub dsp_supported: bool,
+    pub dsp_enabled: bool,
+    /// The configured ALSA/BlueALSA endpoint used by the DSP profile.
+    /// Kept separate from the live OutputDevice contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dsp_device: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dsp_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_code: Option<DeviceOutputDiagnosticCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub technical_detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceOutputRole {
+    Playback,
+    System,
+    Unknown,
+}
+
+impl Default for DeviceOutputRole {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceOutputDiagnosticCode {
+    ReloadError,
+    UnsupportedOutputType,
+    Disconnected,
+    Inactive,
+    MissingProfile,
+    UnknownOutput,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: i64,

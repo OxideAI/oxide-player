@@ -1,20 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import type { api as apiClient } from '../api'
+import { ApiError } from '../api'
 import type { BtDevice, DeviceConfig, InputStatusResponse, OutputDevice } from '../types'
-
 const listDevices = vi.fn<() => Promise<OutputDevice[]>>()
 const listConfigs = vi.fn<() => Promise<DeviceConfig[]>>()
 const listBluetoothDevices = vi.fn<() => Promise<BtDevice[]>>()
 const inputStatus = vi.fn<() => Promise<InputStatusResponse>>()
 const wakeConnect = vi.fn<(address: string) => Promise<unknown>>()
+const pair = vi.fn<(address: string) => Promise<unknown>>()
 const disconnect = vi.fn<(address: string) => Promise<unknown>>()
 const enableDeviceDsp = vi.fn<(id: number) => Promise<unknown>>()
 const disableDeviceDsp = vi.fn<(id: number) => Promise<unknown>>()
 
 vi.mock('../api', async (importOriginal) => {
-  const actual = await importOriginal<{ api: typeof apiClient }>()
+  const actual = await importOriginal<{ api: typeof apiClient; ApiError: typeof ApiError }>()
   return {
+    ...actual,
     api: {
       ...actual.api,
       devices: () => listDevices(),
@@ -22,6 +24,7 @@ vi.mock('../api', async (importOriginal) => {
       btDevices: () => listBluetoothDevices(),
       btInputStatus: () => inputStatus(),
       btWakeConnect: (address: string) => wakeConnect(address),
+      btPair: (address: string) => pair(address),
       btDisconnect: (address: string) => disconnect(address),
       enableDeviceDsp: (id: number) => enableDeviceDsp(id),
       disableDeviceDsp: (id: number) => disableDeviceDsp(id),
@@ -64,6 +67,7 @@ describe('DevicesView output controls', () => {
     listBluetoothDevices.mockResolvedValue([])
     inputStatus.mockResolvedValue({ enabled: false, streaming: false })
     wakeConnect.mockResolvedValue({})
+    pair.mockResolvedValue({})
     disconnect.mockResolvedValue({})
     enableDeviceDsp.mockResolvedValue({})
     disableDeviceDsp.mockResolvedValue({})
@@ -113,6 +117,7 @@ describe('DevicesView Bluetooth actions', () => {
     listBluetoothDevices.mockResolvedValue([])
     inputStatus.mockResolvedValue({ enabled: false, streaming: false })
     wakeConnect.mockResolvedValue({})
+    pair.mockResolvedValue({})
     disconnect.mockResolvedValue({})
     enableDeviceDsp.mockResolvedValue({})
     disableDeviceDsp.mockResolvedValue({})
@@ -145,5 +150,53 @@ describe('DevicesView Bluetooth actions', () => {
     expect(queryByRole('button', { name: 'Connect' })).toBeNull()
     fireEvent.click(getByRole('button', { name: 'Disconnect' }))
     await waitFor(() => expect(disconnect).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF'))
+  })
+  
+
+  it('keeps Bluetooth removal behind advanced confirmation', async () => {
+    listBluetoothDevices.mockResolvedValue([makeDevice({ connected: true })])
+
+    const { getByRole, getByText, queryByRole } = render(<DevicesView />)
+    await waitFor(() => expect(getByRole('button', { name: 'Disconnect' })).toBeTruthy())
+    expect(queryByRole('button', { name: 'Remove output' })).toBeNull()
+    fireEvent.click(getByText('More'))
+    fireEvent.click(await waitFor(() => getByRole('button', { name: 'Remove output' })))
+    expect(getByRole('dialog')).toBeTruthy()
+    fireEvent.click(getByRole('button', { name: 'Cancel' }))
+    expect(queryByRole('dialog')).toBeNull()
+  })
+  it('keeps system outputs out of the playback controls', async () => {
+    listDevices.mockResolvedValue([
+      makeOutput(),
+      {
+        ...makeOutput({ id: 9, name: 'visualizer' }),
+        role: 'system',
+        selectable: false,
+      } as OutputDevice,
+    ])
+
+    const { getByRole, queryByRole } = render(<DevicesView />)
+    await waitFor(() => expect(getByRole('button', { name: 'Enable DSP for USB DAC' })).toBeTruthy())
+    expect(queryByRole('button', { name: 'Enable DSP for visualizer' })).toBeNull()
+  })
+
+  it('shows Pair for an unpaired Bluetooth candidate', async () => {
+    listBluetoothDevices.mockResolvedValue([makeDevice({ paired: false })])
+
+    const { getByRole } = render(<DevicesView />)
+    const pairButton = await waitFor(() => getByRole('button', { name: 'Pair' }))
+    fireEvent.click(pairButton)
+    await waitFor(() => expect(pair).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF'))
+  })
+
+  it('reports Bluetooth 503 as unavailable and retries the terminal state', async () => {
+    listBluetoothDevices
+      .mockRejectedValueOnce(new ApiError(503, 'BlueZ is unavailable'))
+      .mockResolvedValueOnce([])
+
+    const { getByRole } = render(<DevicesView />)
+    const retry = await waitFor(() => getByRole('button', { name: 'Retry Bluetooth' }))
+    fireEvent.click(retry)
+    await waitFor(() => expect(listBluetoothDevices).toHaveBeenCalledTimes(2))
   })
 })

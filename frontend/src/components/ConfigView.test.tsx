@@ -16,10 +16,25 @@ vi.mock('../api', () => ({
       static_dir: '/tmp',
     }),
     version: vi.fn().mockResolvedValue({ version: '0.1.0' }),
+    devices: vi.fn().mockResolvedValue([{
+      id: 1,
+      name: 'USB DAC',
+      enabled: true,
+      role: 'playback',
+      selectable: true,
+      selection_key: 'alsa:USB DAC',
+      configured: true,
+      available: true,
+      connected: null,
+      active: true,
+      dsp_supported: true,
+      dsp_enabled: false,
+    }]),
   },
 }))
 
 vi.mock('./DevicesView', () => ({ DevicesView: () => null }))
+
 vi.mock('./DspView', () => ({ DspView: () => null }))
 
 describe('ConfigView version', () => {
@@ -32,5 +47,25 @@ describe('ConfigView version', () => {
       }) as HTMLInputElement
       expect(checkbox.checked).toBe(true)
     })
+  })
+  it('keeps route health visible while administration config loads', async () => {
+    render(
+      <ConfigView
+        status={{
+          state: 'playing',
+          volume: 70,
+          elapsed: 4,
+          duration: 120,
+          outputs: [{ id: 1, name: 'USB DAC', enabled: true }],
+          error: null,
+          current_song: null,
+          random: false,
+        }}
+        statusConnected
+        statusLastUpdatedAt={Date.now()}
+      />,
+    )
+    expect(await screen.findByText('Healthy')).toBeTruthy()
+    expect(screen.getAllByText('USB DAC').length).toBeGreaterThan(0)
   })
 })

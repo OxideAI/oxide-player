@@ -64,9 +64,9 @@ export function App() {
   const overlayRef = useRef<HTMLDivElement>(null)
 
   // Live player status + queue, pushed over a single WebSocket (issue #3).
-  const { status, queue, notice, connected } = usePlayerStatus()
+  const { status, queue, notice, connected, error: statusError, lastSnapshotAt } = usePlayerStatus()
   const connectionError =
-    status === null && !connected ? 'Connecting to player…' : null
+    statusError ?? (status === null && !connected ? 'Connecting to player…' : null)
   const banner = error ?? connectionError
 
   useEffect(() => {
@@ -335,7 +335,14 @@ export function App() {
             isPlaying={status?.state === 'playing'}
           />
         )}
-        {tab === 'settings' && <ConfigView />}
+        {tab === 'settings' && (
+          <ConfigView
+            status={status}
+            statusConnected={connected}
+            statusError={statusError}
+            statusLastUpdatedAt={lastSnapshotAt}
+          />
+        )}
         {searchQuery && (
           <SearchView
             query={searchQuery}

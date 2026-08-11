@@ -8,6 +8,7 @@ export interface PlayerState {
   notice: PlaybackNotice | null
   connected: boolean
   error: string | null
+  lastSnapshotAt: number | null
 }
 
 const MAX_BACKOFF = 10000
@@ -35,6 +36,7 @@ export function usePlayerStatus(): PlayerState {
     notice: null,
     connected: false,
     error: null,
+    lastSnapshotAt: null,
   })
   const backoff = useRef(1000)
   const stopped = useRef(false)
@@ -55,6 +57,7 @@ export function usePlayerStatus(): PlayerState {
             ...s,
             status: status ?? s.status,
             queue: queue ?? s.queue,
+            lastSnapshotAt: status ? Date.now() : s.lastSnapshotAt,
           }))
         })
         .catch(() => {})
@@ -88,7 +91,7 @@ export function usePlayerStatus(): PlayerState {
           return
         }
         if (event.type === 'status') {
-          setState((s) => ({ ...s, status: event }))
+          setState((s) => ({ ...s, status: event, lastSnapshotAt: Date.now() }))
         } else if (event.type === 'queue') {
           setState((s) => ({ ...s, queue: event }))
         } else if (event.type === 'notice') {

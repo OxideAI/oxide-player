@@ -308,3 +308,22 @@
   opacity: 0.6;
   cursor: default;
 }
+.admin {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.adminSummary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-weight: 700;
+}
+

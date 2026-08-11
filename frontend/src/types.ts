@@ -63,6 +63,32 @@ export interface OutputDevice {
   dsp_reason?: string
 }
 
+export type DeviceOutputRole = 'playback' | 'system' | 'unknown'
+export type DeviceOutputDiagnosticCode =
+  | 'reload_error'
+  | 'unsupported_output_type'
+  | 'disconnected'
+  | 'inactive'
+  | 'missing_profile'
+  | 'unknown_output'
+
+/** Enriched `/api/devices` detail; distinct from the live WS output shape. */
+export interface DeviceOutput extends OutputDevice {
+  role: DeviceOutputRole
+  selectable: boolean
+  selection_key: string
+  configured: boolean
+  available: boolean
+  connected: boolean | null
+  active: boolean
+  dsp_supported: boolean
+  dsp_enabled: boolean
+  /** Configured ALSA/BlueALSA endpoint used to match the selected DSP profile. */
+  dsp_device?: string
+  diagnostic_code?: DeviceOutputDiagnosticCode
+  technical_detail?: string
+}
+
 export type PlaybackState = 'playing' | 'paused' | 'stopped'
 
 export interface PlayerStatus {
@@ -110,10 +136,17 @@ export interface DspProfile {
   preamp: number
   eq_bands: EqBand[]
 }
-
 export interface DspSettings {
   preamp: number
   eq_bands: EqBand[]
+}
+
+export interface DspApplyResult {
+  device: string
+  persisted: boolean
+  reload_confirmed: boolean
+  active: boolean
+  reload_error?: string
 }
 
 /// A Bluetooth device as returned by the backend.
@@ -217,4 +250,23 @@ export interface Config {
   visualizer_fft: boolean
   visualizer_capture_device: string | null
   visualizer_capture_rate: number | null
+}
+
+export type VisualizerStatusState =
+  | 'disabled'
+  | 'enabled-pending-restart'
+  | 'running'
+  | 'waiting-for-capture'
+  | 'startup/runtime-error'
+
+export interface VisualizerStatus {
+  status: VisualizerStatusState
+  configured_enabled: boolean
+  applied_enabled: boolean
+  configured_source: string | null
+  configured_rate: number | null
+  applied_source: string | null
+  applied_rate: number | null
+  restart_required: boolean
+  detail: string | null
 }

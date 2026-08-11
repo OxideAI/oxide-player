@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { DeviceOutput } from '../types'
 import { DspView, formatDspSettings } from './DspView'
 
 const apiMock = vi.hoisted(() => ({
@@ -147,5 +148,94 @@ describe('DspView preamp and imports', () => {
         delete (URL as unknown as Record<string, unknown>).revokeObjectURL
       }
     }
+  })
+})
+
+describe('DspView route verification', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiMock.dsp.mockResolvedValue([
+      {
+        device: 'hw:USB,0',
+        mode: 'bit_perfect',
+        target_rate: null,
+        preset: 'balanced',
+        preamp: 0,
+        eq_bands: [],
+      },
+    ])
+    apiMock.setDsp.mockResolvedValue({
+      device: 'hw:USB,0',
+      persisted: true,
+      reload_confirmed: true,
+      active: true,
+    })
+  })
+  const output = (patch: Partial<DeviceOutput> = {}): DeviceOutput => ({
+    id: 1,
+    name: 'USB DAC',
+    enabled: true,
+    role: 'playback',
+    selectable: true,
+    selection_key: 'alsa:USB DAC',
+    configured: true,
+    available: true,
+    connected: null,
+    active: true,
+    dsp_supported: true,
+    dsp_enabled: false,
+    dsp_device: 'hw:USB,0',
+    ...patch,
+  })
+
+  it('shows unsupported outputs before exposing the editor', async () => {
+    render(<DspView selectedOutput={output({ dsp_supported: false, diagnostic_code: 'unsupported_output_type' })} />)
+    expect(await screen.findByText('This output does not support DSP.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull()
+  })
+
+  it('distinguishes a persisted but unconfirmed reload and allows reconcile retry', async () => {
+    apiMock.setDsp
+      .mockResolvedValueOnce({
+        device: 'hw:USB,0',
+        persisted: true,
+        reload_confirmed: false,
+        active: false,
+        reload_error: 'CamillaDSP reload refused',
+      })
+      .mockResolvedValueOnce({
+        device: 'hw:USB,0',
+        persisted: true,
+        reload_confirmed: true,
+        active: true,
+      })
+    const onRefresh = vi.fn()
+    render(<DspView selectedOutput={output()} onRefresh={onRefresh} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit EQ and resampling' }))
+    const preamp = await screen.findByRole('spinbutton', { name: 'Preamp gain (dB)' })
+    fireEvent.change(preamp, { target: { value: '-4' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    await waitFor(() => expect(apiMock.setDsp).toHaveBeenCalled())
+    expect(await screen.findByText(/Saved, but the DSP route is not confirmed/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(await screen.findByText('Saved and reload-confirmed active.')).toBeTruthy()
+    expect(onRefresh).toHaveBeenCalledTimes(2)
+  })
+
+  it('requires an explicit choice before switching a dirty output draft', async () => {
+    const first = output()
+    const second = output({ id: 2, name: 'Headphones', selection_key: 'alsa:Headphones', dsp_device: 'hw:Headphones,0' })
+    const onSelectOutput = vi.fn()
+    const view = render(<DspView selectedOutput={first} onSelectOutput={onSelectOutput} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit EQ and resampling' }))
+    const preamp = await screen.findByRole('spinbutton', { name: 'Preamp gain (dB)' })
+    fireEvent.change(preamp, { target: { value: '-2' } })
+    view.rerender(<DspView selectedOutput={second} onSelectOutput={onSelectOutput} />)
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Keep editing' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Discard and switch' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and switch' }))
+    expect(onSelectOutput).toHaveBeenLastCalledWith(second.selection_key)
   })
 })

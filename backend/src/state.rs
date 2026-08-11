@@ -245,6 +245,11 @@ impl AppState {
     pub fn visualizer(&self) -> &VisualizerAnalyzer {
         &self.inner.visualizer
     }
+    pub async fn visualizer_status(&self) -> crate::visualizer::VisualizerStatus {
+        let config = self.config().await;
+        self.inner.visualizer.status(&config)
+    }
+
 
     pub fn radio(&self) -> &RadioManager {
         &self.inner.radio

@@ -1,0 +1,273 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.routeCard,
+.outputs,
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 1.15rem 1.2rem;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-glow);
+}
+
+.routeCard {
+  border-color: rgba(110, 231, 183, 0.4);
+}
+
+.routeHead,
+.sectionHead,
+.controlRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.routeHead,
+.sectionHead {
+  align-items: flex-start;
+}
+
+.eyebrow {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--accent);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.title,
+.sectionTitle {
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.title {
+  font-size: 1.35rem;
+}
+
+.sectionTitle {
+  font-size: 1.05rem;
+}
+
+.state,
+.count {
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  padding: 0.25rem 0.65rem;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.state_healthy {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.state_paused,
+.state_stopped,
+.state_multiple-output {
+  color: var(--accent-2);
+  border-color: var(--accent-2);
+  background: rgba(139, 156, 255, 0.12);
+}
+
+.state_mpd-error,
+.state_unavailable,
+.state_zero-output,
+.state_stale {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.message,
+.destination,
+.muted,
+.warning,
+.error {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.message,
+.destination {
+  color: var(--text-dim);
+}
+
+.destination strong {
+  color: var(--text);
+}
+
+.muted {
+  color: var(--text-faint);
+  font-size: 0.86rem;
+}
+
+.warning {
+  color: var(--accent-2);
+  font-size: 0.83rem;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 0.84rem;
+}
+
+.primary,
+.secondary {
+  min-height: 44px;
+  border-radius: var(--r-pill);
+  padding: 0.58rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary {
+  align-self: flex-start;
+  border: 0;
+  color: var(--bg);
+  background: conic-gradient(from 180deg, var(--accent), var(--accent-2), var(--accent));
+  box-shadow: var(--glow-accent);
+}
+
+.secondary {
+  border: 1px solid var(--hairline-strong);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.primary:disabled,
+.secondary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.outputList {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.outputRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  min-height: 56px;
+  width: 100%;
+  padding: 0.7rem 0.85rem;
+  color: var(--text);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.outputRow:hover,
+.outputSelected {
+  border-color: var(--accent);
+  background: rgba(110, 231, 183, 0.08);
+}
+
+.outputMeta,
+.outputAction {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+.outputAction {
+  margin-top: 0;
+  color: var(--accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.technical {
+  margin-top: 0.3rem;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.technical summary {
+  min-height: 44px;
+  padding-top: 0.65rem;
+  cursor: pointer;
+}
+
+.technical dl {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.technical dl div {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) 1fr;
+  gap: 0.6rem;
+}
+
+.technical dt {
+  color: var(--text-faint);
+}
+
+.technical dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.dialog {
+  width: min(100%, 420px);
+  padding: 1.25rem;
+  background: var(--bg);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-glow);
+}
+
+.dialog h3 {
+  margin-top: 0;
+}
+
+.dialog p {
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+@media (max-width: 560px) {
+  .routeHead,
+  .sectionHead,
+  .controlRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .primary,
+  .secondary {
+    width: 100%;
+  }
+}

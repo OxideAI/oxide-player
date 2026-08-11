@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
+  DeviceOutput,
+  DspApplyResult,
   DspMode,
   DspProfile,
   DspSettings,
@@ -66,15 +68,18 @@ export function formatDspSettings(
   })
   return `${lines.join('\n')}\n`
 }
-
 function ProfileEditor({
   profile,
   onSave,
   onRemove,
+  advanced = true,
+  onDirtyChange,
 }: {
   profile: DspProfile
   onSave: (p: DspProfile) => Promise<unknown>
   onRemove?: () => void
+  advanced?: boolean
+  onDirtyChange?: (dirty: boolean) => void
 }) {
   // Draft carries stable _id'd band rows so re-sorting the band list by freq
   // never resets React element identity (and thus input focus).
@@ -95,8 +100,13 @@ function ProfileEditor({
   const [importing, setImporting] = useState(false)
   const [importNotice, setImportNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [editingAdvanced, setEditingAdvanced] = useState(advanced)
 
-  useEffect(() => setDraft(toRows(profile)), [profile, toRows])
+  useEffect(() => {
+    setDraft(toRows(profile))
+    onDirtyChange?.(false)
+  }, [profile, toRows, onDirtyChange])
+
 
   // Sorted bands for display & graph. Live re-sort is deferred to the freq
   // input's blur so typing a frequency mid-edit never yanks the focused row
@@ -106,18 +116,26 @@ function ProfileEditor({
     [draft.eq_bands],
   )
 
-  const update = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }))
+  const update = (patch: Partial<Draft>) => {
+    onDirtyChange?.(true)
+    setDraft((d) => ({ ...d, ...patch }))
+  }
 
-  const updateBand = (id: number, patch: Partial<EqBand>) =>
+  const updateBand = (id: number, patch: Partial<EqBand>) => {
+    onDirtyChange?.(true)
     setDraft((d) => ({
       ...d,
       eq_bands: d.eq_bands.map((b) => (b._id === id ? { ...b, ...patch } : b)),
     }))
+  }
 
-  const sortBandsByFreq = () =>
+  const sortBandsByFreq = () => {
+    onDirtyChange?.(true)
     setDraft((d) => ({ ...d, eq_bands: [...d.eq_bands].sort((a, b) => a.freq - b.freq) }))
+  }
 
-  const addBand = () =>
+  const addBand = () => {
+    onDirtyChange?.(true)
     setDraft((d) => ({
       ...d,
       eq_bands: [
@@ -125,11 +143,15 @@ function ProfileEditor({
         { type: 'peaking', freq: 1000, gain: 0, q: 1, _id: nextBandId() },
       ],
     }))
+  }
 
-  const removeBand = (id: number) =>
+  const removeBand = (id: number) => {
+    onDirtyChange?.(true)
     setDraft((d) => ({ ...d, eq_bands: d.eq_bands.filter((b) => b._id !== id) }))
+  }
 
   const applyImported = (settings: DspSettings) => {
+    onDirtyChange?.(true)
     setDraft((d) => ({
       ...d,
       preamp: settings.preamp,
@@ -215,14 +237,15 @@ function ProfileEditor({
     setError(null)
     try {
       await onSave(ordered)
+      onDirtyChange?.(false)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setSaving(false)
     }
   }
-
   const resampling = draft.mode === 'resample'
+  const editorOpen = advanced || editingAdvanced
 
   return (
     <div className={styles.profile}>
@@ -253,6 +276,17 @@ function ProfileEditor({
           </button>
         )}
       </div>
+      {!advanced && (
+        <button
+          className={styles.advancedToggle}
+          aria-expanded={editorOpen}
+          onClick={() => setEditingAdvanced((open) => !open)}
+        >
+          {editorOpen ? 'Hide advanced editing' : 'Edit EQ and resampling'}
+        </button>
+      )}
+      {editorOpen && (
+        <>
 
       <fieldset className={styles.fields} disabled={!resampling}>
         <label className={styles.field}>
@@ -414,6 +448,8 @@ function ProfileEditor({
         ))}
       </div>
 
+        </>
+      )}
       {error && <div className={styles.error}>{error}</div>}
       <div className={styles.actions}>
         <button className={styles.export} onClick={exportSettings}>
@@ -427,29 +463,55 @@ function ProfileEditor({
   )
 }
 
-export function DspView() {
+export interface DspViewProps {
+  selectedOutput?: DeviceOutput | null
+  outputs?: DeviceOutput[]
+  onSelectOutput?: (selectionKey: string | null) => void
+  onRefresh?: () => Promise<void> | void
+}
+
+export function DspView({
+  selectedOutput = undefined,
+  outputs: _outputs,
+  onSelectOutput,
+  onRefresh,
+}: DspViewProps = {}) {
   const [profiles, setProfiles] = useState<DspProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const [applyState, setApplyState] = useState<DspApplyResult | null>(null)
+  const [pendingOutputKey, setPendingOutputKey] = useState<string | null>(null)
+  const previousOutputKey = useRef<string | null>(selectedOutput?.selection_key ?? null)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const got = await api.dsp()
-      // Always surface at least one editable profile so the EQ is reachable
-      // even when no DSP profiles are configured server-side.
-      setProfiles(got.length ? got : [defaultProfile('default')])
+      setProfiles(got.length ? got : [defaultProfile(selectedOutput?.dsp_device ?? 'default')])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [selectedOutput?.dsp_device])
 
   useEffect(() => {
-    load()
+    void load()
   }, [load])
+
+  useEffect(() => {
+    const nextKey = selectedOutput?.selection_key ?? null
+    if (nextKey === previousOutputKey.current) return
+    if (dirty && previousOutputKey.current && onSelectOutput) {
+      setPendingOutputKey(nextKey)
+      onSelectOutput(previousOutputKey.current)
+      return
+    }
+    previousOutputKey.current = nextKey
+    setApplyState(null)
+  }, [dirty, onSelectOutput, selectedOutput?.selection_key])
 
   const upsert = useCallback((p: DspProfile) => {
     setProfiles((list) => {
@@ -467,6 +529,34 @@ export function DspView() {
     setProfiles((list) => [...list, defaultProfile(`device-${list.length + 1}`)])
   }, [])
 
+  const selectedProfile = selectedOutput?.dsp_device
+    ? profiles.find((profile) => profile.device === selectedOutput.dsp_device)
+    : undefined
+  const editorProfiles = selectedOutput
+    ? [selectedProfile ?? defaultProfile(selectedOutput.dsp_device ?? selectedOutput.name)]
+    : profiles
+  const blockedReason = selectedOutput?.diagnostic_code
+  const dspUnavailable = Boolean(
+    selectedOutput &&
+      (!selectedOutput.dsp_supported ||
+        blockedReason === 'unsupported_output_type' ||
+        blockedReason === 'disconnected' ||
+        blockedReason === 'inactive'),
+  )
+
+  const apply = async (np: DspProfile) => {
+    const result = (await api.setDsp(np)) as DspApplyResult | undefined
+    const normalized: DspApplyResult = result ?? {
+      device: np.device,
+      persisted: true,
+      reload_confirmed: true,
+      active: true,
+    }
+    setApplyState(normalized)
+    upsert(np)
+    if (normalized.persisted) await onRefresh?.()
+  }
+
   if (loading) return <p className={styles.dim}>loading…</p>
   if (error) return <div className={styles.error}>{error}</div>
 
@@ -476,28 +566,84 @@ export function DspView() {
         <span className={styles.eyebrow}>Engine</span>
         <h2 className={styles.h}>DSP profiles</h2>
       </div>
-      <p className={styles.dim}>
-        Bit-perfect bypasses the resampler for unchanged passthrough. Resample + DSP changes the
-        output sample rate via a Soxr resampler. The parametric EQ below can be used in either mode
-        (R10: bit-perfect applies EQ without resampling). Set the device to your CamillaDSP playback
-        device name.
-      </p>
-
-      {profiles.map((p, i) => (
-        <ProfileEditor
-          key={i}
-          profile={p}
-          onSave={async (np) => {
-            await api.setDsp(np)
-            upsert(np)
-          }}
-          onRemove={profiles.length > 1 ? () => remove(p.device) : undefined}
-        />
-      ))}
-
-      <button className={styles.addProfile} onClick={addProfile}>
-        + Add DSP profile
-      </button>
+      {selectedOutput && (
+        <section className={styles.routeStatus} aria-live="polite">
+          <strong>{selectedOutput.name}</strong>
+          {dspUnavailable ? (
+            <p>
+              {blockedReason === 'disconnected'
+                ? 'DSP is unavailable while this Bluetooth output is disconnected.'
+                : blockedReason === 'inactive'
+                  ? 'Enable this output before configuring its DSP route.'
+                  : 'This output does not support DSP.'}
+            </p>
+          ) : (
+            <>
+              <p>
+                {selectedOutput.dsp_enabled
+                  ? `DSP route active${selectedProfile ? ` · ${selectedProfile.device}` : ''}.`
+                  : blockedReason === 'missing_profile'
+                    ? 'DSP is supported, but this output has no saved profile yet.'
+                    : 'DSP is supported for this output; the route is not active.'}
+              </p>
+              {applyState && (
+                <p className={applyState.reload_confirmed ? styles.success : styles.warning}>
+                  {applyState.reload_confirmed
+                    ? 'Saved and reload-confirmed active.'
+                    : `Saved, but the DSP route is not confirmed.${applyState.reload_error ? ` ${applyState.reload_error}` : ''}`}
+                </p>
+              )}
+            </>
+          )}
+        </section>
+      )}
+      {!selectedOutput && (
+        <p className={styles.dim}>
+          Bit-perfect bypasses the resampler for unchanged passthrough. Select a playback output to
+          verify DSP routing before editing advanced settings.
+        </p>
+      )}
+      {selectedOutput && dspUnavailable ? (
+        <p className={styles.dim}>Choose a supported, active playback output to edit DSP settings.</p>
+      ) : (
+        <>
+          {editorProfiles.map((p, i) => (
+            <ProfileEditor
+              key={p.device || i}
+              profile={p}
+              advanced={!selectedOutput}
+              onDirtyChange={setDirty}
+              onSave={apply}
+              onRemove={!selectedOutput && profiles.length > 1 ? () => remove(p.device) : undefined}
+            />
+          ))}
+          {!selectedOutput && (
+            <button className={styles.addProfile} onClick={addProfile}>
+              + Add DSP profile
+            </button>
+          )}
+        </>
+      )}
+      {pendingOutputKey !== null && (
+        <div className={styles.switchDialog} role="dialog" aria-modal="true" aria-labelledby="dsp-switch-title">
+          <h3 id="dsp-switch-title">Unsaved DSP edits</h3>
+          <p>Keep editing this profile, or discard the draft before switching outputs?</p>
+          <div className={styles.switchActions}>
+            <button onClick={() => setPendingOutputKey(null)}>Keep editing</button>
+            <button
+              onClick={() => {
+                setDirty(false)
+                previousOutputKey.current = pendingOutputKey
+                onSelectOutput?.(pendingOutputKey)
+                setPendingOutputKey(null)
+              }}
+            >
+              Discard and switch
+            </button>
+            <button onClick={() => setPendingOutputKey(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

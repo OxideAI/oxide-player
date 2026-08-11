@@ -10,6 +10,102 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::broadcast;
 
+/// Runtime lifecycle of the visualizer capture path.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum VisualizerStatusState {
+    Disabled,
+    EnabledPendingRestart,
+    Running,
+    WaitingForCapture,
+    #[serde(rename = "startup/runtime-error")]
+    StartupRuntimeError,
+}
+
+/// Observable visualizer configuration and capture lifecycle.
+#[derive(Clone, Debug, Serialize)]
+pub struct VisualizerStatus {
+    pub status: VisualizerStatusState,
+    pub configured_enabled: bool,
+    pub applied_enabled: bool,
+    pub configured_source: Option<String>,
+    pub configured_rate: Option<u32>,
+    pub applied_source: Option<String>,
+    pub applied_rate: Option<u32>,
+    pub restart_required: bool,
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VisualizerStatusEvent {
+    CaptureStarted,
+    CaptureWaiting,
+    StartupRuntimeError(String),
+    RuntimeError(String),
+}
+
+fn transition_status(status: &Arc<Mutex<VisualizerStatus>>, event: VisualizerStatusEvent) {
+    let mut current = status.lock().expect("visualizer status lock");
+    *current = reduce_visualizer_status(current.clone(), event);
+}
+
+/// Pure lifecycle reducer used by the analyzer and deterministic unit tests.
+pub fn reduce_visualizer_status(
+    mut current: VisualizerStatus,
+    event: VisualizerStatusEvent,
+) -> VisualizerStatus {
+    match event {
+        VisualizerStatusEvent::CaptureStarted => {
+            current.status = VisualizerStatusState::Running;
+            current.detail = None;
+        }
+        VisualizerStatusEvent::CaptureWaiting => {
+            current.status = VisualizerStatusState::WaitingForCapture;
+            current.detail = None;
+        }
+        VisualizerStatusEvent::StartupRuntimeError(detail)
+        | VisualizerStatusEvent::RuntimeError(detail) => {
+            current.status = VisualizerStatusState::StartupRuntimeError;
+            current.detail = Some(detail);
+        }
+    }
+    current
+}
+
+fn configured_source(config: &Config) -> Option<String> {
+    config
+        .visualizer_fifo
+        .clone()
+        .or_else(|| config.visualizer_capture_device.clone())
+        .or_else(|| config.camilladsp_capture_device.clone())
+        .or_else(|| Some(DEFAULT_CAPTURE_DEVICE.to_string()))
+}
+
+fn configured_rate(config: &Config) -> Option<u32> {
+    config
+        .visualizer_capture_rate
+        .or(config.camilladsp_capture_rate)
+        .or(Some(DEFAULT_CAPTURE_RATE))
+}
+
+fn initial_status(config: &Config) -> VisualizerStatus {
+    VisualizerStatus {
+        status: if config.visualizer_fft {
+            VisualizerStatusState::WaitingForCapture
+        } else {
+            VisualizerStatusState::Disabled
+        },
+        configured_enabled: config.visualizer_fft,
+        applied_enabled: config.visualizer_fft,
+        configured_source: configured_source(config),
+        configured_rate: configured_rate(config),
+        applied_source: configured_source(config),
+        applied_rate: configured_rate(config),
+        restart_required: false,
+        detail: None,
+    }
+}
+
 /// Number of magnitude bins published to clients. The spectrum is log-grouped
 /// into this many bands so the visualizer gets a musically useful, evenly
 /// spaced low→high breakdown rather than raw FFT bins. The frontend mirrors
@@ -132,7 +228,35 @@ pub struct VisualizerAnalyzer {
 
 struct Inner {
     tx: broadcast::Sender<SpectrumFrame>,
+    status: Arc<Mutex<VisualizerStatus>>,
 }
+
+impl VisualizerAnalyzer {
+    fn transition(&self, event: VisualizerStatusEvent) {
+        transition_status(&self.inner.status, event);
+    }
+
+    /// Return runtime state joined with the currently configured values.
+    /// Config changes are persisted before a process restart, so a mismatch
+    /// between configured and applied values is explicitly pending.
+    pub fn status(&self, config: &Config) -> VisualizerStatus {
+        let mut status = self.inner.status.lock().expect("visualizer status lock").clone();
+        status.configured_enabled = config.visualizer_fft;
+        status.configured_source = configured_source(config);
+        status.configured_rate = configured_rate(config);
+        status.restart_required = status.configured_enabled != status.applied_enabled
+            || status.configured_source != status.applied_source
+            || status.configured_rate != status.applied_rate;
+        if status.restart_required {
+            status.status = VisualizerStatusState::EnabledPendingRestart;
+            status.detail = None;
+        } else if !status.applied_enabled {
+            status.status = VisualizerStatusState::Disabled;
+        }
+        status
+    }
+}
+
 
 impl VisualizerAnalyzer {
     /// Build the analyzer and start capturing if `enabled`. When disabled, the
@@ -141,15 +265,20 @@ impl VisualizerAnalyzer {
     pub fn new(config: &Config) -> Self {
         let (tx, _rx) = broadcast::channel(64);
         let analyzer = VisualizerAnalyzer {
-            inner: Arc::new(Inner { tx }),
+            inner: Arc::new(Inner {
+                tx,
+                status: Arc::new(Mutex::new(initial_status(config))),
+            }),
         };
         if config.visualizer_fft {
             if let Err(e) = analyzer.start(config) {
                 tracing::warn!("visualizer FFT capture did not start: {e}");
+                analyzer.transition(VisualizerStatusEvent::StartupRuntimeError(e.to_string()));
             }
         }
         analyzer
     }
+
 
     /// Subscribe a client to spectrum frames.
     pub fn subscribe(&self) -> broadcast::Receiver<SpectrumFrame> {
@@ -231,22 +360,22 @@ impl VisualizerAnalyzer {
         let shared_capture = shared.clone();
 
         let err_tx = tx.clone();
+        let status = self.inner.status.clone();
         let stream = build_stream_for_format(
             &device,
             &stream_config,
             sample_format,
             shared_capture,
             &err_tx,
+            status,
         )?;
 
         stream.play().map_err(|e| anyhow::anyhow!("play stream: {e}"))?;
         // Keep the stream alive for the process lifetime without holding a
         // `!Send` `cpal::Stream` inside the `Send` `AppState`. Leaking is safe:
         // capture runs until the process exits, which is exactly what we want.
-        let _ = Box::leak(Box::new(stream));
-
         self.spawn_publisher(shared, tx);
-
+        self.transition(VisualizerStatusEvent::CaptureStarted);
         tracing::info!(
             "visualizer FFT capture started on device '{device_name}' @ {rate} Hz, {channels}ch, {BANDS} bands"
         );
@@ -301,8 +430,8 @@ impl VisualizerAnalyzer {
         let shared_reader = shared.clone();
         let tx = self.inner.tx.clone();
         let path_owned = path.to_string();
-        // Opening a fifo read-end blocks until a writer (MPD) opens it, so the
-        // reader lives on a dedicated OS thread, not the async runtime.
+        let status = self.inner.status.clone();
+        let status_reader = status.clone();
         std::thread::Builder::new()
             .name("visualizer-fifo".into())
             .spawn(move || {
@@ -310,18 +439,33 @@ impl VisualizerAnalyzer {
                     match std::fs::File::open(&path_owned) {
                         Ok(file) => {
                             tracing::info!("visualizer fifo '{path_owned}' open, reading S16_LE stereo");
-                            if let Err(e) = read_fifo(file, &shared_reader, CHANNELS) {
-                                tracing::warn!("visualizer fifo '{path_owned}' read error: {e}");
+                            transition_status(&status_reader, VisualizerStatusEvent::CaptureStarted);
+                            match read_fifo(file, &shared_reader, CHANNELS) {
+                                Ok(()) => {
+                                    transition_status(&status_reader, VisualizerStatusEvent::CaptureWaiting);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("visualizer fifo '{path_owned}' read error: {e}");
+                                    transition_status(
+                                        &status_reader,
+                                        VisualizerStatusEvent::RuntimeError(e.to_string()),
+                                    );
+                                }
                             }
                             // Writer closed (MPD restart/stop): reopen shortly.
                             std::thread::sleep(std::time::Duration::from_secs(1));
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                             tracing::debug!("visualizer fifo '{path_owned}' not present yet, retrying");
+                            transition_status(&status_reader, VisualizerStatusEvent::CaptureWaiting);
                             std::thread::sleep(std::time::Duration::from_secs(2));
                         }
                         Err(e) => {
                             tracing::warn!("visualizer fifo '{path_owned}' cannot be opened: {e}");
+                            transition_status(
+                                &status_reader,
+                                VisualizerStatusEvent::RuntimeError(e.to_string()),
+                            );
                             std::thread::sleep(std::time::Duration::from_secs(2));
                         }
                     }
@@ -330,6 +474,7 @@ impl VisualizerAnalyzer {
             .map_err(|e| anyhow::anyhow!("spawn fifo reader thread: {e}"))?;
 
         self.spawn_publisher(shared, tx);
+        self.transition(VisualizerStatusEvent::CaptureWaiting);
         tracing::info!(
             "visualizer FFT capture started on MPD fifo '{path}' @ {RATE} Hz, {CHANNELS}ch, {BANDS} bands"
         );
@@ -471,38 +616,40 @@ fn build_stream_for_format(
     sample_format: SampleFormat,
     shared: Arc<SharedState>,
     err_tx: &broadcast::Sender<SpectrumFrame>,
+    status: Arc<Mutex<VisualizerStatus>>,
 ) -> Result<cpal::Stream> {
     match sample_format {
-        SampleFormat::I8 => build_stream::<i8>(device, config, shared, err_tx),
-        SampleFormat::I16 => build_stream::<i16>(device, config, shared, err_tx),
-        SampleFormat::I24 => build_stream::<cpal::I24>(device, config, shared, err_tx),
-        SampleFormat::I32 => build_stream::<i32>(device, config, shared, err_tx),
-        SampleFormat::I64 => build_stream::<i64>(device, config, shared, err_tx),
-        SampleFormat::U8 => build_stream::<u8>(device, config, shared, err_tx),
-        SampleFormat::U16 => build_stream::<u16>(device, config, shared, err_tx),
-        SampleFormat::U24 => build_stream::<cpal::U24>(device, config, shared, err_tx),
-        SampleFormat::U32 => build_stream::<u32>(device, config, shared, err_tx),
-        SampleFormat::U64 => build_stream::<u64>(device, config, shared, err_tx),
-        SampleFormat::F32 => build_stream::<f32>(device, config, shared, err_tx),
-        SampleFormat::F64 => build_stream::<f64>(device, config, shared, err_tx),
+        SampleFormat::I8 => build_stream::<i8>(device, config, shared, err_tx, status),
+        SampleFormat::I16 => build_stream::<i16>(device, config, shared, err_tx, status),
+        SampleFormat::I24 => build_stream::<cpal::I24>(device, config, shared, err_tx, status),
+        SampleFormat::I32 => build_stream::<i32>(device, config, shared, err_tx, status),
+        SampleFormat::I64 => build_stream::<i64>(device, config, shared, err_tx, status),
+        SampleFormat::U8 => build_stream::<u8>(device, config, shared, err_tx, status),
+        SampleFormat::U16 => build_stream::<u16>(device, config, shared, err_tx, status),
+        SampleFormat::U24 => build_stream::<cpal::U24>(device, config, shared, err_tx, status),
+        SampleFormat::U32 => build_stream::<u32>(device, config, shared, err_tx, status),
+        SampleFormat::U64 => build_stream::<u64>(device, config, shared, err_tx, status),
+        SampleFormat::F32 => build_stream::<f32>(device, config, shared, err_tx, status),
+        SampleFormat::F64 => build_stream::<f64>(device, config, shared, err_tx, status),
         // `SampleFormat` is #[non_exhaustive]: a format cpal adds later has no
         // builder here, and `every_cpal_sample_format_has_a_stream_builder`
         // must be extended to cover it.
         other => anyhow::bail!("unsupported capture sample format: {other:?}"),
     }
 }
-
 fn build_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     shared: Arc<SharedState>,
     err_tx: &broadcast::Sender<SpectrumFrame>,
+    status: Arc<Mutex<VisualizerStatus>>,
 ) -> Result<cpal::Stream>
 where
     T: cpal::Sample + cpal::SizedSample + cpal::FromSample<f32>,
     f32: cpal::FromSample<T>,
 {
     let err_tx = err_tx.clone();
+    let status = status.clone();
     let stream = device
         .build_input_stream(
             config.clone(),
@@ -522,6 +669,10 @@ where
             },
             move |err| {
                 tracing::warn!("visualizer capture error: {err}");
+                transition_status(
+                    &status,
+                    VisualizerStatusEvent::RuntimeError(err.to_string()),
+                );
                 let _ = err_tx;
             },
             None,
@@ -753,5 +904,52 @@ mod tests {
         assert!(device_text_matches("hw:Loopback,1", "hw:Loopback,1"));
         assert!(device_text_matches("Loopback", "hw:Loopback,1"));
         assert!(!device_text_matches("hw:Loopback,0", "hw:Loopback,1"));
+    }
+    fn base_status() -> VisualizerStatus {
+        VisualizerStatus {
+            status: VisualizerStatusState::WaitingForCapture,
+            configured_enabled: true,
+            applied_enabled: true,
+            configured_source: Some("fifo".into()),
+            configured_rate: Some(44_100),
+            applied_source: Some("fifo".into()),
+            applied_rate: Some(44_100),
+            restart_required: false,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn visualizer_status_reducer_distinguishes_lifecycle_states() {
+        let disabled = VisualizerStatus {
+            status: VisualizerStatusState::Disabled,
+            configured_enabled: false,
+            applied_enabled: false,
+            configured_source: None,
+            configured_rate: None,
+            applied_source: None,
+            applied_rate: None,
+            restart_required: false,
+            detail: None,
+        };
+        assert_eq!(disabled.status, VisualizerStatusState::Disabled);
+        assert_eq!(
+            reduce_visualizer_status(base_status(), VisualizerStatusEvent::CaptureWaiting).status,
+            VisualizerStatusState::WaitingForCapture
+        );
+        assert_eq!(
+            reduce_visualizer_status(base_status(), VisualizerStatusEvent::CaptureStarted).status,
+            VisualizerStatusState::Running
+        );
+        let error = reduce_visualizer_status(
+            base_status(),
+            VisualizerStatusEvent::StartupRuntimeError("invalid source".into()),
+        );
+        assert_eq!(error.status, VisualizerStatusState::StartupRuntimeError);
+        assert_eq!(error.detail.as_deref(), Some("invalid source"));
+        let waiting = reduce_visualizer_status(error, VisualizerStatusEvent::CaptureWaiting);
+        assert_eq!(waiting.status, VisualizerStatusState::WaitingForCapture);
+        let reopened = reduce_visualizer_status(waiting, VisualizerStatusEvent::CaptureStarted);
+        assert_eq!(reopened.status, VisualizerStatusState::Running);
     }
 }

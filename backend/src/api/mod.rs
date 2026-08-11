@@ -1,13 +1,18 @@
 use crate::devices::config_fragment::{
-    validate_config, DeviceConfig as DeviceConfigDto,
+    classify_output_role, diagnostic_code, output_selection_key, validate_config,
+    DeviceConfig as DeviceConfigDto, MANAGED_DSP_LOOPBACK_OUTPUT,
+    OutputDiagnosticFacts,
 };
 use crate::radio::RadioStation;
 use crate::dsp::{parse_dsp_text, DspSettings};
+use crate::dsp::camilladsp::DspApplyResult;
 use crate::dsp::profile::DspProfile;
 use crate::error::{AppError, AppResult};
 use crate::library::db::LibrarySnapshot;
+use crate::types::{
+    DeviceOutput, DeviceOutputDiagnosticCode, DeviceOutputRole, PlaybackState,
+};
 use crate::state::AppState;
-use crate::types::PlaybackState;
 use axum::extract::{Path, Query, Request, State, ws::WebSocketUpgrade};
 use axum::handler::HandlerWithoutStateExt;
 use axum::http::{header, HeaderValue, StatusCode};
@@ -55,6 +60,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/queue", get(queue))
         .route("/api/ws", get(ws))
         .route("/api/visualizer", get(visualizer_ws))
+        .route("/api/visualizer/status", get(visualizer_status))
         .route("/api/visualizer/params", get(visualizer_params_get))
         .route("/api/visualizer/params", put(visualizer_params_put))
         .route("/api/playback/shuffle", post(shuffle_queue))
@@ -180,6 +186,13 @@ async fn ws(
             }
         }
     })
+}
+
+/// Return the visualizer's configured/applied capture lifecycle.
+async fn visualizer_status(
+    State(s): State<AppState>,
+) -> AppResult<Json<crate::visualizer::VisualizerStatus>> {
+    Ok(Json(s.visualizer_status().await))
 }
 
 /// Return the saved visualizer look-and-feel params (from `<data_dir>/vizparams.json`,
@@ -670,18 +683,7 @@ async fn volume(State(s): State<AppState>, Json(b): Json<VolumeBody>) -> AppResu
     Ok(StatusCode::OK)
 }
 
-const DSP_LOOPBACK_NAME: &str = "camilladsp-loopback";
-
-#[derive(Serialize)]
-struct OutputDeviceResponse {
-    id: u32,
-    name: String,
-    enabled: bool,
-    dsp_supported: bool,
-    dsp_enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dsp_reason: Option<String>,
-}
+const DSP_LOOPBACK_NAME: &str = MANAGED_DSP_LOOPBACK_OUTPUT;
 
 fn bluetooth_address(device: &str) -> Option<&str> {
     device
@@ -712,11 +714,12 @@ fn configured_dsp_device(
     Ok(device.to_string())
 }
 
-async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<OutputDeviceResponse>>> {
+async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>> {
     let outputs = s.mpd().outputs().await?;
     let configs = s.device_configs().list();
     let bluetooth = s.bluetooth().list_devices().await;
     let active_device = s.dsp().active_device().await;
+    let profiles = s.dsp().list_profiles().await;
     let loopback_enabled = outputs
         .iter()
         .find(|output| output.name == DSP_LOOPBACK_NAME)
@@ -725,33 +728,89 @@ async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<OutputDeviceRe
     let response = outputs
         .into_iter()
         .map(|output| {
-            let configured_device = configured_dsp_device(&configs, &output);
-            let connected = configured_device.as_ref().map_or(true, |device| {
-                bluetooth_address(device).map_or(true, |address| {
-                    bluetooth
-                        .iter()
-                        .any(|device| device.address == address && device.connected)
-                })
+            let role = classify_output_role(&output.name, &configs);
+            let config = configs.iter().find(|config| config.name == output.name);
+            let device = config.and_then(|config| config.device.as_deref());
+            let bluetooth_address = device.and_then(bluetooth_address);
+            let connected = bluetooth_address.map(|address| {
+                bluetooth
+                    .iter()
+                    .any(|device| device.address.eq_ignore_ascii_case(address) && device.connected)
             });
+            let configured = config.is_some();
+            let dsp_device = configured_dsp_device(&configs, &output);
             let dsp_route_active = loopback_enabled
-                && active_device.as_deref() == configured_device.as_ref().ok().map(String::as_str);
-            let (base_supported, mut dsp_reason) = match (&configured_device, connected) {
-                (Ok(_), true) => (true, None),
-                (Ok(_), false) => (false, Some("Bluetooth output is not connected".to_string())),
-                (Err(reason), _) => (false, Some(reason.clone())),
+                && active_device.as_deref() == dsp_device.as_ref().ok().map(String::as_str);
+            let capability_supported = matches!(
+                (&config, device),
+                (Some(config), Some(device))
+                    if config.output_type.eq_ignore_ascii_case("alsa")
+                        && !device.trim().is_empty()
+            );
+            let dsp_supported = capability_supported
+                && connected != Some(false)
+                && (output.enabled || dsp_route_active);
+            let profile_configured = dsp_device.as_ref().ok().is_some_and(|device| {
+                profiles.iter().any(|profile| profile.device == *device)
+                    || profiles.iter().any(|profile| profile.device == "default")
+            });
+            let mut dsp_reason = if connected == Some(false) {
+                Some("Bluetooth output is not connected".to_string())
+            } else if !configured {
+                Some("output has no configured device preset".to_string())
+            } else if config.is_some_and(|config| !config.output_type.eq_ignore_ascii_case("alsa")) {
+                Some("only ALSA outputs support CamillaDSP".to_string())
+            } else if device.is_none_or(|device| device.trim().is_empty()) {
+                Some("output has no ALSA device configured".to_string())
+            } else {
+                None
             };
-            let dsp_supported = base_supported && (output.enabled || dsp_route_active);
-            if base_supported && !dsp_supported {
+            if capability_supported && !dsp_supported {
                 dsp_reason = Some("output is not active".to_string());
             }
             let dsp_enabled = dsp_supported && dsp_route_active;
-            OutputDeviceResponse {
-                id: output.id,
-                name: output.name,
+            let facts = OutputDiagnosticFacts {
+                role,
+                configured,
+                dsp_supported: capability_supported,
+                connected,
                 enabled: output.enabled,
+                profile_configured,
+                reload_error: false,
+            };
+            let diagnostic_code = diagnostic_code(facts);
+            let technical_detail = diagnostic_code.map(|code| match code {
+                DeviceOutputDiagnosticCode::ReloadError => "CamillaDSP reload was not confirmed".to_string(),
+                DeviceOutputDiagnosticCode::UnsupportedOutputType => dsp_reason
+                    .clone()
+                    .unwrap_or_else(|| "output type is not DSP-capable".to_string()),
+                DeviceOutputDiagnosticCode::Disconnected => "configured Bluetooth endpoint is disconnected".to_string(),
+                DeviceOutputDiagnosticCode::Inactive => "MPD reports this output as disabled".to_string(),
+                DeviceOutputDiagnosticCode::MissingProfile => "no saved DSP profile matches this output".to_string(),
+                DeviceOutputDiagnosticCode::UnknownOutput => "runtime output has no managed Oxide configuration".to_string(),
+            });
+            DeviceOutput {
+                id: output.id,
+                name: output.name.clone(),
+                enabled: output.enabled,
+                role,
+                selectable: role == DeviceOutputRole::Playback && configured,
+                selection_key: output_selection_key(
+                    &output.name,
+                    config.map_or("runtime", |config| config.output_type.as_str()),
+                    device,
+                    output.id,
+                ),
+                configured,
+                available: true,
+                connected,
+                active: output.enabled,
                 dsp_supported,
                 dsp_enabled,
                 dsp_reason,
+                diagnostic_code,
+                dsp_device: device.map(str::to_string),
+                technical_detail,
             }
         })
         .collect();
@@ -769,7 +828,24 @@ async fn enable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppRes
 }
 
 async fn disable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
+    let target = s
+        .mpd()
+        .outputs()
+        .await?
+        .into_iter()
+        .find(|output| output.id == id);
+    let active_device = s.dsp().active_device().await;
+    let target_device = target.as_ref().and_then(|output| {
+        configured_dsp_device(&s.device_configs().list(), output).ok()
+    });
     s.mpd().disable_output(id).await?;
+    if target
+        .as_ref()
+        .is_some_and(|output| output.name == DSP_LOOPBACK_NAME)
+        || target_device.as_deref() == active_device.as_deref()
+    {
+        s.dsp().clear_active_device().await;
+    }
     let _ = s.mpd().clear_error().await;
     // Keep volume capability state synchronized after switching outputs.
     s.refresh_status().await;
@@ -1139,13 +1215,14 @@ async fn dsp_get(State(s): State<AppState>) -> AppResult<Json<Vec<DspProfile>>> 
     Ok(Json(s.dsp().list_profiles().await))
 }
 
-async fn dsp_set(State(s): State<AppState>, Json(p): Json<DspProfile>) -> AppResult<StatusCode> {
+async fn dsp_set(State(s): State<AppState>, Json(p): Json<DspProfile>) -> AppResult<Json<DspApplyResult>> {
     p.validate().map_err(|e| AppError::BadRequest(e.to_string()))?;
-    s.dsp()
+    let result = s
+        .dsp()
         .apply_profile(p)
         .await
         .map_err(|e| AppError::Dsp(e.to_string()))?;
-    Ok(StatusCode::OK)
+    Ok(Json(result))
 }
 
 async fn playlists(State(s): State<AppState>) -> AppResult<Json<Vec<String>>> {
@@ -1619,6 +1696,36 @@ mod tests {
         assert_eq!(parsed["preamp"], -0.7);
         assert_eq!(parsed["eq_bands"][0]["type"], "peaking");
         assert_eq!(parsed["eq_bands"][0]["freq"], 1000.0);
+    }
+
+    #[tokio::test]
+    async fn dsp_set_endpoint_reports_persistence_and_reload_confirmation() {
+        let app = test_app().await;
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/api/dsp")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "device": "hw:USB,0",
+                    "mode": "bit_perfect",
+                    "target_rate": null,
+                    "preset": "balanced",
+                    "preamp": 0.0,
+                    "eq_bands": []
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["persisted"], true);
+        assert_eq!(parsed["reload_confirmed"], false);
+        assert_eq!(parsed["active"], false);
     }
 
     #[tokio::test]

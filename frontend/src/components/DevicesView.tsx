@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { BtDevice, DeviceConfig, InputStatusResponse, OutputDevice } from '../types'
-import { api } from '../api'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { BtDevice, DeviceConfig, DeviceOutput, InputStatusResponse } from '../types'
+import { btDisplayName } from '../types'
+import { api, ApiError } from '../api'
 import styles from './DevicesView.module.css'
 
 interface FormData {
@@ -23,90 +24,167 @@ const emptyForm: FormData = {
   dop: false,
 }
 
-export function DevicesView() {
-  // Runtime devices
-  const [devices, setDevices] = useState<OutputDevice[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<number | null>(null)
+export interface DevicesViewProps {
+  /** U2 may provide the ConfigView-owned snapshot; standalone use fetches it. */
+  outputs?: DeviceOutput[]
+  configs?: DeviceConfig[]
+  selectedOutputKey?: string | null
+  onSelectOutput?: (selectionKey: string) => void
+  onRefresh?: () => Promise<void> | void
+}
 
-  // Managed configs
-  const [configs, setConfigs] = useState<DeviceConfig[]>([])
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+
+function outputStatus(output: DeviceOutput): string {
+  if (output.diagnostic_code === 'reload_error') return 'Provisioning failed — retry MPD reload'
+  if (output.diagnostic_code === 'disconnected') return 'Bluetooth disconnected'
+  if (output.diagnostic_code === 'inactive') return 'Disabled'
+  if (output.diagnostic_code === 'missing_profile') return 'DSP profile missing'
+  if (output.diagnostic_code === 'unsupported_output_type') return 'Playback output · DSP unavailable'
+  if (output.connected === false) return 'Bluetooth disconnected'
+  if (output.enabled) return output.active ? 'Ready for playback' : 'Configured · waiting for MPD'
+  return 'Disabled'
+}
+
+function outputTypeLabel(type: string): string {
+  const known: Record<string, string> = {
+    alsa: 'USB / DAC',
+    pulse: 'PulseAudio',
+    fifo: 'Visualizer / FIFO',
+    httpd: 'HTTP daemon',
+    shout: 'Icecast',
+    recorder: 'Recorder',
+    null: 'Null',
+    pipe: 'Pipe',
+    jack: 'JACK',
+    opensl: 'OpenSL ES',
+    osx: 'CoreAudio',
+    wasapi: 'WASAPI',
+    winmm: 'Windows MM',
+  }
+  return known[type] ?? type
+}
+
+function isBluetoothConfig(config: DeviceConfig, address: string): boolean {
+  const device = config.device?.toUpperCase() ?? ''
+  return device.includes(`DEV=${address.toUpperCase()}`) || device.includes(address.toUpperCase())
+}
+
+export function DevicesView({
+  outputs: providedOutputs,
+  configs: providedConfigs,
+  selectedOutputKey = null,
+  onSelectOutput,
+  onRefresh,
+}: DevicesViewProps = {}) {
+  const [devices, setDevices] = useState<DeviceOutput[]>(providedOutputs ?? [])
+  const [deviceLoading, setDeviceLoading] = useState(providedOutputs === undefined)
+  const [deviceError, setDeviceError] = useState<string | null>(null)
+  const [deviceStale, setDeviceStale] = useState(false)
+
+  const [configs, setConfigs] = useState<DeviceConfig[]>(providedConfigs ?? [])
+  const [configLoading, setConfigLoading] = useState(providedConfigs === undefined)
+  const [configError, setConfigError] = useState<string | null>(null)
+  const [configStale, setConfigStale] = useState(false)
+  const [busy, setBusy] = useState<number | null>(null)
   const [restartPending, setRestartPending] = useState(false)
-  const [includeWarning, setIncludeWarning] = useState(false)
   const [restarting, setRestarting] = useState(false)
 
-  // Add/edit form
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [form, setForm] = useState<FormData>(emptyForm)
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-
-  // Confirmation dialog
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [d, c] = await Promise.all([api.devices(), api.deviceConfigs()])
-      setDevices(d)
-      setConfigs(c)
-      // Derive restart_pending: true if any config has it set, false otherwise
-      const anyPending = c.some((cfg) => cfg.restart_pending)
-      setRestartPending(anyPending)
-      setIncludeWarning(c.some((cfg) => cfg.include_warning))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const [actionError, setActionError] = useState<string | null>(null)
 
   useEffect(() => {
-    load()
-  }, [load])
+    if (providedOutputs !== undefined) {
+      setDevices(providedOutputs)
+      setDeviceLoading(false)
+      setDeviceStale(false)
+    }
+  }, [providedOutputs])
 
-  const toggle = async (d: OutputDevice) => {
-    setBusy(d.id)
-    setError(null)
+  useEffect(() => {
+    if (providedConfigs !== undefined) {
+      setConfigs(providedConfigs)
+      setConfigLoading(false)
+      setConfigStale(false)
+    }
+  }, [providedConfigs])
+
+  const loadDevices = useCallback(async () => {
+    if (providedOutputs !== undefined) return
+    setDeviceLoading(true)
+    setDeviceError(null)
     try {
-      if (d.enabled) await api.disableDevice(d.id)
-      else await api.enableDevice(d.id)
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setDevices(await api.devices())
+      setDeviceStale(false)
+    } catch (error) {
+      setDeviceError(errorMessage(error))
+      setDeviceStale(true)
+    } finally {
+      setDeviceLoading(false)
+    }
+  }, [providedOutputs])
+
+  const loadConfigs = useCallback(async () => {
+    if (providedConfigs !== undefined) return
+    setConfigLoading(true)
+    setConfigError(null)
+    try {
+      const next = await api.deviceConfigs()
+      setConfigs(next)
+      setRestartPending(next.some((config) => config.restart_pending))
+      setConfigStale(false)
+    } catch (error) {
+      setConfigError(errorMessage(error))
+      setConfigStale(true)
+    } finally {
+      setConfigLoading(false)
+    }
+  }, [providedConfigs])
+
+  const refreshSnapshots = useCallback(async () => {
+    await Promise.all([loadDevices(), loadConfigs()])
+    await onRefresh?.()
+  }, [loadConfigs, loadDevices, onRefresh])
+
+  useEffect(() => {
+    void Promise.all([loadDevices(), loadConfigs()])
+  }, [loadDevices, loadConfigs])
+
+  const toggle = async (device: DeviceOutput) => {
+    setBusy(device.id)
+    setActionError(null)
+    try {
+      if (device.enabled) await api.disableDevice(device.id)
+      else await api.enableDevice(device.id)
+      await refreshSnapshots()
+    } catch (error) {
+      setActionError(`Could not update ${device.name}: ${errorMessage(error)}`)
     } finally {
       setBusy(null)
     }
   }
-  const toggleDsp = async (d: OutputDevice) => {
-    if (d.dsp_supported !== true) return
-    setBusy(d.id)
-    setError(null)
+
+  const toggleDsp = async (device: DeviceOutput) => {
+    if (device.dsp_supported !== true) return
+    setBusy(device.id)
+    setActionError(null)
     try {
-      if (d.dsp_enabled) await api.disableDeviceDsp(d.id)
-      else await api.enableDeviceDsp(d.id)
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (device.dsp_enabled) await api.disableDeviceDsp(device.id)
+      else await api.enableDeviceDsp(device.id)
+      await refreshSnapshots()
+    } catch (error) {
+      setActionError(`Could not update DSP for ${device.name}: ${errorMessage(error)}`)
     } finally {
       setBusy(null)
     }
-  }
-
-  // Convenience: populate form data from a DeviceConfig
-  const populateForm = (cfg: DeviceConfig) => {
-    setForm({
-      name: cfg.name,
-      output_type: cfg.output_type,
-      device: cfg.device ?? '',
-      format: cfg.format ?? '',
-      mixer_type: cfg.mixer_type ?? '',
-      mixer_device: cfg.mixer_device ?? '',
-      dop: cfg.dop,
-    })
   }
 
   const openAddForm = () => {
@@ -116,9 +194,17 @@ export function DevicesView() {
     setShowForm(true)
   }
 
-  const openEditForm = (cfg: DeviceConfig) => {
-    setEditing(cfg.name)
-    populateForm(cfg)
+  const openEditForm = (config: DeviceConfig) => {
+    setEditing(config.name)
+    setForm({
+      name: config.name,
+      output_type: config.output_type,
+      device: config.device ?? '',
+      format: config.format ?? '',
+      mixer_type: config.mixer_type ?? '',
+      mixer_device: config.mixer_device ?? '',
+      dop: config.dop,
+    })
     setFormError(null)
     setShowForm(true)
   }
@@ -130,654 +216,349 @@ export function DevicesView() {
     setFormError(null)
   }
 
-  const handleFormChange = (field: keyof FormData, value: string | boolean) => {
-    setForm((prev) => ({ ...prev, [field]: value }))
-  }
-
-  const handleSave = async () => {
+  const saveForm = async () => {
     setFormError(null)
     setSaving(true)
     try {
-      if (editing) {
-        await api.updateDeviceConfig(editing, form)
-      } else {
-        await api.createDeviceConfig(form)
-      }
+      if (editing) await api.updateDeviceConfig(editing, form)
+      else await api.createDeviceConfig(form)
       setRestartPending(true)
       closeForm()
-      await load()
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : String(e))
+      await refreshSnapshots()
+    } catch (error) {
+      setFormError(errorMessage(error))
     } finally {
       setSaving(false)
     }
   }
 
-  const handleDelete = async (name: string) => {
+  const deleteConfig = async (name: string) => {
     setConfirmDelete(null)
+    setActionError(null)
     try {
       await api.deleteDeviceConfig(name)
       setRestartPending(true)
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      await refreshSnapshots()
+    } catch (error) {
+      setActionError(`Could not remove ${name}: ${errorMessage(error)}`)
     }
   }
 
-  const handleRestart = async () => {
+  const restartMpd = async () => {
     setRestarting(true)
-    setError(null)
+    setActionError(null)
     try {
       await api.restartMpd()
       setRestartPending(false)
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      await refreshSnapshots()
+    } catch (error) {
+      setActionError(`MPD restart failed: ${errorMessage(error)}`)
     } finally {
       setRestarting(false)
     }
   }
 
-  // Get a label for the output type
-  const typeLabel = (t: string) => {
-    const known: Record<string, string> = {
-      alsa: 'ALSA',
-      pulse: 'PulseAudio',
-      fifo: 'FIFO',
-      httpd: 'HTTP daemon',
-      shout: 'Icecast',
-      recorder: 'Recorder',
-      null: 'Null',
-      pipe: 'Pipe',
-      jack: 'JACK',
-      opensl: 'OpenSL ES',
-      osx: 'CoreAudio',
-      wasapi: 'WASAPI',
-      winmm: 'Windows MM',
-    }
-    return known[t] ?? t
-  }
+  const playbackOutputs = useMemo(
+    () => devices.filter((device) => (device.role ?? 'playback') === 'playback' && device.selectable !== false),
+    [devices],
+  )
+  const advancedOutputs = useMemo(
+    () => devices.filter((device) => !playbackOutputs.includes(device)),
+    [devices, playbackOutputs],
+  )
 
   return (
     <div className={styles.wrap}>
       <div>
-        <span className={styles.eyebrow}>System</span>
+        <span className={styles.eyebrow}>Playback destinations</span>
         <h2 className={styles.h}>Output devices</h2>
+        <p className={styles.dim}>Choose a DAC or configured Bluetooth speaker. System and visualizer outputs are kept out of this list.</p>
       </div>
 
-      {error && <div className={styles.error}>{error}</div>}
+      {deviceError && <div className={styles.error} role="alert">Output status could not be refreshed: {deviceError}</div>}
+      {configError && <div className={styles.error} role="alert">Output configuration could not be refreshed: {configError}</div>}
+      {actionError && <div className={styles.error} role="alert">{actionError}</div>}
+      {(deviceStale || configStale) && <p className={styles.stale} role="status">Showing the last known output snapshot. Retry to reconcile current state.</p>}
 
-      {/* Restart pending banner */}
       {restartPending && (
-        <div className={styles.banner}>
-          <span>Device configs changed — restart MPD to apply them.</span>
-          <button
-            className={styles.bannerBtn}
-            disabled={restarting}
-            onClick={handleRestart}
-          >
-            {restarting ? 'Restarting…' : 'Restart MPD'}
+        <div className={styles.banner} role="status">
+          <span>MPD reload is pending for the changed output{configs.length > 1 ? 's' : ''}.</span>
+          <button className={styles.bannerBtn} disabled={restarting} onClick={() => void restartMpd()}>
+            {restarting ? 'Restarting…' : 'Reload MPD'}
           </button>
         </div>
       )}
-
-      {/* Include warning */}
-      {includeWarning && (
-        <div className={styles.error}>
-          MPD config path not set. Add an <code>include</code> directive manually
-          to your MPD config to load the managed output fragments.
+      {configs.some((config) => config.include_warning) && (
+        <div className={styles.error} role="alert">
+          MPD is not loading managed output fragments. Add the configured <code>include</code> directive before retrying.
         </div>
       )}
 
-      {/* Runtime devices */}
-      <div>
-        <span className={styles.eyebrow}>Runtime</span>
-        <h3 className={styles.h}>Active devices</h3>
-      </div>
-      <p className={styles.dim}>
-        DSP routes a configured ALSA output through CamillaDSP. Unconfigured,
-        disconnected, and non-ALSA outputs stay unavailable.
-      </p>
-      {loading && <p className={styles.dim}>loading…</p>}
-      {!loading && !error && devices.length === 0 && (
-        <p className={styles.dim}>No output devices reported by MPD.</p>
-      )}
-      <ul className={styles.list}>
-        {devices.map((d) => (
-          <li key={d.id} className={d.enabled ? styles.rowOn : styles.rowOff}>
-            <div>
-              <div className={styles.name}>{d.name}</div>
-              <div className={styles.id}>#{d.id}</div>
-            </div>
-            <div className={styles.outputActions}>
-              <button
-                className={d.dsp_enabled ? styles.dspOn : styles.dspOff}
-                disabled={busy === d.id || d.dsp_supported !== true}
-                title={d.dsp_supported === true ? 'Route this output through CamillaDSP' : d.dsp_reason}
-                aria-label={d.dsp_enabled ? `Disable DSP for ${d.name}` : `Enable DSP for ${d.name}`}
-                onClick={() => toggleDsp(d)}
-              >
-                {d.dsp_enabled ? 'DSP on' : 'DSP off'}
-              </button>
-              <button
-                className={d.enabled ? styles.on : styles.off}
-                disabled={busy === d.id}
-                onClick={() => toggle(d)}
-              >
-                {d.enabled ? 'Enabled' : 'Disabled'}
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
-
-      {/* Managed configs */}
-      <div className={styles.cfgSection}>
-        <div>
-          <span className={styles.eyebrow}>Configuration</span>
-          <h3 className={styles.h}>Configured devices</h3>
+      <section className={styles.primarySection} aria-labelledby="playback-outputs-heading">
+        <div className={styles.sectionHead}>
+          <div>
+            <span className={styles.eyebrow}>Playback</span>
+            <h3 className={styles.h} id="playback-outputs-heading">Configured outputs</h3>
+          </div>
+          {deviceStale && <button className={styles.btnGhost} onClick={() => void refreshSnapshots()}>Retry</button>}
         </div>
-
-        {!showForm && (
-          <div className={styles.cfgToolbar}>
-            <button className={styles.addBtn} onClick={openAddForm}>
-              + Add device
-            </button>
-          </div>
-        )}
-
-        {/* Add/Edit form */}
-        {showForm && (
-          <div className={styles.form}>
-            {formError && <div className={styles.error}>{formError}</div>}
-            <div className={styles.formRow}>
-              <label className={styles.formLabel}>Name</label>
-              <input
-                className={styles.formInput}
-                value={form.name}
-                onChange={(e) => handleFormChange('name', e.target.value)}
-                placeholder="My USB DAC"
-              />
-            </div>
-            <div className={styles.formRow}>
-              <label className={styles.formLabel}>Type</label>
-              <input
-                className={styles.formInput}
-                value={form.output_type}
-                onChange={(e) => handleFormChange('output_type', e.target.value)}
-                placeholder="alsa, pulse, fifo, …"
-                list="output-types"
-              />
-              <datalist id="output-types">
-                <option value="alsa" />
-                <option value="pulse" />
-                <option value="fifo" />
-                <option value="httpd" />
-                <option value="shout" />
-                <option value="recorder" />
-                <option value="null" />
-                <option value="pipe" />
-                <option value="jack" />
-                <option value="opensl" />
-                <option value="osx" />
-                <option value="wasapi" />
-                <option value="winmm" />
-              </datalist>
-            </div>
-            <div className={styles.formRow}>
-              <label className={styles.formLabel}>Device</label>
-              <input
-                className={styles.formInput}
-                value={form.device}
-                onChange={(e) => handleFormChange('device', e.target.value)}
-                placeholder="hw:0,0"
-              />
-            </div>
-            <div className={styles.formRow}>
-              <label className={styles.formLabel}>Format</label>
-              <input
-                className={styles.formInput}
-                value={form.format}
-                onChange={(e) => handleFormChange('format', e.target.value)}
-                placeholder="44100:16:2"
-              />
-            </div>
-            <div className={styles.formRow}>
-              <label className={styles.formLabel}>Mixer type</label>
-              <input
-                className={styles.formInput}
-                value={form.mixer_type}
-                onChange={(e) => handleFormChange('mixer_type', e.target.value)}
-                placeholder="hardware, software, none"
-              />
-            </div>
-            <div className={styles.formRow}>
-              <label className={styles.formLabel}>Mixer device</label>
-              <input
-                className={styles.formInput}
-                value={form.mixer_device}
-                onChange={(e) => handleFormChange('mixer_device', e.target.value)}
-                placeholder="Master"
-              />
-            </div>
-            <div className={styles.formCheck}>
-              <input
-                type="checkbox"
-                id="dop-toggle"
-                checked={form.dop}
-                onChange={(e) => handleFormChange('dop', e.target.checked)}
-              />
-              <label htmlFor="dop-toggle" className={styles.formLabel}>
-                DoP (DSD over PCM)
-              </label>
-            </div>
-            <div className={styles.formActions}>
-              <button
-                className={styles.btnPrimary}
-                disabled={saving || !form.name.trim() || !form.output_type.trim()}
-                onClick={handleSave}
-              >
-                {saving ? 'Saving…' : editing ? 'Update' : 'Create'}
-              </button>
-              <button className={styles.btnGhost} onClick={closeForm}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Config list */}
-        {configs.length === 0 && !showForm && (
-          <p className={styles.dim}>No configured output devices yet.</p>
-        )}
+        {deviceLoading && <p className={styles.dim}>Loading output status…</p>}
+        {!deviceLoading && playbackOutputs.length === 0 && <p className={styles.dim}>No configured playback outputs are visible in MPD yet.</p>}
         <ul className={styles.list}>
-          {configs.map((cfg) => (
-            <li key={cfg.name} className={styles.cfgRow}>
-              <div>
-                <div className={styles.name}>{cfg.name}</div>
-                <div className={styles.id}>{typeLabel(cfg.output_type)}{cfg.device ? ` — ${cfg.device}` : ''}</div>
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.78rem', color: 'var(--text-faint)' }}>
-                  {restartPending ? '⏳' : '✓'}
-                </span>
-                <button
-                  className={styles.btnGhost}
-                  onClick={() => openEditForm(cfg)}
-                >
-                  Edit
+          {playbackOutputs.map((device) => {
+            const key = device.selection_key || `managed:${device.name}`
+            const selected = selectedOutputKey === key
+            const config = configs.find((candidate) => candidate.name === device.name)
+            const kind = device.configured === false
+              ? 'Runtime output'
+              : config?.device?.toLowerCase().startsWith('bluealsa:')
+                ? 'Bluetooth playback'
+                : outputTypeLabel(config?.output_type ?? 'alsa')
+            return (
+              <li key={`${device.id}:${key}`} className={device.enabled ? styles.rowOn : styles.rowOff}>
+                <button className={styles.outputSelect} aria-pressed={selected} onClick={() => onSelectOutput?.(key)}>
+                  <span>
+                    <span className={styles.name}>{device.name}</span>
+                    <span className={styles.outputKind}>{kind}</span>
+                    <span className={styles.id}>{outputStatus(device)}</span>
+                  </span>
+                  {selected && <span className={styles.btBadge}>selected</span>}
                 </button>
-                <button
-                  className={styles.btnDanger}
-                  onClick={() => setConfirmDelete(cfg.name)}
-                >
-                  Remove
-                </button>
-              </div>
-            </li>
-          ))}
+                <div className={styles.outputActions}>
+                  <button
+                    className={device.dsp_enabled ? styles.dspOn : styles.dspOff}
+                    disabled={busy === device.id || device.dsp_supported !== true}
+                    title={device.dsp_supported === true ? 'Route this output through CamillaDSP' : device.dsp_reason}
+                    aria-label={device.dsp_enabled ? `Disable DSP for ${device.name}` : `Enable DSP for ${device.name}`}
+                    onClick={() => void toggleDsp(device)}
+                  >
+                    {device.dsp_enabled ? 'DSP on' : 'DSP off'}
+                  </button>
+                  <button className={device.enabled ? styles.on : styles.off} disabled={busy === device.id} onClick={() => void toggle(device)}>
+                    {device.enabled ? 'Enabled' : 'Disabled'}
+                  </button>
+                </div>
+              </li>
+            )
+          })}
         </ul>
-      </div>
+      </section>
 
-      {/* Confirmation dialog */}
-      {confirmDelete && (
-        <div className={styles.confirmOverlay} onClick={() => setConfirmDelete(null)}>
-          <div className={styles.confirmBox} onClick={(e) => e.stopPropagation()}>
-            <p className={styles.confirmText}>
-              Remove device config <strong>{confirmDelete}</strong>? This does not
-              restart MPD — the change takes effect after the next restart.
-            </p>
-            <div className={styles.confirmActions}>
-              <button
-                className={styles.btnGhost}
-                onClick={() => setConfirmDelete(null)}
-              >
-                Cancel
-              </button>
-              <button
-                className={styles.btnDanger}
-                onClick={() => handleDelete(confirmDelete)}
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
+      {advancedOutputs.length > 0 && (
+        <details className={styles.advancedBlock}>
+          <summary className={styles.advancedSummary}>Technical and system outputs</summary>
+          <p className={styles.dim}>These outputs are inspectable but cannot be selected as listening destinations.</p>
+          <ul className={styles.list}>
+            {advancedOutputs.map((device) => (
+              <li key={device.id} className={styles.cfgRow}>
+                <div><div className={styles.name}>{device.name}</div><div className={styles.id}>{device.role ?? 'unknown'} · {device.technical_detail ?? 'not selectable'}</div></div>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
-      {/* ════════ Bluetooth and AirPlay input sections ════════ */}
-      <BluetoothSection />
-      <AirPlaySection />
+      <AdvancedConfig
+        configs={configs}
+        configLoading={configLoading}
+        configStale={configStale}
+        showForm={showForm}
+        editing={editing}
+        form={form}
+        formError={formError}
+        saving={saving}
+        confirmDelete={confirmDelete}
+        setForm={setForm}
+        setConfirmDelete={setConfirmDelete}
+        openAddForm={openAddForm}
+        openEditForm={openEditForm}
+        closeForm={closeForm}
+        saveForm={saveForm}
+        deleteConfig={deleteConfig}
+      />
+
+      <BluetoothSection configs={configs} onRefresh={refreshSnapshots} />
     </div>
   )
 }
 
-// ── Bluetooth Section ──────────────────────────────────────────────────
+interface AdvancedConfigProps {
+  configs: DeviceConfig[]
+  configLoading: boolean
+  configStale: boolean
+  showForm: boolean
+  editing: string | null
+  form: FormData
+  formError: string | null
+  saving: boolean
+  confirmDelete: string | null
+  setForm: (value: FormData | ((previous: FormData) => FormData)) => void
+  setConfirmDelete: (name: string | null) => void
+  openAddForm: () => void
+  openEditForm: (config: DeviceConfig) => void
+  closeForm: () => void
+  saveForm: () => Promise<void>
+  deleteConfig: (name: string) => Promise<void>
+}
 
-/** Polling interval for scan results while a scan is active (ms). */
+function AdvancedConfig(props: AdvancedConfigProps) {
+  const { configs, configLoading, configStale, showForm, editing, form, formError, saving, confirmDelete, setForm, setConfirmDelete, openAddForm, openEditForm, closeForm, saveForm, deleteConfig } = props
+  const [openMenu, setOpenMenu] = useState<string | null>(null)
+  return (
+    <details className={styles.advancedBlock}>
+      <summary className={styles.advancedSummary}>Advanced output configuration</summary>
+      <p className={styles.dim}>Raw MPD type, device, format, mixer, and DoP fields stay here for diagnostics and manual setup.</p>
+      {!showForm && <button className={styles.addBtn} onClick={openAddForm}>+ Add output configuration</button>}
+      {configLoading && <p className={styles.dim}>Loading saved configurations…</p>}
+      {configStale && <p className={styles.stale}>Saved configuration is stale.</p>}
+      {showForm && (
+        <div className={styles.form}>
+          {formError && <div className={styles.error} role="alert">{formError}</div>}
+          {(['name', 'output_type', 'device', 'format', 'mixer_type', 'mixer_device'] as const).map((field) => (
+            <label key={field} className={styles.formRow}>
+              <span className={styles.formLabel}>{field === 'output_type' ? 'Type' : field.replace('_', ' ')}</span>
+              <input className={styles.formInput} value={form[field]} onChange={(event) => setForm((previous) => ({ ...previous, [field]: event.target.value }))} />
+            </label>
+          ))}
+          <label className={styles.formCheck}><input type="checkbox" checked={form.dop} onChange={(event) => setForm((previous) => ({ ...previous, dop: event.target.checked }))} /><span className={styles.formLabel}>DoP (DSD over PCM)</span></label>
+          <div className={styles.formActions}>
+            <button className={styles.btnPrimary} disabled={saving || !form.name.trim() || !form.output_type.trim()} onClick={() => void saveForm()}>{saving ? 'Saving…' : editing ? 'Update' : 'Create'}</button>
+            <button className={styles.btnGhost} onClick={closeForm}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {!configLoading && configs.length === 0 && !showForm && <p className={styles.dim}>No managed output configurations.</p>}
+      <ul className={styles.list}>
+        {configs.map((config) => (
+          <li key={config.name} className={styles.cfgRow}>
+            <div><div className={styles.name}>{config.name}</div><div className={styles.id}>{config.output_type} · {config.device ?? 'default device'} · {config.format ?? 'MPD default'}</div></div>
+            <div className={styles.btActions}><span className={config.restart_pending ? styles.pending : styles.ready}>{config.restart_pending ? 'reload pending' : 'saved'}</span><button className={styles.btnGhost} onClick={() => openEditForm(config)}>Edit</button><details className={styles.rowMenu} open={openMenu === config.name} onToggle={(event) => setOpenMenu(event.currentTarget.open ? config.name : null)}><summary className={styles.btnGhost}>More</summary><div aria-hidden={openMenu !== config.name}><button className={styles.btnDanger} onClick={() => setConfirmDelete(config.name)}>Remove output</button></div></details></div>
+          </li>
+        ))}
+      </ul>
+      {confirmDelete && (
+        <div className={styles.confirmOverlay} role="presentation" onClick={() => setConfirmDelete(null)}>
+          <div className={styles.confirmBox} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <p className={styles.confirmText}>Remove <strong>{confirmDelete}</strong> from managed playback outputs? MPD must reload before the change is active.</p>
+            <div className={styles.confirmActions}><button className={styles.btnGhost} onClick={() => setConfirmDelete(null)}>Cancel</button><button className={styles.btnDanger} onClick={() => void deleteConfig(confirmDelete)}>Remove output</button></div>
+          </div>
+        </div>
+      )}
+    </details>
+  )
+}
+
 const SCAN_POLL_MS = 2000
 
-function BluetoothSection() {
+type BluetoothErrorState = { message: string; unavailable: boolean } | null
+interface BluetoothSectionProps { configs: DeviceConfig[]; onRefresh: () => Promise<void> }
+
+function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
   const [btDevices, setBtDevices] = useState<BtDevice[]>([])
-  const [btError, setBtError] = useState<string | null>(null)
+  const [btLoading, setBtLoading] = useState(true)
+  const [btError, setBtError] = useState<BluetoothErrorState>(null)
+  const [scanError, setScanError] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
   const [scanResults, setScanResults] = useState<BtDevice[]>([])
   const [busyAddr, setBusyAddr] = useState<string | null>(null)
   const [inputStatus, setInputStatus] = useState<InputStatusResponse | null>(null)
   const [inputBusy, setInputBusy] = useState(false)
+  const [inputError, setInputError] = useState<string | null>(null)
+  const [confirm, setConfirm] = useState<{ action: 'forget' | 'remove'; device: BtDevice } | null>(null)
+  const [advancedAddress, setAdvancedAddress] = useState<string | null>(null)
 
   const loadDevices = useCallback(async () => {
+    setBtLoading(true)
     try {
-      const devices = await api.btDevices()
-      setBtDevices(devices)
+      setBtDevices(await api.btDevices())
       setBtError(null)
-    } catch (e) {
-      // 503 = Bluetooth unavailable (no BlueZ, stub platform, init failure)
-      const is503 = e instanceof Error && e.message.includes('503')
-      if (!is503) {
-        setBtError(e instanceof Error ? e.message : String(e))
-      }
+    } catch (error) {
+      setBtError({ message: errorMessage(error), unavailable: error instanceof ApiError && error.status === 503 })
+    } finally {
+      setBtLoading(false)
     }
   }, [])
 
   const loadInputStatus = useCallback(async () => {
-    try {
-      const status = await api.btInputStatus()
-      setInputStatus(status)
-    } catch {
-      // ignore
-    }
+    try { setInputStatus(await api.btInputStatus()); setInputError(null) }
+    catch (error) { setInputError(errorMessage(error)) }
   }, [])
 
-  // Initial load
-  useEffect(() => {
-    loadDevices()
-    loadInputStatus()
-  }, [loadDevices, loadInputStatus])
+  useEffect(() => { void Promise.all([loadDevices(), loadInputStatus()]) }, [loadDevices, loadInputStatus])
 
-  // Start scanning
   const startScan = useCallback(async () => {
+    setScanResults([])
+    setScanError(null)
     setScanning(true)
-    setBtError(null)
-    try {
-      await api.btScan(15)
-    } catch (e) {
-      setBtError(e instanceof Error ? e.message : String(e))
-      setScanning(false)
-    }
+    try { await api.btScan(15) }
+    catch (error) { setScanError(errorMessage(error)); setScanning(false) }
   }, [])
 
-  // Poll scan results while scanning
   useEffect(() => {
     if (!scanning) return
-    const poll = setInterval(async () => {
-      try {
-        const res = await api.btScanResults()
-        setScanResults(res.devices)
-        if (!res.active) {
-          setScanning(false)
-        }
-      } catch {
+    const poll = setInterval(() => {
+      void api.btScanResults().then((result) => {
+        setScanResults(result.devices)
+        if (!result.active) setScanning(false)
+      }).catch((error) => {
+        setScanError(errorMessage(error))
         setScanning(false)
-      }
+      })
     }, SCAN_POLL_MS)
     return () => clearInterval(poll)
   }, [scanning])
 
   const stopScan = useCallback(async () => {
-    try {
-      await api.btScanStop()
-    } catch { /* ignore */ }
+    try { await api.btScanStop() } catch (error) { setScanError(errorMessage(error)) }
     setScanning(false)
+    setScanResults([])
   }, [])
 
-  const handlePair = useCallback(async (address: string) => {
+  const runBluetoothAction = useCallback(async (address: string, action: () => Promise<unknown>, label: string) => {
     setBusyAddr(address)
     setBtError(null)
     try {
-      await api.btPair(address)
+      await action()
       await loadDevices()
-    } catch (e) {
-      setBtError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusyAddr(null)
-    }
-  }, [loadDevices])
+      await onRefresh()
+    } catch (error) {
+      setBtError({ message: `${label}: ${errorMessage(error)}`, unavailable: false })
+    } finally { setBusyAddr(null) }
+  }, [loadDevices, onRefresh])
 
-  const handleConnect = useCallback(async (address: string) => {
-    setBusyAddr(address)
-    setBtError(null)
-    try {
-      // A sleeping speaker may reject the first connection attempt. Use the
-      // retrying wake path for the single Connect action shown to users.
-      await api.btWakeConnect(address)
-      await loadDevices()
-    } catch (e) {
-      setBtError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusyAddr(null)
-    }
-  }, [loadDevices])
-
-  const handleDisconnect = useCallback(async (address: string) => {
-    setBusyAddr(address)
-    setBtError(null)
-    try {
-      await api.btDisconnect(address)
-      await loadDevices()
-    } catch (e) {
-      setBtError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusyAddr(null)
-    }
-  }, [loadDevices])
-
-  const handleForget = useCallback(async (address: string) => {
-    setBusyAddr(address)
-    setBtError(null)
-    try {
-      await api.btForget(address)
-      await loadDevices()
-    } catch (e) {
-      setBtError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusyAddr(null)
-    }
-  }, [loadDevices])
-
-  const handleRemoveOutput = useCallback(async (address: string) => {
-    setBusyAddr(address)
-    setBtError(null)
-    try {
-      await api.btRemoveOutput(address)
-    } catch (e) {
-      setBtError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusyAddr(null)
-    }
-  }, [])
-
-
-
-  const handleToggleInput = useCallback(async () => {
-    setInputBusy(true)
-    setBtError(null)
-    try {
-      if (inputStatus?.enabled) {
-        await api.btInputDisable()
-      } else {
-        await api.btInputEnable()
-      }
-      await loadInputStatus()
-    } catch (e) {
-      setBtError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setInputBusy(false)
-    }
-  }, [inputStatus, loadInputStatus])
-
-  // Combine known paired devices with scan results (dedup by address)
-  const knownAddrs = new Set(btDevices.map((d) => d.address))
-  const discoveredInScan = scanResults.filter((d) => !knownAddrs.has(d.address))
-  const allDevices = [...btDevices, ...discoveredInScan]
-
-  // If the backend returned 503, don't render the BT section at all
-  // (non-Linux platform). We detect this by checking whether any paired
-  // devices were returned after the initial load.
-  if (btDevices.length === 0 && scanResults.length === 0 && btError === null) {
-    // Still loading — show a placeholder
-    return (
-      <div className={styles.cfgSection}>
-        <div>
-          <span className={styles.eyebrow}>Bluetooth</span>
-          <h3 className={styles.h}>Devices</h3>
-        </div>
-        <p className={styles.dim}>loading…</p>
-      </div>
-    )
+  const handleInputToggle = async () => {
+    setInputBusy(true); setInputError(null)
+    try { if (inputStatus?.enabled) await api.btInputDisable(); else await api.btInputEnable(); await loadInputStatus() }
+    catch (error) { setInputError(errorMessage(error)) }
+    finally { setInputBusy(false) }
   }
 
+  const configuredAddresses = useMemo(() => new Set(configs.flatMap((config) => btDevices.filter((device) => isBluetoothConfig(config, device.address)).map((device) => device.address))), [btDevices, configs])
+  const knownAddresses = new Set(btDevices.map((device) => device.address))
+  const candidates = [...btDevices, ...scanResults.filter((device) => !knownAddresses.has(device.address))].filter((device) => !configuredAddresses.has(device.address))
+
   return (
-    <div className={styles.cfgSection}>
-      <div>
-        <span className={styles.eyebrow}>Bluetooth</span>
-        <h3 className={styles.h}>Devices</h3>
-      </div>
-
-      {btError && <div className={styles.error}>{btError}</div>}
-
-      {/* Scan controls */}
-      <div className={styles.cfgToolbar}>
-        {scanning ? (
-          <>
-            <span className={styles.dim}>Scanning…</span>
-            <button className={styles.btnGhost} onClick={stopScan}>
-              Stop scan
-            </button>
-          </>
-        ) : (
-          <button className={styles.addBtn} onClick={startScan}>
-            Scan for devices
-          </button>
-        )}
-      </div>
-
-      {/* BT device list */}
-      {allDevices.length === 0 && (
-        <p className={styles.dim}>
-          {scanning ? 'No devices found yet…' : 'No Bluetooth devices paired or discovered. Start a scan to find nearby speakers and headphones.'}
-        </p>
-      )}
+    <section className={styles.btSection} aria-labelledby="bluetooth-outputs-heading">
+      <div className={styles.sectionHead}><div><span className={styles.eyebrow}>Bluetooth playback</span><h3 className={styles.h} id="bluetooth-outputs-heading">Setup candidates</h3></div>{!btError?.unavailable && (scanning ? <button className={styles.btnGhost} onClick={() => void stopScan()}>Cancel scan</button> : <button className={styles.addBtn} onClick={() => void startScan()}>Scan for devices</button>)}</div>
+      {btLoading && <p className={styles.dim}>Loading Bluetooth availability…</p>}
+      {btError?.unavailable && <div className={styles.error} role="alert">Bluetooth is unavailable ({btError.message}). <button className={styles.btnGhost} onClick={() => void loadDevices()}>Retry Bluetooth</button></div>}
+      {btError && !btError.unavailable && <div className={styles.error} role="alert">Bluetooth device status: {btError.message}</div>}
+      {scanError && <div className={styles.error} role="alert">Scan failed: {scanError} <button className={styles.btnGhost} onClick={() => void startScan()}>Retry scan</button></div>}
+      {scanning && <p className={styles.scanStatus} role="status">Scanning for nearby audio devices…</p>}
+      {!btLoading && !btError && candidates.length === 0 && <p className={styles.dim}>{scanning ? 'No devices found yet…' : 'No paired or discovered Bluetooth setup candidates. Start a scan to find a speaker or headphones.'}</p>}
       <ul className={styles.list}>
-        {allDevices.map((d) => {
-          const isBusy = busyAddr === d.address
-          return (
-            <li key={d.address} className={d.connected ? styles.rowOn : styles.rowOff}>
-              <div>
-                <div className={styles.name}>
-                  {d.name ?? d.address}
-                  {d.connected && <span className={styles.btBadge}>connected</span>}
-                  {!d.connected && d.paired && <span className={styles.btBadge}>paired</span>}
-                </div>
-                <div className={styles.id}>
-                  {d.address}
-                  {d.rssi != null && <span> RSSI: {d.rssi}</span>}
-                </div>
-              </div>
-              <div className={styles.btActions}>                {d.connected ? (
-                  <>
-                    <button
-                      className={styles.btnGhost}
-                      disabled={isBusy}
-                      onClick={() => handleDisconnect(d.address)}
-                    >
-                      {isBusy ? '…' : 'Disconnect'}
-                    </button>
-                    <button
-                      className={styles.btnGhost}
-                      disabled={isBusy}
-                      onClick={() => handleRemoveOutput(d.address)}
-                    >
-                      Remove output
-                    </button>
-                  </>
-                ) : d.paired ? (
-                  <>
-                    <button
-                      className={styles.off}
-                      disabled={isBusy}
-                      onClick={() => handleConnect(d.address)}
-                    >
-                      {isBusy ? '…' : 'Connect'}
-                    </button>
-                    <button
-                      className={styles.btnGhost}
-                      disabled={isBusy}
-                      onClick={() => handleForget(d.address)}
-                    >
-                      Forget
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className={styles.on}
-                    disabled={isBusy}
-                    onClick={() => handlePair(d.address)}
-                  >
-                    {isBusy ? '…' : 'Pair'}
-                  </button>
-                )}
-              </div>
-            </li>
-          )
+        {candidates.map((device) => {
+          const busyNow = busyAddr === device.address
+          return <li key={device.address} className={device.connected ? styles.rowOn : styles.rowOff}>
+            <div><div className={styles.name}>{btDisplayName(device)}{device.connected && <span className={styles.btBadge}>connected</span>}{!device.connected && device.paired && <span className={styles.btBadge}>paired</span>}</div><div className={styles.id}>{device.address}{device.rssi != null && ` · RSSI ${device.rssi}`}</div>{device.connected && <div className={styles.provisioning}>Connected, but no managed playback output is visible yet. Connect again after MPD reload if needed.</div>}</div>
+            <div className={styles.btActions}>{device.connected ? <><button className={styles.on} disabled={busyNow} onClick={() => void runBluetoothAction(device.address, () => api.btWakeConnect(device.address), 'Provisioning failed')}>{busyNow ? '…' : 'Retry provisioning'}</button><button className={styles.btnGhost} disabled={busyNow} onClick={() => void runBluetoothAction(device.address, () => api.btDisconnect(device.address), 'Disconnect failed')}>{busyNow ? '…' : 'Disconnect'}</button></> : device.paired ? <button className={styles.on} disabled={busyNow} onClick={() => void runBluetoothAction(device.address, () => api.btWakeConnect(device.address), 'Connect failed')}>{busyNow ? '…' : 'Connect'}</button> : <button className={styles.on} disabled={busyNow} onClick={() => void runBluetoothAction(device.address, () => api.btPair(device.address), 'Pair failed')}>{busyNow ? '…' : 'Pair'}</button>}<details className={styles.rowMenu} open={advancedAddress === device.address} onToggle={(event) => setAdvancedAddress(event.currentTarget.open ? device.address : null)}><summary className={styles.btnGhost}>More</summary><div aria-hidden={advancedAddress !== device.address}><button className={styles.btnDanger} disabled={busyNow} onClick={() => setConfirm({ action: device.connected ? 'remove' : 'forget', device })}>{device.connected ? 'Remove output' : 'Forget device'}</button></div></details></div>
+          </li>
         })}
       </ul>
 
-      {/* A2DP Sink input toggle */}
-      <div className={styles.btInputRow}>
-        <div>
-          <span className={styles.eyebrow}>Input</span>
-          <h4 className={styles.h}>A2DP Sink</h4>
-          <p className={styles.dim}>
-            Allow phones and tablets to stream audio to this system.
-          </p>
-        </div>
-        <button
-          className={inputStatus?.enabled ? styles.on : styles.off}
-          disabled={inputBusy}
-          onClick={handleToggleInput}
-        >
-          {inputBusy
-            ? '…'
-            : inputStatus?.enabled
-              ? inputStatus?.streaming
-                ? 'Streaming'
-                : 'Enabled'
-              : 'Disabled'}
-        </button>
-      </div>
-      {inputStatus?.streaming && (
-        <div className={styles.btNote}>
-          Audio is being streamed from a phone or tablet.
-        </div>
-      )}
-    </div>
-  )
-}
+      {confirm && <div className={styles.confirmOverlay} role="presentation" onClick={() => setConfirm(null)}><div className={styles.confirmBox} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><p className={styles.confirmText}>{confirm.action === 'forget' ? <>Forget <strong>{btDisplayName(confirm.device)}</strong>? Pairing and its saved device state will be removed.</> : <>Remove the managed playback output for <strong>{btDisplayName(confirm.device)}</strong>? The Bluetooth pairing remains available.</>}</p><div className={styles.confirmActions}><button className={styles.btnGhost} onClick={() => setConfirm(null)}>Cancel</button><button className={styles.btnDanger} onClick={() => { const next = confirm; setConfirm(null); void runBluetoothAction(next.device.address, next.action === 'forget' ? () => api.btForget(next.device.address) : () => api.btRemoveOutput(next.device.address), next.action === 'forget' ? 'Forget failed' : 'Remove output failed') }}>{confirm.action === 'forget' ? 'Forget device' : 'Remove output'}</button></div></div></div>}
 
-function AirPlaySection() {
-  return (
-    <div className={styles.cfgSection}>
-      <div>
-        <span className={styles.eyebrow}>AirPlay</span>
-        <h3 className={styles.h}>iPhone and iPad input</h3>
-        <p className={styles.dim}>
-          On an installed Linux server, select <strong>Oxide Player</strong> in
-          the iPhone or iPad AirPlay output picker while both devices are on
-          the same network.
-        </p>
-      </div>
-      <span className={styles.btBadge}>LAN receiver</span>
-    </div>
+      <details className={styles.advancedBlock}><summary className={styles.advancedSummary}>Bluetooth input and AirPlay</summary><div className={styles.btInputRow}><div><span className={styles.eyebrow}>Input</span><h4 className={styles.h}>A2DP Sink</h4><p className={styles.dim}>Allow phones and tablets to stream audio to this system.</p></div><button className={inputStatus?.enabled ? styles.on : styles.off} disabled={inputBusy} onClick={() => void handleInputToggle()}>{inputBusy ? '…' : inputStatus?.streaming ? 'Streaming' : inputStatus?.enabled ? 'Enabled' : 'Disabled'}</button></div>{inputError && <p className={styles.error}>Bluetooth input: {inputError}</p>}{inputStatus?.streaming && <div className={styles.btNote}>Audio is being streamed from a phone or tablet.</div>}<div className={styles.airplay}><span className={styles.eyebrow}>AirPlay</span><h4 className={styles.h}>iPhone and iPad input</h4><p className={styles.dim}>Select <strong>Oxide Player</strong> in the AirPlay output picker while both devices are on the same network.</p><span className={styles.btBadge}>LAN receiver</span></div></details>
+    </section>
   )
 }

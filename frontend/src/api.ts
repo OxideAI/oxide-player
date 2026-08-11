@@ -2,17 +2,19 @@ import type {
   AlbumSources,
   BtDevice,
   Config,
-  DeviceConfig,
   DspProfile,
   DspSettings,
+  DspApplyResult,
+  DeviceConfig,
   InputStatusResponse,
-  OutputDevice,
+  DeviceOutput,
   PlayerStatus,
   QueueItem,
   QueueResponse,
   RadioStation,
   ScanResultsResponse,
   Track,
+  VisualizerStatus,
 } from './types'
 
 /**
@@ -37,12 +39,36 @@ export function toPlayRef(t: Track): PlayRef {
   }
 }
 
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+// Alias retained for callers that prefer the transport-oriented name.
+export { ApiError as HttpError }
+
 async function json<T>(res: Response): Promise<T> {
   const text = await res.text()
-  const body = text ? JSON.parse(text) : undefined
+  let body: unknown
+  if (text) {
+    try {
+      body = JSON.parse(text)
+    } catch (error) {
+      if (res.ok) throw error
+      body = undefined
+    }
+  }
   if (!res.ok) {
-    const detail = body && typeof body.error === 'string' ? body.error : res.statusText
-    throw new Error(detail)
+    const detail =
+      body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
+        ? body.error
+        : res.statusText || `Request failed (${res.status})`
+    throw new ApiError(res.status, detail)
   }
   return body as T
 }
@@ -118,8 +144,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ volume }),
     }).then((r) => json<unknown>(r)),
-
-  devices: () => fetch('/api/devices').then((r) => json<OutputDevice[]>(r)),
+  devices: () => fetch('/api/devices').then((r) => json<DeviceOutput[]>(r)),
   enableDevice: (id: number) =>
     fetch(`/api/devices/${id}/enable`, { method: 'POST' }).then((r) => json<unknown>(r)),
   disableDevice: (id: number) =>
@@ -162,7 +187,7 @@ export const api = {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(profile),
-    }).then((r) => json<unknown>(r)),
+    }).then((r) => json<DspApplyResult>(r)),
   importDspText: (text: string) =>
     fetch('/api/dsp/import', {
       method: 'POST',
@@ -302,6 +327,7 @@ export const api = {
   // Restart the oxide-player process (requires a supervising systemd unit).
   restart: () =>
     fetch('/api/system/restart', { method: 'POST' }).then((r) => json<unknown>(r)),
+  visualizerStatus: () => fetch('/api/visualizer/status').then((r) => json<VisualizerStatus>(r)),
 
   // —— Visualizer tuning (persisted on disk, not the browser) ——
   getVizParams: () =>

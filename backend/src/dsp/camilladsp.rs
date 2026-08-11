@@ -15,6 +15,18 @@ use tokio_tungstenite::tungstenite::Message;
 pub const DEFAULT_CAPTURE_DEVICE: &str = "hw:Loopback,1";
 pub const DEFAULT_CAPTURE_RATE: u32 = 48000;
 
+/// Outcome of persisting a DSP profile and attempting to activate its route.
+/// Persistence can succeed even when CamillaDSP does not confirm a reload.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DspApplyResult {
+    pub device: String,
+    pub persisted: bool,
+    pub reload_confirmed: bool,
+    pub active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reload_error: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct DspManager {
     inner: Arc<DspInner>,
@@ -135,7 +147,7 @@ impl DspManager {
     }
     /// Apply the configured profile for an output, falling back to the
     /// conventional `default` profile or a neutral passthrough profile.
-    pub async fn apply_profile_for_device(&self, device: &str) -> Result<()> {
+    pub async fn apply_profile_for_device(&self, device: &str) -> Result<DspApplyResult> {
         let profiles = self.inner.profiles.lock().await;
         let mut profile = profiles
             .get(device)
@@ -157,7 +169,9 @@ impl DspManager {
 
 
     /// Persist the profile as a CamillaDSP config and signal a reload.
-    pub async fn apply_profile(&self, profile: DspProfile) -> Result<()> {
+    /// Persist the profile as a CamillaDSP config and report whether the
+    /// active route was confirmed by a successful reload acknowledgement.
+    pub async fn apply_profile(&self, profile: DspProfile) -> Result<DspApplyResult> {
         profile.validate().context("invalid dsp profile")?;
         let effective = profile.effective();
         let cfg = render_camilladsp_config(
@@ -167,15 +181,12 @@ impl DspManager {
             self.inner.capture_rate,
         );
         self.write_config(&cfg).await?;
-        // Store the full profile (with its EQ bands) so toggling back from
-        // bit-perfect restores the user's DSP instead of a stripped copy.
         self.inner
             .profiles
             .lock()
             .await
             .insert(profile.device.clone(), profile);
-        // If CamillaDSP is configured for autostart and isn't up yet, launch it
-        // now that we have a config file to feed it, so the reload below lands.
+
         if self.inner.autostart {
             if let (Some(host), Some(port)) = (self.inner.ws_host.clone(), self.inner.ws_port) {
                 if is_localhost(&host) && !tcp_reachable(&host, port).await {
@@ -187,11 +198,31 @@ impl DspManager {
                 }
             }
         }
-        if let Some(url) = &self.inner.ws_url {
-            self.send_reload(url).await?;
+
+        let (reload_confirmed, reload_error) = if let Some(url) = &self.inner.ws_url {
+            match self.send_reload(url).await {
+                Ok(confirmed) => (confirmed, None),
+                Err(error) => (false, Some(error.to_string())),
+            }
+        } else {
+            (false, Some("CamillaDSP reload is not configured".to_string()))
+        };
+        let active = reload_confirmed;
+        if reload_confirmed {
+            *self.inner.active_device.lock().await = Some(effective.device.clone());
+        } else {
+            let mut active_device = self.inner.active_device.lock().await;
+            if active_device.as_deref() == Some(effective.device.as_str()) {
+                *active_device = None;
+            }
         }
-        *self.inner.active_device.lock().await = Some(effective.device);
-        Ok(())
+        Ok(DspApplyResult {
+            device: effective.device,
+            persisted: true,
+            reload_confirmed,
+            active,
+            reload_error,
+        })
     }
 
     async fn write_config(&self, cfg: &CamillaConfig) -> Result<()> {
@@ -203,52 +234,42 @@ impl DspManager {
         Ok(())
     }
 
-    async fn send_reload(&self, url: &str) -> Result<()> {
+    async fn send_reload(&self, url: &str) -> Result<bool> {
         let connect = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             tokio_tungstenite::connect_async(url),
         )
         .await;
         let (ws, _) = match connect {
-            // Connection refused / CamillaDSP not running: the config file is
-            // already on disk, so treat the live reload as best-effort instead
-            // of failing the whole apply (mirrors the `ws_url: None` path).
             Ok(Err(e)) => {
                 tracing::warn!("camilladsp reload skipped, not reachable at {url}: {e}");
-                return Ok(());
+                return Ok(false);
             }
             Err(_) => {
                 tracing::warn!("camilladsp reload skipped, websocket {url} timed out");
-                return Ok(());
+                return Ok(false);
             }
             Ok(Ok(ws)) => ws,
         };
         let (mut write, mut read) = ws.split();
-        // CamillaDSP 4.1 reloads the config file it was started with when it
-        // receives the JSON string command "Reload".
-        let msg = serde_json::json!("Reload").to_string();
         write
-            .send(Message::Text(msg.into()))
+            .send(Message::Text(serde_json::json!("Reload").to_string().into()))
             .await
             .context("send reload to camilladsp")?;
 
-        // CamillaDSP replies with either a success or {"Error": ...} message.
-        // Wait briefly for that reply so a rejected reload surfaces as a real
-        // error instead of a silent success. Some builds/versions stay silent
-        // on success, so a missing reply, a close, or a non-text frame is
-        // treated as accepted -- only an explicit {"Error": ...} fails the apply.
-        match tokio::time::timeout(std::time::Duration::from_secs(5), read.next()).await {
+        let confirmed = match tokio::time::timeout(std::time::Duration::from_secs(5), read.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
                 let v: serde_json::Value = serde_json::from_str(&text)
                     .with_context(|| format!("parse camilladsp reload response: {text}"))?;
-                if let Some(err) = v.get("Error") {
-                    anyhow::bail!("camilladsp rejected config reload: {err}");
+                if let Some(error) = v.get("Error") {
+                    anyhow::bail!("camilladsp rejected config reload: {error}");
                 }
+                true
             }
-            _ => {}
-        }
+            _ => false,
+        };
         write.close().await.ok();
-        Ok(())
+        Ok(confirmed)
     }
 }
 
@@ -446,9 +467,42 @@ mod tests {
             false,
             None,
         );
-        m.apply_profile(base("DAC")).await.unwrap();
+        let outcome = m.apply_profile(base("DAC")).await.unwrap();
 
+        assert!(outcome.persisted);
+        assert!(outcome.reload_confirmed);
+        assert!(outcome.active);
         assert_eq!(received.await.unwrap(), r#""Reload""#);
+    }
+
+    #[tokio::test]
+    async fn reload_failure_reports_saved_but_not_active() {
+        let tmp = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let _ = ws.next().await;
+            ws.send(Message::Text(r#"{"Error":"invalid config"}"#.into()))
+                .await
+                .unwrap();
+        });
+        let m = DspManager::new(
+            tmp.path().join("config.yml"),
+            Some(format!("ws://{addr}")),
+            "hw:Loopback,1".to_string(),
+            44100,
+            false,
+            None,
+        );
+        *m.inner.active_device.lock().await = Some("DAC".to_string());
+        let outcome = m.apply_profile(base("DAC")).await.unwrap();
+        assert!(outcome.persisted);
+        assert!(outcome.reload_error.as_deref().is_some_and(|error| error.contains("rejected")));
+        assert!(!outcome.reload_confirmed);
+        assert!(!outcome.active);
+        assert_eq!(m.active_device().await, None);
     }
     #[tokio::test]
     async fn apply_profile_for_device_targets_selected_output() {
@@ -456,12 +510,15 @@ mod tests {
         let m = manager(tmp.path());
         m.seed(vec![base("default")]).await;
 
-        m.apply_profile_for_device("hw:USB,0").await.unwrap();
+        let outcome = m.apply_profile_for_device("hw:USB,0").await.unwrap();
 
         let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
         let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.devices.playback.device, "hw:USB,0");
-        assert_eq!(m.active_device().await.as_deref(), Some("hw:USB,0"));
+        assert!(outcome.persisted);
+        assert!(!outcome.reload_confirmed);
+        assert!(!outcome.active);
+        assert_eq!(m.active_device().await, None);
     }
 
     // Regression: tcp_reachable used `.is_ok()` on the *outer* timeout Result,

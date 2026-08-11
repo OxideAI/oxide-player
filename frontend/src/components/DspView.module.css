@@ -405,3 +405,55 @@
   background: rgba(255, 255, 255, 0.08);
   color: var(--text);
 }
+.routeStatus {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--panel) 88%, var(--accent) 12%);
+}
+
+.routeStatus p,
+.switchDialog p {
+  margin: 0;
+}
+
+.success {
+  color: var(--ok, #73d39c);
+}
+
+.warning {
+  color: var(--warn, #f0c674);
+}
+
+.advancedToggle,
+.switchActions button {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  padding: 0.55rem 0.8rem;
+  color: var(--text);
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.advancedToggle:hover,
+.switchActions button:hover {
+  border-color: var(--accent);
+}
+
+.switchDialog {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--warn, #f0c674);
+  border-radius: 0.5rem;
+  background: var(--panel);
+}
+
+.switchActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

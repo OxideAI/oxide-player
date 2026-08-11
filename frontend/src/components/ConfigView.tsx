@@ -1,29 +1,46 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import type { Config } from '../types'
+import type { Config, DeviceOutput, PlayerStatus } from '../types'
+import { AudioPathView, stableOutputIdentity } from './AudioPathView'
 import { DevicesView } from './DevicesView'
 import { DspView } from './DspView'
+import { VisualizationSettings } from './VisualizationSettings'
 import styles from './ConfigView.module.css'
 
-type Section = 'library' | 'mpd' | 'server' | 'bluetooth' | 'dsp' | 'storage'
+type Section = 'library' | 'mpd' | 'server' | 'bluetooth' | 'dsp' | 'storage' | 'visualizer'
 
-export function ConfigView() {
+export interface ConfigViewProps {
+  status?: PlayerStatus | null
+  statusConnected?: boolean
+  statusError?: string | null
+  statusLastUpdatedAt?: number | null
+}
+
+export function ConfigView({
+  status = null,
+  statusConnected = false,
+  statusError = null,
+  statusLastUpdatedAt = null,
+}: ConfigViewProps) {
   const [config, setConfig] = useState<Config | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [restartNeeded, setRestartNeeded] = useState(false)
   const [version, setVersion] = useState<{ version: string } | null>(null)
-
+  const [deviceOutputs, setDeviceOutputs] = useState<DeviceOutput[]>([])
+  const [deviceLoading, setDeviceLoading] = useState(true)
+  const [deviceError, setDeviceError] = useState<string | null>(null)
+  const [selectedOutputKey, setSelectedOutputKey] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [newDir, setNewDir] = useState('')
   const [scanning, setScanning] = useState(false)
   const [saving, setSaving] = useState<Section | null>(null)
   const [shuttingDown, setShuttingDown] = useState(false)
   const [restarting, setRestarting] = useState(false)
-  // Which destructive action is awaiting confirmation in the in-app modal.
-  // `null` = no modal open. Replaces window.confirm, which is unreliable
-  // (blocked/auto-dismissed in some browsers and PWA/iframe contexts).
   const [confirmAction, setConfirmAction] = useState<'restart' | 'shutdown' | null>(null)
+
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -40,6 +57,41 @@ export function ConfigView() {
   useEffect(() => {
     load()
   }, [load])
+  const loadDevices = useCallback(async () => {
+    setDeviceLoading(true)
+    setDeviceError(null)
+    try {
+      setDeviceOutputs(await api.devices())
+    } catch (e) {
+      setDeviceError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDeviceLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadDevices()
+  }, [loadDevices])
+
+  const eligibleOutputs = useMemo(
+    () => deviceOutputs.filter((output) => output.role === 'playback' && output.selectable),
+    [deviceOutputs],
+  )
+  const selectedOutput = useMemo(
+    () => eligibleOutputs.find((output) => stableOutputIdentity(output) === selectedOutputKey) ?? null,
+    [eligibleOutputs, selectedOutputKey],
+  )
+
+  useEffect(() => {
+    if (!selectedOutputKey) {
+      const active = eligibleOutputs.find((output) => output.enabled)
+      if (active) setSelectedOutputKey(stableOutputIdentity(active))
+      return
+    }
+    if (!eligibleOutputs.some((output) => stableOutputIdentity(output) === selectedOutputKey)) {
+      setSelectedOutputKey(null)
+    }
+  }, [eligibleOutputs, selectedOutputKey])
 
   useEffect(() => {
     api
@@ -50,24 +102,64 @@ export function ConfigView() {
 
   const patch = (p: Partial<Config>) =>
     setConfig((c) => (c ? { ...c, ...p } : c))
-
-  const save = async (which: Section, restart: boolean) => {
-    if (!config) return
+  const save = async (
+    which: Section,
+    restart: boolean,
+    overrideConfig?: Config,
+  ): Promise<Config | null> => {
+    const nextConfig = overrideConfig ?? config
+    if (!nextConfig) return null
     setSaving(which)
     setError(null)
     setNotice(null)
     try {
-      const saved = await api.updateConfig(config)
+      const saved = await api.updateConfig(nextConfig)
       setConfig(saved)
       if (restart) setRestartNeeded(true)
       setNotice('Saved.')
+      return saved
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      return null
     } finally {
       setSaving(null)
     }
   }
 
+  const toggleOutput = async (output: DeviceOutput) => {
+    setActionError(null)
+    try {
+      if (output.enabled) await api.disableDevice(output.id)
+      else await api.enableDevice(output.id)
+      await loadDevices()
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const toggleDsp = async (output: DeviceOutput) => {
+    setActionError(null)
+    try {
+      if (output.dsp_enabled) await api.disableDeviceDsp(output.id)
+      else await api.enableDeviceDsp(output.id)
+      await loadDevices()
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const resolveMultiple = async () => {
+    const active = eligibleOutputs.filter((output) => output.enabled)
+    if (active.length < 2) return
+    setActionError(null)
+    try {
+      for (const output of active.slice(1)) await api.disableDevice(output.id)
+      await loadDevices()
+      setNotice('Extra playback outputs disabled. Waiting for live player status to confirm one route.')
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    }
+  }
   const addDir = async () => {
     const path = newDir.trim()
     if (!path) return
@@ -142,8 +234,6 @@ export function ConfigView() {
     }
   }
 
-  if (loading) return <p className={styles.dim}>loading...</p>
-  if (error && !config) return <div className={styles.error}>{error}</div>
 
   return (
     <div className={styles.wrap}>
@@ -159,6 +249,35 @@ export function ConfigView() {
       )}
       {error && <div className={styles.error}>{error}</div>}
       {notice && <div className={styles.notice}>{notice}</div>}
+      <AudioPathView
+        status={status}
+        outputs={deviceOutputs}
+        connected={statusConnected}
+        connectionError={statusError}
+        lastSnapshotAt={statusLastUpdatedAt}
+        detailsReady={!deviceLoading}
+        selectedOutputKey={selectedOutputKey}
+        onSelectOutput={setSelectedOutputKey}
+        onToggleOutput={toggleOutput}
+        onToggleDsp={toggleDsp}
+        onRetry={() => void loadDevices()}
+        onResolveMultiple={resolveMultiple}
+        deviceError={deviceError}
+        actionError={actionError}
+      />
+      {config && (
+        <VisualizationSettings
+          config={config}
+          onSave={(enabled) =>
+            save('visualizer', true, { ...config, visualizer_fft: enabled })
+          }
+        />
+      )}
+      {!config && loading && <p className={styles.dim}>Loading administration settings…</p>}
+      {config && (
+        <details className={styles.admin} open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
+          <summary className={styles.adminSummary}>Administration and advanced controls</summary>
+
 
       <section className={styles.card}>
         <div className={styles.cardHead}>
@@ -338,7 +457,14 @@ export function ConfigView() {
           <h3 className={styles.cardTitle}>Playback devices</h3>
           <span className={styles.live}>live</span>
         </div>
-        <DevicesView />
+        {advancedOpen && (
+          <DevicesView
+            outputs={deviceOutputs}
+            selectedOutputKey={selectedOutputKey}
+            onSelectOutput={setSelectedOutputKey}
+            onRefresh={loadDevices}
+          />
+        )}
       </section>
 
       <section className={styles.card}>
@@ -346,7 +472,14 @@ export function ConfigView() {
           <h3 className={styles.cardTitle}>DSP engine</h3>
           <span className={styles.live}>live</span>
         </div>
-        <DspView />
+        {advancedOpen && (
+          <DspView
+            selectedOutput={selectedOutput}
+            outputs={deviceOutputs}
+            onSelectOutput={setSelectedOutputKey}
+            onRefresh={loadDevices}
+          />
+        )}
       </section>
 
       <section className={styles.card}>
@@ -377,6 +510,8 @@ export function ConfigView() {
         </div>
       </section>
 
+        </details>
+      )}
       {confirmAction && (
         <div className={styles.confirmOverlay} onClick={() => setConfirmAction(null)}>
           <div className={styles.confirmBox} onClick={(e) => e.stopPropagation()}>

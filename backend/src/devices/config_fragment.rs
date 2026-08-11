@@ -1,3 +1,4 @@
+use crate::types::DeviceOutputRole;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
@@ -15,6 +16,81 @@ pub struct DeviceConfig {
     pub mixer_control: Option<String>,
     pub dop: bool,
 }
+/// MPD output names written by Oxide itself. These are not listening
+/// destinations and must stay out of playback selection.
+pub const MANAGED_VISUALIZER_OUTPUT: &str = "visualizer";
+pub const MANAGED_DSP_LOOPBACK_OUTPUT: &str = "camilladsp-loopback";
+
+/// Classify an MPD output from its managed identity. Unknown runtime outputs
+/// are intentionally conservative: they remain inspectable, but are not
+/// playback-selectable until a managed fragment confirms their role.
+pub fn classify_output_role(name: &str, configs: &[DeviceConfig]) -> DeviceOutputRole {
+    if name == MANAGED_VISUALIZER_OUTPUT || name == MANAGED_DSP_LOOPBACK_OUTPUT {
+        DeviceOutputRole::System
+    } else if configs.iter().any(|config| config.name == name) {
+        DeviceOutputRole::Playback
+    } else {
+        DeviceOutputRole::Unknown
+    }
+}
+
+/// Build a stable identity for selection and joining. Bluetooth addresses are
+/// preferred over friendly names because a managed config can be renamed.
+pub fn output_selection_key(name: &str, output_type: &str, device: Option<&str>, id: u32) -> String {
+    if let Some(address) = device
+        .and_then(|value| value.strip_prefix("bluealsa:DEV="))
+        .and_then(|value| value.split(',').next())
+        .filter(|value| !value.is_empty())
+    {
+        return format!("bluetooth:{}", address.to_ascii_uppercase());
+    }
+    if !name.is_empty() {
+        return format!("{}:{}", output_type.to_ascii_lowercase(), name);
+    }
+    format!("runtime:{id}")
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OutputDiagnosticFacts {
+    pub role: DeviceOutputRole,
+    pub configured: bool,
+    pub dsp_supported: bool,
+    pub connected: Option<bool>,
+    pub enabled: bool,
+    pub profile_configured: bool,
+    pub reload_error: bool,
+}
+
+/// Select exactly one stable diagnostic code. More specific/authoritative
+/// failures win over state hints so the frontend can render deterministic
+/// corrective guidance without parsing technical strings.
+pub fn diagnostic_code(facts: OutputDiagnosticFacts) -> Option<crate::types::DeviceOutputDiagnosticCode> {
+    use crate::types::DeviceOutputDiagnosticCode as Code;
+
+    if facts.role == DeviceOutputRole::System {
+        return None;
+    }
+    if facts.reload_error {
+        return Some(Code::ReloadError);
+    }
+    if facts.role == DeviceOutputRole::Unknown {
+        return Some(Code::UnknownOutput);
+    }
+    if facts.configured && !facts.dsp_supported {
+        return Some(Code::UnsupportedOutputType);
+    }
+    if facts.connected == Some(false) {
+        return Some(Code::Disconnected);
+    }
+    if !facts.enabled {
+        return Some(Code::Inactive);
+    }
+    if facts.dsp_supported && !facts.profile_configured {
+        return Some(Code::MissingProfile);
+    }
+    None
+}
+
 
 /// Field-level validation result.
 #[derive(Debug, Clone, Default)]
@@ -647,5 +723,51 @@ mod tests {
         assert!(parsed.dop);
 
         cleanup(&dir);
+    }
+    #[test]
+    fn output_roles_and_selection_keys_are_deterministic() {
+        let configs = vec![
+            DeviceConfig {
+                name: "USB DAC".to_string(),
+                output_type: "alsa".to_string(),
+                device: Some("hw:USB,0".to_string()),
+                format: None,
+                mixer_type: None,
+                mixer_device: None,
+                mixer_control: None,
+                dop: false,
+            },
+        ];
+        assert_eq!(classify_output_role("visualizer", &configs), DeviceOutputRole::System);
+        assert_eq!(classify_output_role(MANAGED_DSP_LOOPBACK_OUTPUT, &configs), DeviceOutputRole::System);
+        assert_eq!(classify_output_role("USB DAC", &configs), DeviceOutputRole::Playback);
+        assert_eq!(classify_output_role("External", &configs), DeviceOutputRole::Unknown);
+        assert_eq!(
+            output_selection_key("Speaker", "alsa", Some("bluealsa:DEV=aa:bb,PROFILE=a2dp"), 8),
+            "bluetooth:AA:BB"
+        );
+        assert_eq!(output_selection_key("USB DAC", "alsa", Some("hw:USB,0"), 99), "alsa:USB DAC");
+    }
+
+    #[test]
+    fn diagnostic_code_precedence_preserves_actionable_cause() {
+        let disconnected = OutputDiagnosticFacts {
+            role: DeviceOutputRole::Playback,
+            configured: true,
+            dsp_supported: true,
+            connected: Some(false),
+            enabled: false,
+            profile_configured: false,
+            reload_error: false,
+        };
+        assert_eq!(diagnostic_code(disconnected), Some(crate::types::DeviceOutputDiagnosticCode::Disconnected));
+        assert_eq!(
+            diagnostic_code(OutputDiagnosticFacts { reload_error: true, ..disconnected }),
+            Some(crate::types::DeviceOutputDiagnosticCode::ReloadError)
+        );
+        assert_eq!(
+            diagnostic_code(OutputDiagnosticFacts { role: DeviceOutputRole::Unknown, ..disconnected }),
+            Some(crate::types::DeviceOutputDiagnosticCode::UnknownOutput)
+        );
     }
 }

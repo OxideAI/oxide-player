@@ -14,6 +14,11 @@ describe('App routing', () => {
     expect(parsePath()).toEqual({ tab: 'radio', album: null })
   })
 
+  it('keeps Settings as one top-level route', () => {
+    window.history.pushState({}, '', '/settings')
+    expect(parsePath()).toEqual({ tab: 'settings', album: null })
+  })
+
   it('keeps album deep links working', () => {
     window.history.pushState({}, '', '/library/Artist%20%2F%20Album')
     expect(parsePath()).toEqual({ tab: 'library', album: 'Artist / Album' })
