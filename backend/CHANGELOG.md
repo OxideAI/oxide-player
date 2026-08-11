@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.7](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.6...oxide-player-v0.17.7) (2026-08-11)
+
+
+### Bug Fixes
+
+* mpd restart option ([519d4a5](https://github.com/OxideAI/oxide-player/commit/519d4a5cc0d6b9a198781951de9a59eaec15741d))
+
 ## [0.17.6](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.5...oxide-player-v0.17.6) (2026-08-11)
 
 
