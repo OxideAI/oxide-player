@@ -23,7 +23,7 @@ clap = { version = "4", features = ["derive"] }
 tokio-tungstenite = "0.30"
 futures-util = "0.3"
 anyhow = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls"] }
 image = "0.25"
 rustfft = "6"
 cpal = "0.18"
