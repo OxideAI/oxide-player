@@ -764,8 +764,28 @@ impl AppState {
     pub fn spawn_status_poller(&self) {
         let state = self.clone();
         tokio::spawn(async move {
+            let mut dsp_heal_at: Option<tokio::time::Instant> = None;
             loop {
                 state.refresh_status().await;
+
+                // Self-heal the DSP route: if CamillaDSP dropped (crash,
+                // bluealsa restart, BT disconnect) and a route is active,
+                // attempt to bring it back — but only every 5s so a down
+                // daemon isn't hammered every tick.
+                if !state.dsp().reachable().await {
+                    if state.dsp().active_device().await.is_some() {
+                        let now = tokio::time::Instant::now();
+                        if dsp_heal_at.is_none_or(|at| now >= at) {
+                            dsp_heal_at = Some(now + std::time::Duration::from_secs(5));
+                            if let Err(error) = state.dsp().restore_active_dsp_route().await {
+                                tracing::warn!("DSP route self-heal failed: {error}");
+                            }
+                        }
+                    }
+                } else {
+                    dsp_heal_at = None;
+                }
+
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         });

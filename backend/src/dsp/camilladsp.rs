@@ -131,6 +131,21 @@ impl DspManager {
         Ok(())
     }
 
+    /// Poll until the started CamillaDSP daemon accepts TCP connections on its
+    /// websocket port. Returns as soon as the listener is up (or gives up at a
+    /// fixed deadline) so the subsequent reload connects instead of hitting the
+    /// startup race that left a successful apply with an unconfirmed route.
+    async fn wait_until_listening(&self, host: &str, port: u16) -> bool {
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if tcp_reachable(host, port).await {
+                return true;
+            }
+        }
+        tracing::warn!("camilladsp did not become reachable at {host}:{port} after launch");
+        false
+    }
+
     pub async fn seed(&self, profiles: Vec<DspProfile>) {
         let mut map = self.inner.profiles.lock().await;
         for p in profiles {
@@ -163,6 +178,27 @@ impl DspManager {
         self.inner.active_device.lock().await.clone()
     }
 
+    /// Whether the CamillaDSP websocket endpoint accepts TCP connections.
+    /// Cheap probe used by the status poller to detect a dropped daemon.
+    pub async fn reachable(&self) -> bool {
+        match (self.inner.ws_host.clone(), self.inner.ws_port) {
+            (Some(host), Some(port)) => tcp_reachable(&host, port).await,
+            _ => false,
+        }
+    }
+
+    /// Re-apply the saved profile for the currently active device and confirm
+    /// the reload. Used by the status poller to self-heal the DSP route after
+    /// CamillaDSP dropped (crash, BT disconnect, bluealsa restart).
+    pub async fn restore_active_dsp_route(&self) -> Result<Option<DspApplyResult>> {
+        let device = self.inner.active_device.lock().await.clone();
+        let Some(device) = device else {
+            return Ok(None);
+        };
+        let result = self.apply_profile_for_device(&device).await?;
+        Ok(Some(result))
+    }
+
     pub async fn clear_active_device(&self) {
         *self.inner.active_device.lock().await = None;
     }
@@ -193,7 +229,7 @@ impl DspManager {
                     if let Err(e) = self.start_daemon(&host, port).await {
                         tracing::warn!("failed to launch camilladsp on apply: {e}");
                     } else {
-                        tokio::time::sleep(Duration::from_millis(800)).await;
+                        self.wait_until_listening(&host, port).await;
                     }
                 }
             }
@@ -235,29 +271,37 @@ impl DspManager {
     }
 
     async fn send_reload(&self, url: &str) -> Result<bool> {
-        let connect = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            tokio_tungstenite::connect_async(url),
-        )
-        .await;
-        let (ws, _) = match connect {
-            Ok(Err(e)) => {
-                tracing::warn!("camilladsp reload skipped, not reachable at {url}: {e}");
-                return Ok(false);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut last_connect_error: Option<String> = None;
+        let ws = loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                let detail = last_connect_error
+                    .map(|error| format!(": {error}"))
+                    .unwrap_or_default();
+                anyhow::bail!("camilladsp websocket at {url} was not reachable{detail}");
             }
-            Err(_) => {
-                tracing::warn!("camilladsp reload skipped, websocket {url} timed out");
-                return Ok(false);
+
+            match tokio::time::timeout(
+                remaining.min(std::time::Duration::from_millis(500)),
+                tokio_tungstenite::connect_async(url),
+            )
+            .await
+            {
+                Ok(Ok((ws, _))) => break ws,
+                Ok(Err(error)) => {
+                    last_connect_error = Some(error.to_string());
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Err(_) => {
+                    last_connect_error = Some("connection timed out".to_string());
+                }
             }
-            Ok(Ok(ws)) => ws,
         };
+
         let (mut write, mut read) = ws.split();
         write
-            .send(
-                Message::Text(
-                    serde_json::json!("Reload").to_string().into(),
-                ),
-            )
+            .send(Message::Text(serde_json::json!("Reload").to_string().into()))
             .await
             .context("send reload to camilladsp")?;
 
@@ -277,7 +321,14 @@ impl DspManager {
                     );
                 }
             }
-            _ => false,
+            Ok(Some(Ok(message))) => {
+                anyhow::bail!("camilladsp returned non-text reload response: {message:?}");
+            }
+            Ok(Some(Err(error))) => {
+                anyhow::bail!("camilladsp reload websocket error: {error}");
+            }
+            Ok(None) => anyhow::bail!("camilladsp closed websocket before confirming reload"),
+            Err(_) => anyhow::bail!("timed out waiting for camilladsp reload confirmation"),
         };
         write.close().await.ok();
         Ok(confirmed)
@@ -486,6 +537,81 @@ mod tests {
         assert!(outcome.reload_confirmed);
         assert!(outcome.active);
         assert_eq!(received.await.unwrap(), expected);
+    }
+    #[tokio::test]
+    async fn reload_retries_when_camilladsp_is_starting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reserved = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = reserved.local_addr().unwrap();
+        drop(reserved);
+
+        let server = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            assert_eq!(
+                ws.next().await.unwrap().unwrap().into_text().unwrap(),
+                r#""Reload""#
+            );
+            ws.send(Message::Text(r#"{"Reload":{"result":"Ok"}}"#.into()))
+                .await
+                .unwrap();
+        });
+
+        let m = DspManager::new(
+            tmp.path().join("config.yml"),
+            Some(format!("ws://{addr}")),
+            "hw:Loopback,1".to_string(),
+            44100,
+            false,
+            None,
+        );
+        assert!(m.send_reload(m.inner.ws_url.as_deref().unwrap()).await.unwrap());
+        server.await.unwrap();
+    }
+
+
+    #[tokio::test]
+    async fn restore_active_dsp_route_reapplies_active_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let received = tokio::spawn(async move {
+            let mut messages = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let message = ws.next().await.unwrap().unwrap().into_text().unwrap().to_string();
+                ws.send(Message::Text(r#"{"Reload":{"result":"Ok"}}"#.into()))
+                    .await
+                    .unwrap();
+                messages.push(message);
+            }
+            messages
+        });
+
+        let m = DspManager::new(
+            tmp.path().join("config.yml"),
+            Some(format!("ws://{addr}")),
+            "hw:Loopback,1".to_string(),
+            44100,
+            false,
+            None,
+        );
+        let mut p = base("DAC");
+        p.mode = DspMode::Resample;
+        m.apply_profile(p.clone()).await.unwrap();
+
+        // Active device is set by the successful apply; the restore must
+        // re-apply that same device and confirm the reload again.
+        let outcome = m.restore_active_dsp_route().await.unwrap().unwrap();
+        assert!(outcome.reload_confirmed);
+        assert!(outcome.active);
+        assert_eq!(m.active_device().await.as_deref(), Some("DAC"));
+        let messages = received.await.unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|message| message == r#""Reload""#));
     }
 
     #[tokio::test]
