@@ -19,7 +19,7 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use tower_http::services::ServeDir;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use axum::{Json, Router};
 
 mod bluetooth;

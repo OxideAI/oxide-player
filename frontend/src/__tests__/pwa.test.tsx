@@ -56,8 +56,10 @@ describe('InstallPrompt', () => {
   it('calls prompt() and hides on install', async () => {
     render(<InstallPrompt />)
     const evt = fireBeforeInstall()
-    fireEvent.click(screen.getByText('Install'))
-    await new Promise((r) => setTimeout(r, 0))
+    await act(async () => {
+      fireEvent.click(screen.getByText('Install'))
+      await Promise.resolve()
+    })
     expect(evt.prompt).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog')).toBeNull()
   })
@@ -74,9 +76,11 @@ describe('InstallPrompt', () => {
     render(<InstallPrompt />)
     const evt = fireBeforeInstall()
     const btn = screen.getByText('Install')
-    fireEvent.click(btn)
-    fireEvent.click(btn)
-    await new Promise((r) => setTimeout(r, 0))
+    await act(async () => {
+      fireEvent.click(btn)
+      fireEvent.click(btn)
+      await Promise.resolve()
+    })
     expect(evt.prompt).toHaveBeenCalledTimes(1)
   })
 

@@ -101,8 +101,11 @@ function ProfileEditor({
   const [importNotice, setImportNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [editingAdvanced, setEditingAdvanced] = useState(advanced)
+  const previousProfile = useRef(profile)
 
   useEffect(() => {
+    if (previousProfile.current === profile) return
+    previousProfile.current = profile
     setDraft(toRows(profile))
     onDirtyChange?.(false)
   }, [profile, toRows, onDirtyChange])
