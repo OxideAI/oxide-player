@@ -253,7 +253,17 @@ impl DspManager {
         };
         let (mut write, mut read) = ws.split();
         write
-            .send(Message::Text(serde_json::json!("Reload").to_string().into()))
+            .send(
+                Message::Text(
+                    serde_json::json!({
+                        "Reload": {
+                            "config": self.inner.config_path,
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ),
+            )
             .await
             .context("send reload to camilladsp")?;
 
@@ -449,6 +459,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let config_path = tmp.path().join("config.yml");
+        let expected = serde_json::json!({
+            "Reload": {
+                "config": config_path.to_string_lossy(),
+            }
+        })
+        .to_string();
         let received = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -460,7 +477,7 @@ mod tests {
         });
 
         let m = DspManager::new(
-            tmp.path().join("config.yml"),
+            config_path,
             Some(format!("ws://{addr}")),
             "hw:Loopback,1".to_string(),
             44100,
@@ -472,7 +489,7 @@ mod tests {
         assert!(outcome.persisted);
         assert!(outcome.reload_confirmed);
         assert!(outcome.active);
-        assert_eq!(received.await.unwrap(), r#""Reload""#);
+        assert_eq!(received.await.unwrap(), expected);
     }
 
     #[tokio::test]

@@ -420,9 +420,6 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    fn run_test<T>(_name: &str, f: impl FnOnce() -> T) -> T {
-        f()
-    }
 
     #[test]
     fn test_sanitize_device_name() {

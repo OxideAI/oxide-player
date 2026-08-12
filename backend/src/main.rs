@@ -77,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
     let listen_addr = config.listen.clone();
     let bt = bluetooth::BluetoothManager::new().await;
     let state = state::AppState::new(config, db, dsp, mpd, visualizer, bt, config_path);
+    state.spawn_dsp_restore();
     state.spawn_bluetooth_reconnect();
     state.spawn_status_poller();
 

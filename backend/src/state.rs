@@ -1,6 +1,7 @@
 use crate::bluetooth::BluetoothManager;
 use crate::config::Config;
 use crate::devices::config_fragment::ConfigFragmentManager;
+use crate::dsp::profile::DspProfile;
 use crate::dsp::DspManager;
 use crate::library::LibraryDb;
 use crate::mpd::{Mpd, MpdStatus};
@@ -280,6 +281,101 @@ impl AppState {
         config.write_to(&path)?;
         *self.inner.config.write().await = config;
         Ok(path)
+    }
+    pub async fn persist_dsp_profile(&self, profile: &DspProfile) -> anyhow::Result<()> {
+        let mut config = self.config().await;
+        if let Some(saved) = config
+            .default_dsp_profiles
+            .iter_mut()
+            .find(|saved| saved.device == profile.device)
+        {
+            *saved = profile.clone();
+        } else {
+            config.default_dsp_profiles.push(profile.clone());
+        }
+        self.set_config(config).await?;
+        Ok(())
+    }
+
+    pub async fn set_dsp_active_device(&self, device: Option<String>) -> anyhow::Result<()> {
+        let mut config = self.config().await;
+        config.dsp_active_device = device;
+        self.set_config(config).await?;
+        Ok(())
+    }
+
+    /// Restore a DSP route saved by the previous process instance. MPD output
+    /// enablement is runtime state, so the managed loopback and target must be
+    /// switched again after a server restart.
+    pub fn spawn_dsp_restore(&self) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let device = state.config().await.dsp_active_device;
+            let Some(device) = device else { return };
+
+            for _ in 0..50 {
+                if state.dsp().get_profile(&device).await.is_some()
+                    || state.dsp().get_profile("default").await.is_some()
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+
+            let outputs = match state.mpd().outputs().await {
+                Ok(outputs) => outputs,
+                Err(error) => {
+                    tracing::warn!("cannot restore DSP route: {error}");
+                    return;
+                }
+            };
+            let configs = state.device_configs().list();
+            let target = outputs.iter().find(|output| {
+                configs.iter().any(|config| {
+                    config.name == output.name
+                        && config.output_type.eq_ignore_ascii_case("alsa")
+                        && config.device.as_deref() == Some(device.as_str())
+                })
+            });
+            let Some(target) = target else {
+                tracing::warn!("saved DSP device is no longer configured: {device}");
+                return;
+            };
+            let Some(loopback) = outputs
+                .iter()
+                .find(|output| output.name == crate::devices::config_fragment::MANAGED_DSP_LOOPBACK_OUTPUT)
+            else {
+                tracing::warn!("cannot restore DSP route: loopback output is unavailable");
+                return;
+            };
+
+            let result = match state.dsp().apply_profile_for_device(&device).await {
+                Ok(result) => result,
+                Err(error) => {
+                    tracing::warn!("cannot restore DSP profile for {device}: {error}");
+                    return;
+                }
+            };
+            if !result.reload_confirmed {
+                tracing::warn!(
+                    "DSP profile for {device} was restored but route reload was not confirmed"
+                );
+                return;
+            }
+            if target.enabled {
+                if let Err(error) = state.mpd().disable_output(target.id).await {
+                    tracing::warn!("cannot disable direct output while restoring DSP: {error}");
+                    return;
+                }
+            }
+            if !loopback.enabled {
+                if let Err(error) = state.mpd().enable_output(loopback.id).await {
+                    tracing::warn!("cannot enable DSP loopback while restoring DSP: {error}");
+                    return;
+                }
+            }
+            state.refresh_status().await;
+        });
     }
 
     pub async fn status_snapshot(&self) -> PlayerStatus {

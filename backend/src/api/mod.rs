@@ -713,6 +713,17 @@ fn configured_dsp_device(
         .ok_or_else(|| "output has no ALSA device configured".to_string())?;
     Ok(device.to_string())
 }
+fn dsp_route_is_active(
+    loopback_enabled: bool,
+    target_enabled: bool,
+    active_device: Option<&str>,
+    target_device: &str,
+    profile_configured: bool,
+) -> bool {
+    loopback_enabled
+        && (active_device == Some(target_device)
+            || (active_device.is_none() && !target_enabled && profile_configured))
+}
 
 async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>> {
     let outputs = s.mpd().outputs().await?;
@@ -739,8 +750,19 @@ async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>
             });
             let configured = config.is_some();
             let dsp_device = configured_dsp_device(&configs, &output);
-            let dsp_route_active = loopback_enabled
-                && active_device.as_deref() == dsp_device.as_ref().ok().map(String::as_str);
+            let profile_configured = dsp_device.as_ref().ok().is_some_and(|device| {
+                profiles.iter().any(|profile| profile.device == *device)
+                    || profiles.iter().any(|profile| profile.device == "default")
+            });
+            let dsp_route_active = dsp_device.as_ref().ok().is_some_and(|device| {
+                dsp_route_is_active(
+                    loopback_enabled,
+                    output.enabled,
+                    active_device.as_deref(),
+                    device,
+                    profile_configured,
+                )
+            });
             let capability_supported = matches!(
                 (&config, device),
                 (Some(config), Some(device))
@@ -750,10 +772,6 @@ async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>
             let dsp_supported = capability_supported
                 && connected != Some(false)
                 && (output.enabled || dsp_route_active);
-            let profile_configured = dsp_device.as_ref().ok().is_some_and(|device| {
-                profiles.iter().any(|profile| profile.device == *device)
-                    || profiles.iter().any(|profile| profile.device == "default")
-            });
             let mut dsp_reason = if connected == Some(false) {
                 Some("Bluetooth output is not connected".to_string())
             } else if !configured {
@@ -845,6 +863,9 @@ async fn disable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppRe
         || target_device.as_deref() == active_device.as_deref()
     {
         s.dsp().clear_active_device().await;
+        s.set_dsp_active_device(None)
+            .await
+            .map_err(|e| AppError::Library(e.to_string()))?;
     }
     let _ = s.mpd().clear_error().await;
     // Keep volume capability state synchronized after switching outputs.
@@ -879,7 +900,15 @@ async fn dsp_output_target(
         .into_iter()
         .find(|output| output.name == DSP_LOOPBACK_NAME)
         .ok_or_else(|| AppError::BadRequest("CamillaDSP loopback output is not available".to_string()))?;
-    let route_active = loopback.enabled && s.dsp().active_device().await.as_deref() == Some(&device);
+    let profile_configured = s.dsp().get_profile(&device).await.is_some()
+        || s.dsp().get_profile("default").await.is_some();
+    let route_active = dsp_route_is_active(
+        loopback.enabled,
+        target.enabled,
+        s.dsp().active_device().await.as_deref(),
+        &device,
+        profile_configured,
+    );
     if !target.enabled && !route_active {
         return Err(AppError::BadRequest("output is not active".to_string()));
     }
@@ -888,10 +917,21 @@ async fn dsp_output_target(
 
 async fn enable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
     let (target, device, loopback) = dsp_output_target(&s, id).await?;
-    s.dsp()
+    let result = s
+        .dsp()
         .apply_profile_for_device(&device)
         .await
         .map_err(|e| AppError::Dsp(e.to_string()))?;
+    if !result.reload_confirmed {
+        return Err(AppError::Dsp(
+            result
+                .reload_error
+                .unwrap_or_else(|| "CamillaDSP did not confirm the route reload".to_string()),
+        ));
+    }
+    s.set_dsp_active_device(Some(device))
+        .await
+        .map_err(|e| AppError::Library(e.to_string()))?;
     if target.enabled {
         s.mpd().disable_output(target.id).await?;
     }
@@ -911,7 +951,9 @@ async fn disable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> A
     if !target.enabled {
         s.mpd().enable_output(target.id).await?;
     }
-    s.dsp().clear_active_device().await;
+    s.set_dsp_active_device(None)
+        .await
+        .map_err(|e| AppError::Library(e.to_string()))?;
     let _ = s.mpd().clear_error().await;
     s.refresh_status().await;
     Ok(StatusCode::OK)
@@ -1217,6 +1259,9 @@ async fn dsp_get(State(s): State<AppState>) -> AppResult<Json<Vec<DspProfile>>> 
 
 async fn dsp_set(State(s): State<AppState>, Json(p): Json<DspProfile>) -> AppResult<Json<DspApplyResult>> {
     p.validate().map_err(|e| AppError::BadRequest(e.to_string()))?;
+    s.persist_dsp_profile(&p)
+        .await
+        .map_err(|e| AppError::Library(e.to_string()))?;
     let result = s
         .dsp()
         .apply_profile(p)
@@ -1699,8 +1744,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dsp_set_endpoint_reports_persistence_and_reload_confirmation() {
-        let app = test_app().await;
+    async fn dsp_set_endpoint_persists_profile_for_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = Config::default_config();
+        config.data_dir = temp.path().join("data");
+        config.camilladsp_config_path = temp.path().join("camilladsp/config.yml");
+        let app = test_app_with_config(config).await;
         let request = Request::builder()
             .method("PUT")
             .uri("/api/dsp")
@@ -1711,7 +1760,7 @@ mod tests {
                     "mode": "bit_perfect",
                     "target_rate": null,
                     "preset": "balanced",
-                    "preamp": 0.0,
+                    "preamp": -6.5,
                     "eq_bands": []
                 })
                 .to_string(),
@@ -1719,13 +1768,12 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(parsed["persisted"], true);
-        assert_eq!(parsed["reload_confirmed"], false);
-        assert_eq!(parsed["active"], false);
+
+        let saved = std::fs::read_to_string(temp.path().join("data/config.json")).unwrap();
+        let saved: Config = serde_json::from_str(&saved).unwrap();
+        assert_eq!(saved.default_dsp_profiles.len(), 1);
+        assert_eq!(saved.default_dsp_profiles[0].device, "hw:USB,0");
+        assert_eq!(saved.default_dsp_profiles[0].preamp, -6.5);
     }
 
     #[tokio::test]
@@ -1960,6 +2008,30 @@ mod tests {
         );
         assert!(super::configured_dsp_device(&[config("Pipe", "pipe", Some("/tmp/audio"))], &output).is_err());
         assert!(super::configured_dsp_device(&[], &output).is_err());
+    }
+    #[test]
+    fn dsp_route_is_inferred_after_restart_from_saved_profile() {
+        assert!(super::dsp_route_is_active(
+            true,
+            false,
+            None,
+            "hw:USB,0",
+            true,
+        ));
+        assert!(!super::dsp_route_is_active(
+            true,
+            false,
+            None,
+            "hw:USB,0",
+            false,
+        ));
+        assert!(!super::dsp_route_is_active(
+            false,
+            false,
+            None,
+            "hw:USB,0",
+            true,
+        ));
     }
 
     #[test]

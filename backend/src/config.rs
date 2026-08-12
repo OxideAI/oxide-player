@@ -37,6 +37,9 @@ pub struct Config {
     pub camilladsp_capture_rate: Option<u32>,
     #[serde(default)]
     pub default_dsp_profiles: Vec<crate::dsp::profile::DspProfile>,
+    /// Managed playback endpoint whose audio route is currently using DSP.
+    #[serde(default)]
+    pub dsp_active_device: Option<String>,
     /// Enable the real FFT audio visualizer. When true the backend taps the PCM
     /// capture device and streams magnitude bins to `/api/visualizer`. Off by
     /// default so the feature has zero cost / no capture device dependency when
@@ -197,6 +200,7 @@ impl Config {
             camilladsp_capture_device: None,
             camilladsp_capture_rate: None,
             default_dsp_profiles: Vec::new(),
+            dsp_active_device: None,
             visualizer_fft: false,
             visualizer_capture_device: None,
             visualizer_capture_rate: None,
