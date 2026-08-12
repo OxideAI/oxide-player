@@ -255,13 +255,7 @@ impl DspManager {
         write
             .send(
                 Message::Text(
-                    serde_json::json!({
-                        "Reload": {
-                            "config": self.inner.config_path,
-                        }
-                    })
-                    .to_string()
-                    .into(),
+                    serde_json::json!("Reload").to_string().into(),
                 ),
             )
             .await
@@ -271,10 +265,17 @@ impl DspManager {
             Ok(Some(Ok(Message::Text(text)))) => {
                 let v: serde_json::Value = serde_json::from_str(&text)
                     .with_context(|| format!("parse camilladsp reload response: {text}"))?;
-                if let Some(error) = v.get("Error") {
-                    anyhow::bail!("camilladsp rejected config reload: {error}");
+                let result = v
+                    .get("Reload")
+                    .and_then(|reload| reload.get("result"));
+                if result == Some(&serde_json::Value::String("Ok".to_string())) {
+                    true
+                } else {
+                    anyhow::bail!(
+                        "camilladsp rejected config reload: {}",
+                        result.unwrap_or(&v)
+                    );
                 }
-                true
             }
             _ => false,
         };
@@ -460,12 +461,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let config_path = tmp.path().join("config.yml");
-        let expected = serde_json::json!({
-            "Reload": {
-                "config": config_path.to_string_lossy(),
-            }
-        })
-        .to_string();
+        let expected = serde_json::json!("Reload").to_string();
         let received = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -501,7 +497,9 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
             let _ = ws.next().await;
-            ws.send(Message::Text(r#"{"Error":"invalid config"}"#.into()))
+            ws.send(Message::Text(
+                r#"{"Reload":{"result":{"ConfigValidationError":"invalid config"}}}"#.into(),
+            ))
                 .await
                 .unwrap();
         });
