@@ -1002,6 +1002,58 @@ EOF
   run systemctl restart oxide-bluetooth-discoverable || warn "Bluetooth discoverability could not be enabled"
 }
 
+write_motd() {
+  # Login welcome banner (Ubuntu/Debian pam_motd). The script under
+  # /etc/update-motd.d/ runs on every SSH login, so the version and service
+  # status shown are always live. Quoted heredoc keeps the inner script's
+  # $vars and \033 escapes intact for login-time evaluation.
+  log "Installing login MOTD"
+  local _port="${LISTEN##*:}"
+  local _port_suffix=""
+  [ "$_port" != "80" ] && _port_suffix=":$_port"
+  local _motd
+  _motd="$(cat <<'MOTD_EOF'
+#!/bin/sh
+# Oxide Player status MOTD (managed by install.sh)
+
+IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+HOST=$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
+cat <<'ART'
+
+   █████   ██   ██  ███████  █████    ███████
+  ██   ██   ██ ██      █     ██   ██  ██
+  ██   ██    ███       █     ██   ██  ██
+  ██   ██     █        █     ██   ██  █████
+  ██   ██    ███       █     ██   ██  ██
+  ██   ██   ██ ██      █     ██   ██  ██
+   █████   ██   ██  ███████  █████    ███████
+
+  ── Audiophile Music Server ──
+ART
+
+VER=$(curl -s --max-time 2 "http://localhost__PORT_SUFFIX__/api/version" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+[ -n "$VER" ] && printf '  Version : %s\n' "$VER"
+
+if systemctl is-active --quiet oxide-player; then
+    printf '  Service : \033[0;32mactive\033[0m\n'
+else
+    printf '  Service : \033[0;31mINACTIVE\033[0m\n'
+fi
+
+printf '  Web UI  : http://%s__PORT_SUFFIX__/\n' "$IP"
+printf '  mDNS    : http://%s.local__PORT_SUFFIX__/\n' "$HOST"
+printf '  Music   : smb://%s/Music\n' "$IP"
+printf '\n'
+MOTD_EOF
+)"
+  _motd="${_motd//__PORT_SUFFIX__/$_port_suffix}"
+  run mkdir -p /etc/update-motd.d
+  printf '%s\n' "$_motd" > /etc/update-motd.d/99-oxide-player
+  run chmod 755 /etc/update-motd.d/99-oxide-player
+}
+
+
 finish() {
   local _ip="$(hostname -I | awk '{print $1}')"
   local _hostname="$(hostname -s | tr '[:upper:]' '[:lower:]')"
@@ -1090,6 +1142,8 @@ do_uninstall() {
   remove_path "$SHARE_DIR"
   remove_path "/etc/avahi/services/oxide-player.service"
   remove_path "$SUDOERS_RULE"
+  remove_path /etc/update-motd.d/99-oxide-player
+
 
   if [ -f "$ASOUND_CONFIG" ] && grep -Fq '# oxide-player:' "$ASOUND_CONFIG"; then
     remove_path "$ASOUND_CONFIG"
@@ -1146,6 +1200,8 @@ do_update() {
   setup_bluetooth
   setup_airplay
   install_units
+  write_motd
+
   log "Update complete."
   finish
 }
@@ -1199,6 +1255,7 @@ main() {
   write_oxide_config
   setup_airplay
   install_units
+  write_motd
   finish
 }
 
