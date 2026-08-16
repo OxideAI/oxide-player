@@ -349,10 +349,24 @@ impl AppState {
                 return;
             };
 
+            // Release the direct output BEFORE applying the profile: for
+            // Bluetooth the bluealsa A2DP PCM is exclusive, and CamillaDSP
+            // cannot open it while MPD still holds it (same ordering as
+            // `enable_device_dsp`).
+            if target.enabled {
+                if let Err(error) = state.mpd().disable_output(target.id).await {
+                    tracing::warn!("cannot disable direct output while restoring DSP: {error}");
+                    return;
+                }
+            }
+
             let result = match state.dsp().apply_profile_for_device(&device).await {
                 Ok(result) => result,
                 Err(error) => {
                     tracing::warn!("cannot restore DSP profile for {device}: {error}");
+                    if target.enabled {
+                        let _ = state.mpd().enable_output(target.id).await;
+                    }
                     return;
                 }
             };
@@ -360,13 +374,10 @@ impl AppState {
                 tracing::warn!(
                     "DSP profile for {device} was restored but route reload was not confirmed"
                 );
-                return;
-            }
-            if target.enabled {
-                if let Err(error) = state.mpd().disable_output(target.id).await {
-                    tracing::warn!("cannot disable direct output while restoring DSP: {error}");
-                    return;
+                if target.enabled {
+                    let _ = state.mpd().enable_output(target.id).await;
                 }
+                return;
             }
             if !loopback.enabled {
                 if let Err(error) = state.mpd().enable_output(loopback.id).await {

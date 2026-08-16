@@ -917,12 +917,29 @@ async fn dsp_output_target(
 
 async fn enable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
     let (target, device, loopback) = dsp_output_target(&s, id).await?;
-    let result = s
-        .dsp()
-        .apply_profile_for_device(&device)
-        .await
-        .map_err(|e| AppError::Dsp(e.to_string()))?;
+
+    // Release the direct output BEFORE applying the profile: CamillaDSP's
+    // playback device (for Bluetooth, the exclusive bluealsa A2DP PCM) cannot
+    // be opened while MPD still holds it. Spawning the daemon first surfaces
+    // a "PCM not found" / connection-refused reload instead of a clean route.
+    if target.enabled {
+        s.mpd().disable_output(target.id).await?;
+    }
+
+    let result = match s.dsp().apply_profile_for_device(&device).await {
+        Ok(result) => result,
+        Err(error) => {
+            // Roll back: keep the direct output enabled on a failed apply.
+            if target.enabled {
+                let _ = s.mpd().enable_output(target.id).await;
+            }
+            return Err(AppError::Dsp(error.to_string()));
+        }
+    };
     if !result.reload_confirmed {
+        if target.enabled {
+            let _ = s.mpd().enable_output(target.id).await;
+        }
         return Err(AppError::Dsp(
             result
                 .reload_error
@@ -932,9 +949,6 @@ async fn enable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> Ap
     s.set_dsp_active_device(Some(device))
         .await
         .map_err(|e| AppError::Library(e.to_string()))?;
-    if target.enabled {
-        s.mpd().disable_output(target.id).await?;
-    }
     if !loopback.enabled {
         s.mpd().enable_output(loopback.id).await?;
     }

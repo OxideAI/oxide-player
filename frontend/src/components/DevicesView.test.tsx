@@ -170,6 +170,17 @@ describe('DevicesView Bluetooth actions', () => {
     await waitFor(() => expect(getByRole('button', { name: 'Connect' })).toBeTruthy())
   })
 
+  it('hides provisioning prompt for a configured connected device', async () => {
+    listBluetoothDevices.mockResolvedValue([makeDevice({ connected: true })])
+    listConfigs.mockResolvedValue([makeBluetoothConfig()])
+
+    const { getByRole, queryByRole, queryByText } = render(<DevicesView />)
+    await waitFor(() => expect(getByRole('button', { name: 'Disconnect' })).toBeTruthy())
+
+    expect(queryByRole('button', { name: 'Retry provisioning' })).toBeNull()
+    expect(queryByText(/no managed playback output is visible/)).toBeNull()
+  })
+
   it('shows Disconnect for a connected device', async () => {
     listBluetoothDevices.mockResolvedValue([makeDevice({ connected: true })])
 
