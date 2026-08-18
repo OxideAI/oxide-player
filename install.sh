@@ -1210,7 +1210,7 @@ do_update() {
   build_frontend
   ensure_mpd_include || true
   ensure_mpd_loopback_mixer || true
-  ensure_asound_loopback || true
+  write_camilladsp_config
   ensure_samba_shares || true
   write_visualizer_fifo || true
   write_oxide_config
