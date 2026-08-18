@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.14...oxide-player-v0.18.0) (2026-08-18)
+
+
+### Features
+
+* USB DAC ([395334d](https://github.com/OxideAI/oxide-player/commit/395334d215a2929e5b3c98cddb522a179a665a45))
+
 ## [0.17.14](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.13...oxide-player-v0.17.14) (2026-08-16)
 
 
