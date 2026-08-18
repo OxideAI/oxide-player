@@ -15,6 +15,7 @@ export MPD_MUSIC_DIR="$DATA_DIR/music"
 export LISTEN="0.0.0.0:80"
 export CAMILLADSP_CONFIG="$tmp_dir/etc/camilladsp/config.yml"
 export CAMILLADSP_WS="ws://127.0.0.1:1234"
+export BIN_DIR="$tmp_dir/usr/local/bin"
 export SERVICE_USER="$(id -un)"
 
 mkdir -p "$CONFIG_DIR"
@@ -43,7 +44,7 @@ JSON
 source "$repo_root/install.sh"
 write_oxide_config
 
-python3 - "$CONFIG_DIR/config.json" <<'PY'
+python3 - "$CONFIG_DIR/config.json" "$BIN_DIR" <<'PY'
 import json
 import sys
 
@@ -58,6 +59,7 @@ assert config["visualizer_fft"] is True, "installer-managed keys missing from ol
 assert "mpd_music_directory" not in config, "retired mpd_music_directory key must be removed"
 assert config["visualizer_capture_device"] == "hw:Loopback,1"
 assert config["visualizer_capture_rate"] == 44100
-PY
+assert config["camilladsp_binary"] == f"{sys.argv[2]}/camilladsp"
 
+PY
 printf 'installer config preservation test passed\n'

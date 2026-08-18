@@ -135,15 +135,31 @@ ensure_rust() {
 }
 
 ensure_camilladsp() {
-  if command -v camilladsp >/dev/null 2>&1; then
-    log "camilladsp present: $(camilladsp --version 2>&1 | head -1)"
+  local installed="$BIN_DIR/camilladsp"
+  if [ -x "$installed" ]; then
+    log "camilladsp present: $installed"
     return
   fi
+
+  local existing
+  if existing="$(command -v camilladsp 2>/dev/null)"; then
+    run mkdir -p "$(dirname "$installed")"
+    run install -m0755 "$existing" "$installed"
+    log "Installed CamillaDSP -> $installed"
+    return
+  fi
+
   ensure_rust
   # camilladsp is not published to crates.io; build from the official repo,
   # pinned to a release tag for reproducible installs.
   log "Installing camilladsp (pinned to v4.1.3)..."
   run cargo install --git https://github.com/HEnquist/camilladsp --tag v4.1.3
+
+  local built="${CARGO_HOME:-$HOME/.cargo}/bin/camilladsp"
+  [ -x "$built" ] || die "camilladsp build completed but binary was not found at $built"
+  run mkdir -p "$(dirname "$installed")"
+  run install -m0755 "$built" "$installed"
+  log "Installed CamillaDSP -> $installed"
 }
 
 detect_arch() {
@@ -872,7 +888,7 @@ write_oxide_config() {
   "static_dir": "$SHARE_DIR/dist",
   "camilladsp_config_path": "$CAMILLADSP_CONFIG",
   "camilladsp_ws_url": "$CAMILLADSP_WS",
-  "default_dsp_profiles": [],
+  "camilladsp_binary": "$BIN_DIR/camilladsp",
   "visualizer_fft": true,
   "visualizer_capture_device": "hw:Loopback,1",
   "visualizer_capture_rate": 44100,
@@ -1139,6 +1155,7 @@ do_uninstall() {
   done
 
   remove_path "$BIN_DIR/oxide-player"
+  remove_path "$BIN_DIR/camilladsp"
   remove_path "$SHARE_DIR"
   remove_path "/etc/avahi/services/oxide-player.service"
   remove_path "$SUDOERS_RULE"
@@ -1185,9 +1202,9 @@ do_uninstall() {
 
 do_update() {
   need_root
-  check_linux
-  detect_os
-  apt_install bluez-alsa-utils shairport-sync
+  apt_install curl git build-essential pkg-config libssl-dev libasound2-dev \
+              bluez-alsa-utils shairport-sync
+  ensure_camilladsp
   fetch_source
   build_backend
   build_frontend

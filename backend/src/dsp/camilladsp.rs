@@ -223,19 +223,29 @@ impl DspManager {
             .await
             .insert(profile.device.clone(), profile);
 
+        let mut startup_error = None;
         if self.inner.autostart {
             if let (Some(host), Some(port)) = (self.inner.ws_host.clone(), self.inner.ws_port) {
                 if is_localhost(&host) && !tcp_reachable(&host, port).await {
-                    if let Err(e) = self.start_daemon(&host, port).await {
-                        tracing::warn!("failed to launch camilladsp on apply: {e}");
-                    } else {
-                        self.wait_until_listening(&host, port).await;
+                    match self.start_daemon(&host, port).await {
+                        Err(error) => {
+                            startup_error = Some(error.to_string());
+                        }
+                        Ok(()) => {
+                            if !self.wait_until_listening(&host, port).await {
+                                startup_error = Some(format!(
+                                    "camilladsp did not become reachable at {host}:{port} after launch"
+                                ));
+                            }
+                        }
                     }
                 }
             }
         }
 
-        let (reload_confirmed, reload_error) = if let Some(url) = &self.inner.ws_url {
+        let (reload_confirmed, reload_error) = if let Some(error) = startup_error {
+            (false, Some(error))
+        } else if let Some(url) = &self.inner.ws_url {
             match self.send_reload(url).await {
                 Ok(confirmed) => (confirmed, None),
                 Err(error) => (false, Some(error.to_string())),
@@ -537,6 +547,65 @@ mod tests {
         assert!(outcome.reload_confirmed);
         assert!(outcome.active);
         assert_eq!(received.await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn apply_reports_daemon_launch_failure_without_websocket_timeout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let m = DspManager::new(
+            tmp.path().join("config.yml"),
+            Some(format!("ws://{addr}")),
+            "hw:Loopback,1".to_string(),
+            44100,
+            true,
+            Some("/definitely/missing/camilladsp".to_string()),
+        );
+        let started = tokio::time::Instant::now();
+        let outcome = m.apply_profile(base("DAC")).await.unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(outcome.persisted);
+        assert!(!outcome.reload_confirmed);
+        assert!(outcome.reload_error.as_deref().is_some_and(|error| {
+            error.contains("failed to launch")
+                && error.contains("definitely/missing/camilladsp")
+        }));
+    }
+
+    #[tokio::test]
+    async fn apply_reports_daemon_exit_before_websocket_timeout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let binary = tmp.path().join("camilladsp");
+        std::fs::write(&binary, "#!/bin/sh\nexit 1\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let m = DspManager::new(
+            tmp.path().join("config.yml"),
+            Some(format!("ws://{addr}")),
+            "hw:Loopback,1".to_string(),
+            44100,
+            true,
+            Some(binary.to_string_lossy().into_owned()),
+        );
+        let started = tokio::time::Instant::now();
+        let outcome = m.apply_profile(base("DAC")).await.unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(outcome.persisted);
+        assert!(!outcome.reload_confirmed);
+        assert!(outcome.reload_error.as_deref().is_some_and(|error| {
+            error.contains("did not become reachable")
+        }));
     }
     #[tokio::test]
     async fn reload_retries_when_camilladsp_is_starting() {
