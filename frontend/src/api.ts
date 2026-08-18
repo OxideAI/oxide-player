@@ -14,6 +14,7 @@ import type {
   RadioStation,
   ScanResultsResponse,
   Track,
+  UsbAudioDevice,
   VisualizerStatus,
 } from './types'
 
@@ -144,6 +145,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ volume }),
     }).then((r) => json<unknown>(r)),
+  usbDevices: () => fetch('/api/devices/usb').then((r) => json<UsbAudioDevice[]>(r)),
   devices: () => fetch('/api/devices').then((r) => json<DeviceOutput[]>(r)),
   enableDevice: (id: number) =>
     fetch(`/api/devices/${id}/enable`, { method: 'POST' }).then((r) => json<unknown>(r)),

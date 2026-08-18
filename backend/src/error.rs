@@ -19,6 +19,9 @@ pub enum AppError {
     Unprocessable(String),
     #[error("bluetooth: {0}")]
     Bluetooth(String),
+    /// The host has no usable ALSA USB playback scanner.
+    #[error("audio unavailable: {0}")]
+    AudioUnavailable(String),
     /// The Bluetooth subsystem is unavailable (no adapter, BlueZ not running,
     /// or the platform does not support Bluetooth).
     #[error("bluetooth unavailable")]
@@ -35,6 +38,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AppError::Unprocessable(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
             AppError::Bluetooth(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            AppError::AudioUnavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
             AppError::BluetoothUnavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, "Bluetooth is not available on this platform or no adapter was found".to_string())
             }

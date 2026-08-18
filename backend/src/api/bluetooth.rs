@@ -193,6 +193,7 @@ async fn bluetooth_connect(
         )
         .map_err(|e| AppError::Bluetooth(e.to_string()))?;
         ensure_output_include(&s).await?;
+        super::restart_mpd_if_pending(&s).await?;
     }
 
     Ok(StatusCode::OK)
@@ -228,6 +229,7 @@ async fn bluetooth_wake_connect(
         )
         .map_err(|e| AppError::Bluetooth(e.to_string()))?;
         ensure_output_include(&s).await?;
+        super::restart_mpd_if_pending(&s).await?;
     }
 
     Ok(StatusCode::OK)
@@ -263,6 +265,7 @@ async fn bluetooth_forget(
     }
 
     bt_available(s.bluetooth().forget(&body.address).await)?;
+    super::restart_mpd_if_pending(&s).await?;
     Ok(StatusCode::OK)
 }
 
@@ -286,6 +289,7 @@ async fn bluetooth_remove_output(
         |pending| s.set_config_restart_pending(pending),
     )
     .map_err(|e| AppError::Bluetooth(e.to_string()))?;
+    super::restart_mpd_if_pending(&s).await?;
 
     Ok(StatusCode::OK)
 }

@@ -3,6 +3,7 @@ use crate::devices::config_fragment::{
     DeviceConfig as DeviceConfigDto, MANAGED_DSP_LOOPBACK_OUTPUT,
     OutputDiagnosticFacts,
 };
+use crate::devices::usb;
 use crate::radio::RadioStation;
 use crate::dsp::{parse_dsp_text, DspSettings};
 use crate::dsp::camilladsp::DspApplyResult;
@@ -68,6 +69,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/playback/remove", post(remove))
         .route("/api/playback/clear-queue", post(clear_queue))
         .route("/api/devices", get(devices))
+        .route("/api/devices/usb", get(usb_devices))
         .route("/api/devices/configs", get(list_device_configs))
         .route("/api/devices/configs", post(create_device_config))
         .route("/api/devices/configs/{name}", put(update_device_config))
@@ -724,6 +726,14 @@ fn dsp_route_is_active(
         && (active_device == Some(target_device)
             || (active_device.is_none() && !target_enabled && profile_configured))
 }
+/// Enumerate USB DAC playback endpoints exposed by ALSA.
+async fn usb_devices(State(_s): State<AppState>) -> AppResult<Json<Vec<usb::UsbAudioDevice>>> {
+    usb::scan()
+        .await
+        .map(Json)
+        .map_err(AppError::AudioUnavailable)
+}
+
 
 async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>> {
     let outputs = s.mpd().outputs().await?;
@@ -1075,6 +1085,8 @@ async fn create_device_config(
         dop: b.dop,
     };
     s.device_configs().create(&cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
+    s.set_config_restart_pending(true);
+    restart_mpd_if_pending(&s).await?;
 
     // The installer owns the system MPD config and provisions this include.
     // Do not attempt to rewrite it from the unprivileged backend process.
@@ -1088,7 +1100,7 @@ async fn create_device_config(
         mixer_type: b.mixer_type,
         mixer_device: b.mixer_device,
         dop: b.dop,
-        restart_pending: true,
+        restart_pending: false,
         include_warning: if include_warning { Some(true) } else { None },
     }))
 }
@@ -1135,6 +1147,7 @@ async fn update_device_config(
     };
     s.device_configs().update(&name, &cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
     s.set_config_restart_pending(true);
+    restart_mpd_if_pending(&s).await?;
 
     Ok(Json(DeviceConfigResponse {
         name: new_name,
@@ -1144,7 +1157,7 @@ async fn update_device_config(
         mixer_type,
         mixer_device,
         dop,
-        restart_pending: true,
+        restart_pending: false,
         include_warning: None,
     }))
 }
@@ -1158,32 +1171,40 @@ async fn delete_device_config(
         AppError::NotFound(format!("device config '{name}'"))
     })?;
     s.set_config_restart_pending(true);
+    restart_mpd_if_pending(&s).await?;
     Ok(StatusCode::OK)
 }
 
-/// Restart MPD (only supported when MPD is running on localhost).
-async fn restart_mpd(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+async fn restart_mpd_now(s: &AppState) -> AppResult<()> {
     let cfg = s.config().await;
     let host = cfg.mpd_host.clone();
+    drop(cfg);
     if !is_localhost(&host) {
         return Err(AppError::BadRequest(
             "cannot restart remote MPD — MPD must be running on the same machine as oxide-player".to_string()
         ));
     }
     // Kill MPD — the connection may close before the response arrives,
-    // so we ignore the error and just wait for the process to exit.
-    match s.mpd().raw(mpd_protocol::command::Command::new("kill")).await {
-        Ok(_) => {},
-        Err(_) => {},
-    }
-
-    // Wait for MPD to shut down, then restart
+    // so ignore that command error and wait for the process to exit.
+    let _ = s.mpd().raw(mpd_protocol::command::Command::new("kill")).await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     s.mpd().ensure_running().await?;
-
-    // Clear restart-pending flag
     s.set_config_restart_pending(false);
+    s.refresh_status().await;
+    Ok(())
+}
 
+/// Restart MPD after a managed audio output fragment changed.
+pub(super) async fn restart_mpd_if_pending(s: &AppState) -> AppResult<()> {
+    if s.config_restart_pending() {
+        restart_mpd_now(s).await?;
+    }
+    Ok(())
+}
+
+/// Restart MPD (only supported when MPD is running on localhost).
+async fn restart_mpd(State(s): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    restart_mpd_now(&s).await?;
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 

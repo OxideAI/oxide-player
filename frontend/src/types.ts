@@ -222,6 +222,15 @@ export interface DeviceConfig {
   include_warning?: boolean
 }
 
+/** A USB ALSA playback endpoint returned by `/api/devices/usb`. */
+export interface UsbAudioDevice {
+  id: string
+  name: string
+  card: number
+  device: number
+  alsa_device: string
+}
+
 /** A user-managed internet radio station (persisted on the server). */
 export interface RadioStation {
   id: string

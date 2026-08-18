@@ -61,8 +61,8 @@ fn is_bluetooth_pcm(device: Option<&str>, address: &str) -> bool {
 
 /// Create an MPD output config fragment for the given Bluetooth device.
 ///
-/// The fragment is written to the managed config fragments directory and the
-/// restart‑pending flag is set so the UI prompts the user to restart MPD.
+/// The fragment is written to the managed config fragments directory. The
+/// caller restarts MPD when this operation reports a changed fragment.
 ///
 /// If a fragment for this device already exists (e.g. after a reconnect) it
 /// is silently overwritten — the content is identical.
@@ -133,8 +133,8 @@ pub fn create_fragment(
 
 /// Remove the MPD output config fragment for the given Bluetooth device.
 ///
-/// Called when the device is unpaired (forgotten). The restart‑pending flag
-/// is set so the UI prompts the user to restart MPD.
+/// Called when the device is unpaired (forgotten). The caller restarts MPD
+/// when a fragment was actually removed.
 pub fn remove_fragment(
     device: &BtDevice,
     config_manager: &ConfigFragmentManager,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { BtDevice, DeviceConfig, DeviceOutput, InputStatusResponse } from '../types'
+import type { BtDevice, DeviceConfig, DeviceOutput, InputStatusResponse, UsbAudioDevice } from '../types'
 import { btDisplayName } from '../types'
 import { api, ApiError } from '../api'
 import styles from './DevicesView.module.css'
@@ -100,6 +100,9 @@ export function DevicesView({
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [usbDevices, setUsbDevices] = useState<UsbAudioDevice[]>([])
+  const [usbScanning, setUsbScanning] = useState(false)
+  const [usbError, setUsbError] = useState<string | null>(null)
 
   useEffect(() => {
     if (providedOutputs !== undefined) {
@@ -187,11 +190,19 @@ export function DevicesView({
     }
   }
 
-  const openAddForm = () => {
+  const openAddForm = (initial?: Partial<FormData>) => {
     setEditing(null)
-    setForm(emptyForm)
+    setForm({ ...emptyForm, ...initial })
     setFormError(null)
     setShowForm(true)
+  }
+
+  const openUsbForm = (device: UsbAudioDevice) => {
+    openAddForm({
+      name: device.name,
+      output_type: 'alsa',
+      device: device.alsa_device,
+    })
   }
 
   const openEditForm = (config: DeviceConfig) => {
@@ -209,6 +220,19 @@ export function DevicesView({
     setShowForm(true)
   }
 
+  const scanUsbDevices = async () => {
+    setUsbScanning(true)
+    setUsbError(null)
+    try {
+      setUsbDevices(await api.usbDevices())
+    } catch (error) {
+      setUsbError(errorMessage(error))
+      setUsbDevices([])
+    } finally {
+      setUsbScanning(false)
+    }
+  }
+
   const closeForm = () => {
     setShowForm(false)
     setEditing(null)
@@ -222,7 +246,6 @@ export function DevicesView({
     try {
       if (editing) await api.updateDeviceConfig(editing, form)
       else await api.createDeviceConfig(form)
-      setRestartPending(true)
       closeForm()
       await refreshSnapshots()
     } catch (error) {
@@ -237,7 +260,6 @@ export function DevicesView({
     setActionError(null)
     try {
       await api.deleteDeviceConfig(name)
-      setRestartPending(true)
       await refreshSnapshots()
     } catch (error) {
       setActionError(`Could not remove ${name}: ${errorMessage(error)}`)
@@ -272,7 +294,7 @@ export function DevicesView({
       <div>
         <span className={styles.eyebrow}>Playback destinations</span>
         <h2 className={styles.h}>Output devices</h2>
-        <p className={styles.dim}>Choose a DAC or configured Bluetooth speaker. System and visualizer outputs are kept out of this list.</p>
+        <p className={styles.dim}>Choose a DAC or configured Bluetooth speaker. Output changes restart MPD automatically; system and visualizer outputs stay out of this list.</p>
       </div>
 
       {deviceError && <div className={styles.error} role="alert">Output status could not be refreshed: {deviceError}</div>}
@@ -360,6 +382,8 @@ export function DevicesView({
         </details>
       )}
 
+      <UsbSection devices={usbDevices} scanning={usbScanning} error={usbError} onScan={() => void scanUsbDevices()} onSelect={openUsbForm} />
+
       <AdvancedConfig
         configs={configs}
         configLoading={configLoading}
@@ -383,6 +407,44 @@ export function DevicesView({
     </div>
   )
 }
+interface UsbSectionProps {
+  devices: UsbAudioDevice[]
+  scanning: boolean
+  error: string | null
+  onScan: () => void
+  onSelect: (device: UsbAudioDevice) => void
+}
+
+function UsbSection({ devices, scanning, error, onScan, onSelect }: UsbSectionProps) {
+  return (
+    <section className={styles.advancedBlock} aria-labelledby="usb-dac-heading">
+      <div className={styles.sectionHead}>
+        <div>
+          <span className={styles.eyebrow}>USB audio</span>
+          <h3 className={styles.h} id="usb-dac-heading">USB DAC discovery</h3>
+        </div>
+        <button className={styles.addBtn} disabled={scanning} onClick={onScan}>
+          {scanning ? 'Scanning…' : 'Scan USB audio devices'}
+        </button>
+      </div>
+      <p className={styles.dim}>Scan ALSA playback hardware, then open the device details to configure the MPD output.</p>
+      {error && <div className={styles.error} role="alert">USB audio scan failed: {error}</div>}
+      {!error && devices.length === 0 && <p className={styles.dim}>No USB DACs found yet. Connect the DAC and scan again.</p>}
+      <ul className={styles.list}>
+        {devices.map((device) => (
+          <li key={device.id} className={styles.cfgRow}>
+            <div>
+              <div className={styles.name}>{device.name}</div>
+              <div className={styles.id}>Card {device.card}, device {device.device} · {device.alsa_device}</div>
+            </div>
+            <button className={styles.btnPrimary} onClick={() => onSelect(device)}>Configure device</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 
 interface AdvancedConfigProps {
   configs: DeviceConfig[]
@@ -407,9 +469,9 @@ function AdvancedConfig(props: AdvancedConfigProps) {
   const { configs, configLoading, configStale, showForm, editing, form, formError, saving, confirmDelete, setForm, setConfirmDelete, openAddForm, openEditForm, closeForm, saveForm, deleteConfig } = props
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   return (
-    <details className={styles.advancedBlock}>
+    <details className={styles.advancedBlock} open={showForm || undefined}>
       <summary className={styles.advancedSummary}>Advanced output configuration</summary>
-      <p className={styles.dim}>Raw MPD type, device, format, mixer, and DoP fields stay here for diagnostics and manual setup.</p>
+      <p className={styles.dim}>Raw MPD type, device, format, mixer, and DoP fields are the DAC or output details used to build its managed MPD configuration. Changes restart MPD automatically.</p>
       {!showForm && <button className={styles.addBtn} onClick={openAddForm}>+ Add output configuration</button>}
       {configLoading && <p className={styles.dim}>Loading saved configurations…</p>}
       {configStale && <p className={styles.stale}>Saved configuration is stale.</p>}
@@ -441,7 +503,7 @@ function AdvancedConfig(props: AdvancedConfigProps) {
       {confirmDelete && (
         <div className={styles.confirmOverlay} role="presentation" onClick={() => setConfirmDelete(null)}>
           <div className={styles.confirmBox} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <p className={styles.confirmText}>Remove <strong>{confirmDelete}</strong> from managed playback outputs? MPD must reload before the change is active.</p>
+            <p className={styles.confirmText}>Remove <strong>{confirmDelete}</strong> from managed playback outputs? MPD restarts automatically after removal.</p>
             <div className={styles.confirmActions}><button className={styles.btnGhost} onClick={() => setConfirmDelete(null)}>Cancel</button><button className={styles.btnDanger} onClick={() => void deleteConfig(confirmDelete)}>Remove output</button></div>
           </div>
         </div>

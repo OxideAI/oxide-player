@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import type { api as apiClient } from '../api'
 import { ApiError } from '../api'
-import type { BtDevice, DeviceConfig, InputStatusResponse, OutputDevice } from '../types'
+import type { BtDevice, DeviceConfig, InputStatusResponse, OutputDevice, UsbAudioDevice } from '../types'
 const listDevices = vi.fn<() => Promise<OutputDevice[]>>()
 const listConfigs = vi.fn<() => Promise<DeviceConfig[]>>()
+const listUsbDevices = vi.fn<() => Promise<UsbAudioDevice[]>>()
 const listBluetoothDevices = vi.fn<() => Promise<BtDevice[]>>()
 const inputStatus = vi.fn<() => Promise<InputStatusResponse>>()
 const wakeConnect = vi.fn<(address: string) => Promise<unknown>>()
@@ -22,6 +23,7 @@ vi.mock('../api', async (importOriginal) => {
       ...actual.api,
       devices: () => listDevices(),
       deviceConfigs: () => listConfigs(),
+      usbDevices: () => listUsbDevices(),
       btDevices: () => listBluetoothDevices(),
       btInputStatus: () => inputStatus(),
       btWakeConnect: (address: string) => wakeConnect(address),
@@ -73,11 +75,11 @@ function makeOutput(over: Partial<OutputDevice> = {}): OutputDevice {
     ...over,
   }
 }
-
 describe('DevicesView output controls', () => {
   beforeEach(() => {
     listDevices.mockResolvedValue([])
     listConfigs.mockResolvedValue([])
+    listUsbDevices.mockResolvedValue([])
     listBluetoothDevices.mockResolvedValue([])
     inputStatus.mockResolvedValue({ enabled: false, streaming: false })
     wakeConnect.mockResolvedValue({})
@@ -130,6 +132,23 @@ describe('DevicesView output controls', () => {
     fireEvent.click(disable)
     await waitFor(() => expect(disableDeviceDsp).toHaveBeenCalledWith(1))
   })
+  it('scans USB audio hardware and opens its device details', async () => {
+    listUsbDevices.mockResolvedValue([{
+      id: 'alsa:2:0',
+      name: 'Topping USB DAC',
+      card: 2,
+      device: 0,
+      alsa_device: 'hw:2,0',
+    }])
+
+    const { getByRole, getByText, getByDisplayValue } = render(<DevicesView />)
+    fireEvent.click(getByRole('button', { name: 'Scan USB audio devices' }))
+    await waitFor(() => expect(getByText('Topping USB DAC')).toBeTruthy())
+    fireEvent.click(getByRole('button', { name: 'Configure device' }))
+    expect(getByDisplayValue('Topping USB DAC')).toBeTruthy()
+    expect(getByDisplayValue('hw:2,0')).toBeTruthy()
+  })
+
 })
 
 describe('DevicesView Bluetooth actions', () => {
