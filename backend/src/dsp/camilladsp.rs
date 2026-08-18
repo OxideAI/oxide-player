@@ -3,11 +3,12 @@ use crate::dsp::profile::DspProfile;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+use tokio::io::AsyncReadExt;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::Message;
@@ -98,12 +99,20 @@ impl DspManager {
             return;
         }
         tracing::warn!("CamillaDSP not reachable at {host}:{port}; attempting to start it");
-        if let Err(e) = self.start_daemon(&host, port).await {
-            tracing::warn!("failed to launch camilladsp: {e}");
-            return;
-        }
+        let mut child = match self.start_daemon(&host, port).await {
+            Ok(child) => child,
+            Err(e) => {
+                tracing::warn!("failed to launch camilladsp: {e}");
+                return;
+            }
+        };
         for attempt in 1..=20 {
             tokio::time::sleep(Duration::from_millis(500)).await;
+            if let Ok(Some(status)) = child.try_wait() {
+                let error = Self::daemon_exit_error(&mut child, status).await;
+                tracing::warn!("camilladsp exited during startup: {error}");
+                return;
+            }
             if tcp_reachable(&host, port).await {
                 tracing::info!("CamillaDSP started at {host}:{port}");
                 return;
@@ -113,10 +122,10 @@ impl DspManager {
         tracing::warn!("launched camilladsp but it did not become reachable at {host}:{port}");
     }
 
-    /// Spawn the `camilladsp` binary (detached) with the websocket server bound
-    /// to the configured host/port. Returns Ok immediately; the child runs in
-    /// the background (CamillaDSP does not daemonize, so we don't await it).
-    async fn start_daemon(&self, host: &str, port: u16) -> Result<()> {
+    /// Spawn the `camilladsp` binary with the websocket server bound to the
+    /// configured host/port. The child is kept by the caller during startup
+    /// so an early exit can be reported with its stderr.
+    async fn start_daemon(&self, host: &str, port: u16) -> Result<tokio::process::Child> {
         let binary = self.inner.binary.clone().unwrap_or_else(|| "camilladsp".to_string());
         let mut cmd = tokio::process::Command::new(&binary);
         cmd.arg("--address")
@@ -125,25 +134,45 @@ impl DspManager {
             .arg(port.to_string())
             .arg(&self.inner.config_path)
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         cmd.spawn()
-            .map_err(|e| anyhow::anyhow!("failed to launch '{binary}': {e}"))?;
-        Ok(())
+            .map_err(|e| anyhow::anyhow!("failed to launch '{binary}': {e}"))
     }
 
-    /// Poll until the started CamillaDSP daemon accepts TCP connections on its
-    /// websocket port. Returns as soon as the listener is up (or gives up at a
-    /// fixed deadline) so the subsequent reload connects instead of hitting the
-    /// startup race that left a successful apply with an unconfirmed route.
-    async fn wait_until_listening(&self, host: &str, port: u16) -> bool {
+    async fn daemon_exit_error(child: &mut tokio::process::Child, status: ExitStatus) -> String {
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr).await;
+        }
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            format!("camilladsp exited with status {status}")
+        } else {
+            format!("camilladsp exited with status {status}: {stderr}")
+        }
+    }
+
+    /// Poll until the started CamillaDSP daemon accepts TCP connections.
+    async fn wait_until_listening(
+        &self,
+        child: &mut tokio::process::Child,
+        host: &str,
+        port: u16,
+    ) -> Result<bool> {
         for _ in 0..20 {
             tokio::time::sleep(Duration::from_millis(100)).await;
+            if let Some(status) = child.try_wait()? {
+                return Err(anyhow::anyhow!(
+                    "{}",
+                    Self::daemon_exit_error(child, status).await
+                ));
+            }
             if tcp_reachable(host, port).await {
-                return true;
+                return Ok(true);
             }
         }
         tracing::warn!("camilladsp did not become reachable at {host}:{port} after launch");
-        false
+        Ok(false)
     }
 
     pub async fn seed(&self, profiles: Vec<DspProfile>) {
@@ -226,16 +255,24 @@ impl DspManager {
         let mut startup_error = None;
         if self.inner.autostart {
             if let (Some(host), Some(port)) = (self.inner.ws_host.clone(), self.inner.ws_port) {
-                if is_localhost(&host) && !tcp_reachable(&host, port).await {
-                    match self.start_daemon(&host, port).await {
-                        Err(error) => {
-                            startup_error = Some(error.to_string());
-                        }
-                        Ok(()) => {
-                            if !self.wait_until_listening(&host, port).await {
-                                startup_error = Some(format!(
-                                    "camilladsp did not become reachable at {host}:{port} after launch"
-                                ));
+                if is_localhost(&host) {
+                    if !tcp_reachable(&host, port).await {
+                        match self.start_daemon(&host, port).await {
+                            Err(error) => {
+                                startup_error = Some(error.to_string());
+                            }
+                            Ok(mut child) => {
+                                match self.wait_until_listening(&mut child, &host, port).await {
+                                    Ok(true) => {}
+                                    Ok(false) => {
+                                        startup_error = Some(format!(
+                                            "camilladsp did not become reachable at {host}:{port} after launch"
+                                        ));
+                                    }
+                                    Err(error) => {
+                                        startup_error = Some(error.to_string());
+                                    }
+                                }
                             }
                         }
                     }
@@ -605,6 +642,34 @@ mod tests {
         assert!(!outcome.reload_confirmed);
         assert!(outcome.reload_error.as_deref().is_some_and(|error| {
             error.contains("did not become reachable")
+        }));
+    }
+
+    #[tokio::test]
+    async fn apply_reports_daemon_stderr_when_startup_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let binary = tmp.path().join("camilladsp");
+        std::fs::write(&binary, "#!/bin/sh\necho 'ALSA open failed' >&2\nexit 1\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let m = DspManager::new(
+            tmp.path().join("config.yml"),
+            Some(format!("ws://{addr}")),
+            "hw:Loopback,1".to_string(),
+            44100,
+            true,
+            Some(binary.to_string_lossy().into_owned()),
+        );
+        let outcome = m.apply_profile(base("DAC")).await.unwrap();
+
+        assert!(outcome.reload_error.as_deref().is_some_and(|error| {
+            error.contains("ALSA open failed")
         }));
     }
     #[tokio::test]
