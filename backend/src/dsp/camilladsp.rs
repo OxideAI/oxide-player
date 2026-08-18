@@ -789,7 +789,7 @@ mod tests {
 
         let yaml = std::fs::read_to_string(tmp.path().join("config.yml")).unwrap();
         let parsed: CamillaConfig = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(parsed.devices.playback.device, "hw:USB,0");
+        assert_eq!(parsed.devices.playback.device, "plughw:USB,0");
         assert!(outcome.persisted);
         assert!(!outcome.reload_confirmed);
         assert!(!outcome.active);

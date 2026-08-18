@@ -190,7 +190,7 @@ pub fn render_camilladsp_config(
             playback: Device {
                 dev_type: "Alsa".to_string(),
                 channels,
-                device: playback_device.to_string(),
+                device: camilladsp_playback_device(playback_device),
                 format: "S16_LE".to_string(),
             },
         },
@@ -198,6 +198,14 @@ pub fn render_camilladsp_config(
         filters,
         pipeline,
     }
+}
+
+/// Use ALSA's plug layer for hardware playback so CamillaDSP's configured
+/// format can be converted to the USB DAC's native format.
+fn camilladsp_playback_device(device: &str) -> String {
+    device
+        .strip_prefix("hw:")
+        .map_or_else(|| device.to_string(), |rest| format!("plughw:{rest}"))
 }
 
 fn resample_profile_name(preset: ResamplePreset) -> &'static str {
@@ -271,6 +279,13 @@ mod tests {
         assert_eq!(cfg.devices.capture.format, "S16_LE");
         assert_eq!(cfg.devices.playback.dev_type, "Alsa");
         assert_eq!(cfg.devices.playback.format, "S16_LE");
+    }
+
+    #[test]
+    fn hardware_playback_uses_alsa_plug_for_format_conversion() {
+        let p = base_profile();
+        let cfg = render_camilladsp_config(&p, "hw:Loopback,1", "hw:USB,0", 44100);
+        assert_eq!(cfg.devices.playback.device, "plughw:USB,0");
     }
     #[test]
     fn bluetooth_pcm_uses_a2dp_compatible_16_bit_format() {
