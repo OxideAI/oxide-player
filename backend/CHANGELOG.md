@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.18.0...oxide-player-v0.18.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* USB DSP ([4484347](https://github.com/OxideAI/oxide-player/commit/448434778e8e441c0c945dc4cd1c99b297317932))
+
 ## [0.18.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.17.14...oxide-player-v0.18.0) (2026-08-18)
 
 
