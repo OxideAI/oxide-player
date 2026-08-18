@@ -641,7 +641,7 @@ mod tests {
         assert!(outcome.persisted);
         assert!(!outcome.reload_confirmed);
         assert!(outcome.reload_error.as_deref().is_some_and(|error| {
-            error.contains("did not become reachable")
+            error.contains("exited with status")
         }));
     }
 
