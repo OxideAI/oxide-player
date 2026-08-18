@@ -903,6 +903,11 @@ fn should_release_direct_dsp_output(target_enabled: bool, route_active: bool) ->
     target_enabled && !route_active
 }
 
+const DIRECT_DSP_OUTPUT_RELEASE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+fn direct_dsp_output_release_delay() -> std::time::Duration {
+    DIRECT_DSP_OUTPUT_RELEASE_DELAY
+}
 async fn dsp_output_target(
     s: &AppState,
     id: u32,
@@ -954,6 +959,7 @@ async fn apply_dsp_route(
     let target_was_enabled = target.enabled;
     if should_release_direct_dsp_output(target_was_enabled, false) {
         s.mpd().disable_output(target.id).await?;
+        tokio::time::sleep(direct_dsp_output_release_delay()).await;
     }
 
     let result = match profile {
@@ -2113,6 +2119,15 @@ mod tests {
         assert_eq!(target.id, 7);
         assert!(super::should_release_direct_dsp_output(target.enabled, false));
     }
+
+    #[test]
+    fn dsp_route_waits_for_direct_output_release() {
+        assert_eq!(
+            super::direct_dsp_output_release_delay(),
+            std::time::Duration::from_millis(250)
+        );
+    }
+
 
     fn config(name: &str, output_type: &str, device: Option<&str>) -> DeviceConfig {
         DeviceConfig {
