@@ -883,6 +883,26 @@ async fn disable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppRe
     Ok(StatusCode::OK)
 }
 
+fn dsp_profile_target(
+    outputs: &[crate::types::OutputDevice],
+    configs: &[DeviceConfigDto],
+    device: &str,
+) -> Option<crate::types::OutputDevice> {
+    outputs
+        .iter()
+        .find(|output| {
+            output.name != DSP_LOOPBACK_NAME
+                && configured_dsp_device(configs, output)
+                    .ok()
+                    .is_some_and(|configured| configured == device)
+        })
+        .cloned()
+}
+
+fn should_release_direct_dsp_output(target_enabled: bool, route_active: bool) -> bool {
+    target_enabled && !route_active
+}
+
 async fn dsp_output_target(
     s: &AppState,
     id: u32,
@@ -924,47 +944,104 @@ async fn dsp_output_target(
     }
     Ok((target, device, loopback))
 }
-
-async fn enable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
-    let (target, device, loopback) = dsp_output_target(&s, id).await?;
-
-    // Release the direct output BEFORE applying the profile: CamillaDSP's
-    // playback device (for Bluetooth, the exclusive bluealsa A2DP PCM) cannot
-    // be opened while MPD still holds it. Spawning the daemon first surfaces
-    // a "PCM not found" / connection-refused reload instead of a clean route.
-    if target.enabled {
+async fn apply_dsp_route(
+    s: &AppState,
+    target: crate::types::OutputDevice,
+    device: String,
+    loopback: crate::types::OutputDevice,
+    profile: Option<DspProfile>,
+) -> AppResult<DspApplyResult> {
+    let target_was_enabled = target.enabled;
+    if should_release_direct_dsp_output(target_was_enabled, false) {
         s.mpd().disable_output(target.id).await?;
     }
 
-    let result = match s.dsp().apply_profile_for_device(&device).await {
+    let result = match profile {
+        Some(profile) => s.dsp().apply_profile(profile).await,
+        None => s.dsp().apply_profile_for_device(&device).await,
+    };
+    let result = match result {
         Ok(result) => result,
         Err(error) => {
-            // Roll back: keep the direct output enabled on a failed apply.
-            if target.enabled {
+            if target_was_enabled {
                 let _ = s.mpd().enable_output(target.id).await;
             }
             return Err(AppError::Dsp(error.to_string()));
         }
     };
     if !result.reload_confirmed {
-        if target.enabled {
+        if target_was_enabled {
             let _ = s.mpd().enable_output(target.id).await;
         }
+        return Ok(result);
+    }
+
+    if let Err(error) = s.set_dsp_active_device(Some(device)).await {
+        if target_was_enabled {
+            let _ = s.mpd().enable_output(target.id).await;
+        }
+        return Err(AppError::Library(error.to_string()));
+    }
+    if !loopback.enabled {
+        if let Err(error) = s.mpd().enable_output(loopback.id).await {
+            s.dsp().clear_active_device().await;
+            let _ = s.set_dsp_active_device(None).await;
+            if target_was_enabled {
+                let _ = s.mpd().enable_output(target.id).await;
+            }
+            return Err(error);
+        }
+    }
+    let _ = s.mpd().clear_error().await;
+    s.refresh_status().await;
+    Ok(result)
+}
+
+
+async fn enable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
+    let (target, device, loopback) = dsp_output_target(&s, id).await?;
+    let result = apply_dsp_route(&s, target, device, loopback, None).await?;
+    if !result.reload_confirmed {
         return Err(AppError::Dsp(
             result
                 .reload_error
                 .unwrap_or_else(|| "CamillaDSP did not confirm the route reload".to_string()),
         ));
     }
-    s.set_dsp_active_device(Some(device))
-        .await
-        .map_err(|e| AppError::Library(e.to_string()))?;
-    if !loopback.enabled {
-        s.mpd().enable_output(loopback.id).await?;
-    }
-    let _ = s.mpd().clear_error().await;
-    s.refresh_status().await;
     Ok(StatusCode::OK)
+}
+
+async fn dsp_profile_route_target(
+    s: &AppState,
+    device: &str,
+) -> AppResult<Option<(crate::types::OutputDevice, String, crate::types::OutputDevice)>> {
+    let outputs = match s.mpd().outputs().await {
+        Ok(outputs) => outputs,
+        Err(_) => return Ok(None),
+    };
+    let configs = s.device_configs().list();
+    let Some(target) = dsp_profile_target(&outputs, &configs, device) else {
+        return Ok(None);
+    };
+    let loopback = outputs
+        .into_iter()
+        .find(|output| output.name == DSP_LOOPBACK_NAME)
+        .ok_or_else(|| AppError::BadRequest("CamillaDSP loopback output is not available".to_string()))?;
+    // The profile was persisted immediately before this lookup, so an
+    // inactive target with the managed loopback enabled can be inferred as an
+    // existing DSP route even before the in-memory profile cache is refreshed.
+    let profile_configured = true;
+    let route_active = dsp_route_is_active(
+        loopback.enabled,
+        target.enabled,
+        s.dsp().active_device().await.as_deref(),
+        device,
+        profile_configured,
+    );
+    if !target.enabled && !route_active {
+        return Ok(None);
+    }
+    Ok(Some((target, device.to_string(), loopback)))
 }
 
 async fn disable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
@@ -1297,11 +1374,18 @@ async fn dsp_set(State(s): State<AppState>, Json(p): Json<DspProfile>) -> AppRes
     s.persist_dsp_profile(&p)
         .await
         .map_err(|e| AppError::Library(e.to_string()))?;
-    let result = s
-        .dsp()
-        .apply_profile(p)
-        .await
-        .map_err(|e| AppError::Dsp(e.to_string()))?;
+
+    let device = p.device.clone();
+    let result = if let Some((target, device, loopback)) =
+        dsp_profile_route_target(&s, &device).await?
+    {
+        apply_dsp_route(&s, target, device, loopback, Some(p)).await?
+    } else {
+        s.dsp()
+            .apply_profile(p)
+            .await
+            .map_err(|e| AppError::Dsp(e.to_string()))?
+    };
     Ok(Json(result))
 }
 
@@ -2016,6 +2100,20 @@ mod tests {
         );
         assert!(!is_cue);
     }
+    #[test]
+    fn dsp_profile_target_requires_releasing_direct_usb_output() {
+        let output = OutputDevice {
+            id: 7,
+            name: "USB DAC".to_string(),
+            enabled: true,
+        };
+        let configs = [config("USB DAC", "alsa", Some("hw:USB,0"))];
+        let target = super::dsp_profile_target(&[output], &configs, "hw:USB,0")
+            .expect("USB profile should resolve to its managed output");
+        assert_eq!(target.id, 7);
+        assert!(super::should_release_direct_dsp_output(target.enabled, false));
+    }
+
     fn config(name: &str, output_type: &str, device: Option<&str>) -> DeviceConfig {
         DeviceConfig {
             name: name.to_string(),
