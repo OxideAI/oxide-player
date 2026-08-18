@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.18.3...oxide-player-v0.18.4) (2026-08-18)
+
+
+### Bug Fixes
+
+* fix:  ([391a421](https://github.com/OxideAI/oxide-player/commit/391a421db536f0c6650d943d29ac5b0bb354d846))
+
 ## [0.18.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.18.2...oxide-player-v0.18.3) (2026-08-18)
 
 
