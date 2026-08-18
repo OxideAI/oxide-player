@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.18.2...oxide-player-v0.18.3) (2026-08-18)
+
+
+### Bug Fixes
+
+* dsp ([4868944](https://github.com/OxideAI/oxide-player/commit/4868944d5578977e0e9feabe3425a6c28b1a821e))
+* dsp ([40d4d2f](https://github.com/OxideAI/oxide-player/commit/40d4d2f3eadd6373a1448329f75982e73372ada7))
+* dsp ([7cbc603](https://github.com/OxideAI/oxide-player/commit/7cbc603f793521565d7229791bd48bd389b9ec3f))
+* dsp ([8cf047e](https://github.com/OxideAI/oxide-player/commit/8cf047ed8ad027136e08e30162adb7be26165939))
+
 ## [0.18.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.18.1...oxide-player-v0.18.2) (2026-08-18)
 
 
