@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.18.4...oxide-player-v0.19.0) (2026-08-20)
+
+
+### Features
+
+* add folder view ([1e78921](https://github.com/OxideAI/oxide-player/commit/1e789217f3bea66893ac6a2679cbf01978dd1653))
+
 ## [0.18.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.18.3...oxide-player-v0.18.4) (2026-08-18)
 
 
