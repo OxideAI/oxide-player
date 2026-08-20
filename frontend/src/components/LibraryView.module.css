@@ -447,3 +447,6 @@
         margin-left: 0;
     }
 }
+.viewSwitch{display:inline-flex;gap:4px;padding:4px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid var(--hairline)}
+.viewIdle{padding:.38rem .9rem;border-radius:999px;border:1px solid transparent;background:transparent;color:var(--text-dim);font-size:.82rem;font-weight:600;cursor:pointer}
+.viewActive{padding:.38rem .9rem;border-radius:999px;border:1px solid var(--hairline-strong);background:rgba(255,255,255,.08);color:var(--text);font-size:.82rem;font-weight:700;cursor:pointer}

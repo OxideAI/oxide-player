@@ -16,6 +16,13 @@ interface Props {
   isPlaying: boolean;
   album: string | null;
   onAlbumChange: (album: string | null) => void;
+  libraryView?: "albums" | "folders";
+  onViewChange?: (m: "albums" | "folders") => void;
+  tracksOverride?: Track[];
+  loadingOverride?: boolean;
+  refreshingOverride?: boolean;
+  errorOverride?: string | null;
+  setErrorOverride?: (e: string | null) => void;
 }
 
 interface Folder {
@@ -42,11 +49,24 @@ export function LibraryView({
   isPlaying,
   album,
   onAlbumChange,
+  libraryView,
+  onViewChange,
+  tracksOverride,
+  loadingOverride,
+  refreshingOverride,
+  errorOverride,
+  setErrorOverride,
 }: Props) {
-  const [tracks, setTracks] = useState<Track[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [internalTracks, setTracks] = useState<Track[]>([]);
+  const [internalLoading, setLoading] = useState(true);
+  const [internalRefreshing, setRefreshing] = useState(false);
+  const [internalError, setInternalError] = useState<string | null>(null);
+  const hasOverride = tracksOverride !== undefined;
+  const tracks = hasOverride ? tracksOverride! : internalTracks;
+  const loading = hasOverride ? (loadingOverride ?? false) : internalLoading;
+  const refreshing = hasOverride ? (refreshingOverride ?? false) : internalRefreshing;
+  const error = hasOverride ? (errorOverride ?? null) : internalError;
+  const setError = hasOverride ? (setErrorOverride ?? (() => {})) : setInternalError;
   const [query, setQuery] = useState("");
   const [playingUri, setPlayingUri] = useState<string | null>(null);
   const openFolder = album;
@@ -82,7 +102,8 @@ export function LibraryView({
   }, [nowPlayingUri]);
 
   const load = useCallback(async () => {
-    setError(null);
+    if (hasOverride) return;
+    setInternalError(null);
     setRefreshing(true);
 
     const cached = await readLibraryCache();
@@ -105,12 +126,12 @@ export function LibraryView({
         void writeLibraryCache(latest.tracks, latest.etag);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setInternalError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [hasOverride]);
 
   useEffect(() => {
     load();
@@ -215,6 +236,26 @@ export function LibraryView({
       {toast && <div className={styles.toast}>{toast}</div>}
 
       <div className={styles.toolbar}>
+        {onViewChange && (
+          <div className={styles.viewSwitch} role="tablist" aria-label="Library view">
+            <button
+              role="tab"
+              aria-selected={libraryView !== "folders"}
+              className={libraryView !== "folders" ? styles.viewActive : styles.viewIdle}
+              onClick={() => onViewChange("albums")}
+            >
+              Albums
+            </button>
+            <button
+              role="tab"
+              aria-selected={libraryView === "folders"}
+              className={libraryView === "folders" ? styles.viewActive : styles.viewIdle}
+              onClick={() => onViewChange("folders")}
+            >
+              Folders
+            </button>
+          </div>
+        )}
         {current && (
           <button className={styles.ghost} onClick={() => setOpenFolder(null)}>
             <svg
@@ -263,6 +304,7 @@ export function LibraryView({
         </button>
         <span className={styles.count}>{count}</span>
       </div>
+
 
       {error && (
         <div

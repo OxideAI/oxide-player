@@ -5,6 +5,7 @@ import { removeTrackFromLibraryCache } from "./libraryCache";
 import { NowPlaying } from "./components/NowPlaying";
 import { KioskView } from "./components/KioskView";
 import { LibraryView } from "./components/LibraryView";
+import { FolderBrowseView } from "./components/FolderBrowseView";
 import { RadioView } from "./components/RadioView";
 import { ConfigView } from "./components/ConfigView";
 import { PlaylistsView } from "./components/PlaylistsView";
@@ -16,44 +17,83 @@ import { ShortcutToast } from "./components/ShortcutToast";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { SearchBar } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
+import { useLibraryTracks } from "./useLibraryTracks";
 import styles from "./App.module.css";
+export type LibraryViewMode = "albums" | "folders";
 
-type Tab = "library" | "playlists" | "settings" | "radio";
+const LIBRARY_VIEW_STORAGE_KEY = "oxide:libraryViewMode";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "library", label: "Library" },
-  { id: "playlists", label: "Playlists" },
-  { id: "radio", label: "Radio" },
-  { id: "settings", label: "Settings" },
-];
-
-interface Route {
-  tab: Tab;
-  album: string | null;
-}
-
-export function parsePath(): Route {
-  const raw = window.location.pathname.replace(/^\/+/, "");
-  const parts = raw.split("/").filter(Boolean);
-  const head = parts[0] as Tab | undefined;
-  if (head && TABS.some((t) => t.id === head)) {
-    if (head === "library" && parts[1]) {
-      try {
-        return { tab: head, album: decodeURIComponent(parts[1]) };
-      } catch {
-        return { tab: head, album: parts[1] };
-      }
-    }
-    return { tab: head, album: null };
+function preferredLibraryView(): LibraryViewMode {
+  try {
+    const v = window.localStorage.getItem(LIBRARY_VIEW_STORAGE_KEY);
+    if (v === "folders" || v === "albums") return v;
+  } catch {
+    // ignore
   }
-  return { tab: "library", album: null };
+  return "albums";
 }
 
-export function buildPath(route: Route): string {
-  if (route.tab === "library" && route.album)
-    return `/library/${encodeURIComponent(route.album)}`;
-  return `/${route.tab}`;
-}
+ type Tab = "library" | "playlists" | "settings" | "radio";
+ 
+ const TABS: { id: Tab; label: string }[] = [
+   { id: "library", label: "Library" },
+   { id: "playlists", label: "Playlists" },
+   { id: "radio", label: "Radio" },
+   { id: "settings", label: "Settings" },
+ ];
+ 
+ interface Route {
+   tab: Tab;
+   album: string | null;
+  libraryView: LibraryViewMode;
+  folderPath: string | null;
+ }
+ 
+ export function parsePath(): Route {
+   const raw = window.location.pathname.replace(/^\/+/, "");
+   const parts = raw.split("/").filter(Boolean);
+   const head = parts[0] as Tab | undefined;
+   if (head && TABS.some((t) => t.id === head)) {
+    // Library tab has two sub-routes:
+    // /library                -> albums (default, or stored preference on bare /library is applied by opener not parsePath)
+    // /library/<album>        -> albums with album
+    // /library/folders        -> folders root
+    // /library/folders/<enc>  -> folders at that absolute dir
+    if (head === "library") {
+      if (parts[1] === "folders") {
+        if (parts[2]) {
+          try {
+            return { tab: head, album: null, libraryView: "folders", folderPath: decodeURIComponent(parts[2]) };
+          } catch {
+            return { tab: head, album: null, libraryView: "folders", folderPath: parts[2] };
+          }
+        }
+        return { tab: head, album: null, libraryView: "folders", folderPath: null };
+      }
+      if (parts[1]) {
+        try {
+          return { tab: head, album: decodeURIComponent(parts[1]), libraryView: "albums", folderPath: null };
+        } catch {
+          return { tab: head, album: parts[1], libraryView: "albums", folderPath: null };
+        }
+      }
+      return { tab: head, album: null, libraryView: "albums", folderPath: null };
+    }
+    return { tab: head, album: null, libraryView: "albums", folderPath: null };
+   }
+  return { tab: "library", album: null, libraryView: "albums", folderPath: null };
+ }
+ 
+ export function buildPath(route: Route): string {
+  if (route.tab === "library") {
+    if (route.libraryView === "folders") {
+      if (route.folderPath) return `/library/folders/${encodeURIComponent(route.folderPath)}`;
+      return "/library/folders";
+    }
+    if (route.album) return `/library/${encodeURIComponent(route.album)}`;
+  }
+   return `/${route.tab}`;
+ }
 
 export function App() {
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +103,7 @@ export function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [kiosk] = useState(() => window.location.pathname === "/kiosk");
   const overlayRef = useRef<HTMLDivElement>(null);
+  const libraryTracks = useLibraryTracks(refreshToken);
 
   // Live player status + queue, pushed over a single WebSocket (issue #3).
   const {
@@ -87,6 +128,20 @@ export function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  // Bare /library respects stored preference (albums vs folders). Explicit
+  // /library/<album> or /library/folders keep their URL.
+  useEffect(() => {
+    if (window.location.pathname !== "/library") return;
+    if (route.tab !== "library" || route.album || route.folderPath || route.libraryView !== "albums") return;
+    const pref = preferredLibraryView();
+    if (pref === "folders") {
+      const next: Route = { tab: "library", album: null, libraryView: "folders", folderPath: null };
+      setRoute(next);
+      window.history.replaceState(null, "", buildPath(next));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.tab, route.album, route.folderPath, route.libraryView]);
 
   const refreshLibrary = useCallback(async () => {
     setError(null);
@@ -217,9 +272,38 @@ export function App() {
   });
 
   const openAlbum = useCallback((album: string) => {
-    setRoute({ tab: "library", album });
-    window.history.pushState(null, "", buildPath({ tab: "library", album }));
+    const next: Route = { tab: "library", album, libraryView: "albums", folderPath: null };
+    setRoute(next);
+    window.history.pushState(null, "", buildPath(next));
     setNavOpen(false);
+  }, []);
+
+  const openFolder = useCallback((folderPath: string | null) => {
+    const next: Route = { tab: "library", album: null, libraryView: "folders", folderPath };
+    setRoute(next);
+    window.history.pushState(null, "", buildPath(next));
+  }, []);
+
+  const switchLibraryView = useCallback((mode: LibraryViewMode) => {
+    try {
+      window.localStorage.setItem(LIBRARY_VIEW_STORAGE_KEY, mode);
+    } catch {
+      // ignore
+    }
+    setRoute((r) => {
+      if (r.tab !== "library") {
+        const next: Route = { tab: "library", album: null, libraryView: mode, folderPath: null };
+        window.history.pushState(null, "", buildPath(next));
+        return next;
+      }
+      if (r.libraryView === mode) return r;
+      const next: Route =
+        mode === "folders"
+          ? { tab: "library", album: null, libraryView: "folders", folderPath: null }
+          : { tab: "library", album: null, libraryView: "albums", folderPath: null };
+      window.history.pushState(null, "", buildPath(next));
+      return next;
+    });
   }, []);
 
   if (kiosk) {
@@ -242,7 +326,20 @@ export function App() {
 
   const go = (t: Tab) => {
     setRoute((r) => {
-      const next = { tab: t, album: t === "library" ? r.album : null };
+      let album: string | null = null;
+      let libraryView: LibraryViewMode = "albums";
+      let folderPath: string | null = null;
+      if (t === "library") {
+        // Preserve current library drill when staying on library
+        if (r.tab === "library") {
+          album = r.album;
+          libraryView = r.libraryView;
+          folderPath = r.folderPath;
+        } else if (window.location.pathname === "/library" || window.location.pathname === "/") {
+          libraryView = preferredLibraryView();
+        }
+      }
+      const next: Route = { tab: t, album, libraryView, folderPath };
       window.history.pushState(null, "", buildPath(next));
       return next;
     });
@@ -321,9 +418,25 @@ export function App() {
           {banner}
         </div>
       )}
-
       <main className={styles.main}>
-        {tab === "library" && (
+        {tab === "library" && route.libraryView === "folders" && (
+          <FolderBrowseView
+            tracks={libraryTracks.tracks}
+            loading={libraryTracks.loading}
+            refreshing={libraryTracks.refreshing}
+            error={libraryTracks.error}
+            setError={libraryTracks.setError}
+            nowPlayingId={status?.current_song?.id ?? null}
+            isPlaying={status?.state === "playing"}
+            folderPath={route.folderPath}
+            onFolderChange={openFolder}
+            libraryView={route.libraryView}
+            onViewChange={switchLibraryView}
+            onRefresh={refreshLibrary}
+            onRescanArt={rescanArt}
+          />
+        )}
+        {tab === "library" && route.libraryView !== "folders" && (
           <LibraryView
             refreshToken={refreshToken}
             onRefresh={refreshLibrary}
@@ -334,11 +447,18 @@ export function App() {
             album={route.album}
             onAlbumChange={(album) => {
               setRoute((r) => {
-                const next = { tab: r.tab, album };
+                const next: Route = { tab: r.tab, album, libraryView: "albums", folderPath: null };
                 window.history.pushState(null, "", buildPath(next));
                 return next;
               });
             }}
+            libraryView={route.libraryView}
+            onViewChange={switchLibraryView}
+            tracksOverride={libraryTracks.tracks}
+            loadingOverride={libraryTracks.loading}
+            refreshingOverride={libraryTracks.refreshing}
+            errorOverride={libraryTracks.error}
+            setErrorOverride={libraryTracks.setError}
           />
         )}
         {tab === "playlists" && <PlaylistsView onOpenAlbum={openAlbum} />}
