@@ -286,11 +286,115 @@ build_frontend() {
   log "Installed frontend UI -> $SHARE_DIR/dist"
 }
 
+# FAT-family filesystems (vfat/exfat/ntfs via fuse) emulate Unix perms with
+# mount options. A stock `umask=022` (755/644) leaves the `audio` group
+# without write, so `scp` as the admin user (who *is* in `audio` but not the
+# owner `oxide`) hits "Permission denied". Patch the fstab entry to be
+# group-writable (775/664) when the library mount is FAT-based.
+ensure_vfat_writable() {
+  local mp="$1"
+  [ -n "$mp" ] || return 0
+  [ -d "$mp" ] || return 0
+  [ -f /etc/fstab ] || return 0
+  local fstype=""
+  if command -v findmnt >/dev/null 2>&1; then
+    fstype="$(findmnt -n -o FSTYPE --target "$mp" 2>/dev/null || true)"
+  fi
+  if [ -z "$fstype" ]; then
+    fstype="$(awk -v mp="$mp" '$2==mp {print $3}' /proc/mounts 2>/dev/null | head -n1)"
+  fi
+  case "$fstype" in
+    vfat|exfat|ntfs|ntfs3|fuseblk) ;;
+    *) return 0 ;;
+  esac
+  # fstab entry must exist — otherwise this is a transient/automounted volume
+  if ! awk -v mp="$mp" '$2==mp {found=1; exit} END{exit !found}' /etc/fstab 2>/dev/null; then
+    return 0
+  fi
+  # already group-writable?
+  if awk -v mp="$mp" '$2==mp {print $4}' /etc/fstab 2>/dev/null | grep -qE '(^|,)(fmask=0113|dmask=0002|umask=002)(,|$)'; then
+    # still ensure remount reflects fstab (systemd may be stale)
+    if ! grep -q 'fmask=0113' /proc/mounts 2>/dev/null || ! cat /proc/mounts 2>/dev/null | awk -v mp="$mp" '$2==mp {print $4}' | grep -q 'fmask=0113'; then
+      :
+    else
+      return 0
+    fi
+  fi
+  local uid gid tmp
+  uid="$(id -u "$SERVICE_USER" 2>/dev/null || echo 999)"
+  gid="$(getent group audio 2>/dev/null | cut -d: -f3)"
+  [ -n "$gid" ] || gid=29
+  tmp="$(mktemp)"
+  awk -v mp="$mp" -v uid="$uid" -v gid="$gid" '
+    $2==mp {
+      n=split($4, a, ",")
+      new=""
+      for(i=1;i<=n;i++) {
+        if(a[i] ~ /^umask=/ || a[i] ~ /^fmask=/ || a[i] ~ /^dmask=/ || a[i] ~ /^uid=/ || a[i] ~ /^gid=/) continue
+        if(a[i]=="") continue
+        if(new!="") new=new ","
+        new=new a[i]
+      }
+      if(new!="") new=new ","
+      new=new "uid="uid",gid="gid",fmask=0113,dmask=0002"
+      $4=new
+    }
+    {print}
+  ' /etc/fstab > "$tmp" && cat "$tmp" > /etc/fstab
+  rm -f "$tmp"
+  log "Patched /etc/fstab for $mp -> fmask=0113,dmask=0002,uid=$uid,gid=$gid (FAT group-writable)"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload 2>/dev/null || true
+    if ! mount -o remount "$mp" 2>/dev/null; then
+      local unit
+      if command -v systemd-escape >/dev/null 2>&1; then
+        unit="$(systemd-escape -p --suffix=mount "$mp" 2>/dev/null || true)"
+        [ -n "$unit" ] && systemctl restart "$unit" 2>/dev/null || true
+      fi
+    fi
+  else
+    mount -o remount "$mp" 2>/dev/null || true
+  fi
+}
+
+fix_vfat_music_mounts() {
+  # Fix the primary share dir plus any extra library_dirs from a previous
+  # install's config (e.g. /mnt/music1 added via Settings -> library_dirs).
+  ensure_vfat_writable "$MPD_MUSIC_DIR"
+  if [ -f "$CONFIG_DIR/config.json" ] && command -v jq >/dev/null 2>&1; then
+    local d
+    for d in $(jq -r '.library_dirs[]? // empty' "$CONFIG_DIR/config.json" 2>/dev/null); do
+      [ "$d" = "$MPD_MUSIC_DIR" ] && continue
+      ensure_vfat_writable "$d"
+    done
+  elif [ -f "$CONFIG_DIR/config.json" ] && command -v python3 >/dev/null 2>&1; then
+    local d
+    for d in $(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1])).get("library_dirs",[])))' "$CONFIG_DIR/config.json" 2>/dev/null); do
+      [ "$d" = "$MPD_MUSIC_DIR" ] && continue
+      ensure_vfat_writable "$d"
+    done
+  fi
+}
+
 setup_user_dirs() {
   if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     run useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
   fi
   run usermod -aG audio "$SERVICE_USER" || true
+  # SFTP/SCP lands as the admin user (stojce), not oxide. Keep every
+  # distinct audio user group-writable-friendly: if the music mount is
+  # FAT-family, patch its fstab entry to fmask=0113,dmask=0002 so members
+  # of `audio` can write (otherwise scp hits "Permission denied" on 755
+  # vfat). No-op on ext4 or when fstab has no entry.
+  fix_vfat_music_mounts || true
+  # Also ensure the admin can SCP into the tree: put stojce in audio when
+  # the mount's group is audio (vfat gid=audio).
+  if id stojce >/dev/null 2>&1 && ! id -nG stojce 2>/dev/null | tr ' ' '\n' | grep -qxF audio; then
+    if findmnt -n -o FSTYPE --target "$MPD_MUSIC_DIR" 2>/dev/null | grep -qE 'vfat|exfat|ntfs|fuse' \
+      || awk -v mp="$MPD_MUSIC_DIR" '$2==mp {print $3}' /proc/mounts 2>/dev/null | grep -qE 'vfat|exfat|ntfs|fuse'; then
+      run usermod -aG audio stojce || true
+    fi
+  fi
 
   # Add the service user to the group that owns the music/library directory, so
   # the scanner can traverse and read the files. Without this, a library dir
@@ -310,12 +414,13 @@ setup_user_dirs() {
 
   run mkdir -p "$DATA_DIR/covers" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
   run chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
-  run chown -R "$SERVICE_USER:$SERVICE_USER" "$MPD_MUSIC_DIR"
+  run chown -R "$SERVICE_USER:$SERVICE_USER" "$MPD_MUSIC_DIR" 2>/dev/null || true
   # Normalize the music tree so the service user AND MPD (a separate `mpd`
   # system user) can traverse and read it. Non-destructive — only adds
   # read/traverse bits — but repairs trees copied with root ownership and
   # mode 700, which would otherwise scan as an empty library (the scanner
   # reports those as "cannot read library directory" warnings in the log).
+  # No-op on vfat/exfat (chmod is emulated via masks).
   run chmod -R u+rwX,go+rX "$MPD_MUSIC_DIR" 2>/dev/null || \
     warn "could not normalize permissions on $MPD_MUSIC_DIR"
   run chmod 755 "$DATA_DIR"
@@ -1104,9 +1209,10 @@ fix_music_perms() {
   need_root
   check_linux
   [ -d "$MPD_MUSIC_DIR" ] || die "Music dir $MPD_MUSIC_DIR does not exist — nothing to fix."
+  fix_vfat_music_mounts || true
   log "Repairing music library permissions at $MPD_MUSIC_DIR"
-  run chown -R "$SERVICE_USER:$SERVICE_USER" "$MPD_MUSIC_DIR"
-  run chmod -R u+rwX,go+rX "$MPD_MUSIC_DIR"
+  run chown -R "$SERVICE_USER:$SERVICE_USER" "$MPD_MUSIC_DIR" 2>/dev/null || true
+  run chmod -R u+rwX,go+rX "$MPD_MUSIC_DIR" 2>/dev/null || true
   log "Done. Rescan the library in the web UI (Settings → Music library sources → Rescan)"
 }
 
@@ -1208,6 +1314,7 @@ do_update() {
   fetch_source
   build_backend
   build_frontend
+  fix_vfat_music_mounts || true
   ensure_mpd_include || true
   ensure_mpd_loopback_mixer || true
   write_camilladsp_config

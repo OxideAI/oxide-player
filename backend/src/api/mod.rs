@@ -1455,8 +1455,6 @@ async fn resolve_play_uri(
     uri: &str,
     track_id: Option<i64>,
 ) -> AppResult<(String, bool)> {
-    // Prefer the DB row for this exact track so we get its absolute `path` and,
-    // for CUE, its `cue_index`.
     let track = track_id.and_then(|id| s.db().track_by_id(id).ok().flatten());
     let (path, cue_index) = match &track {
         Some(t) => (Some(t.path.clone()), t.cue_index),
@@ -1468,32 +1466,47 @@ async fn resolve_play_uri(
         None => return Ok((uri.to_string(), false)),
     };
 
-    let result = if let Some(cue) = cue_index {
-        // MPD represents each CUE split as `<file>.cue/trackNNNN`, where `<file>`
-        // is the audio file's stem (extension dropped), not the full path.
-        match std::path::Path::new(&abs).file_stem() {
-            Some(stem) => {
-                let stem = stem.to_string_lossy().to_string();
-                let parent = std::path::Path::new(&abs)
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let cue_uri = if parent.is_empty() {
-                    format!("{stem}.cue/track{cue:04}")
-                } else {
-                    format!("{parent}/{stem}.cue/track{cue:04}")
-                };
-                (cue_uri, true)
+    // CUE virtual files are addressable only as a path relative to MPD's
+    // music_directory (`<dir>/<stem>.cue/trackNNNN`), not as an absolute
+    // filesystem path: MPD interprets the absolute form as a real file and
+    // ENotADirectory-fails on the trailing `/trackNNNN` (see report:
+    // "...Trio Toykeat.cue/track0009: Not a directory").
+    // Derive that relative form from the library source that contains the
+    // track (longest matching library_dir).
+    if let Some(cue) = cue_index {
+        let cfg = s.config().await;
+        let abs_path = std::path::Path::new(&abs);
+        let rel = cfg
+            .library_dirs
+            .iter()
+            .filter_map(|dir| abs_path.strip_prefix(dir).ok())
+            .max_by_key(|rel| rel.components().count())
+            .map(|rel| rel.to_string_lossy().to_string());
+        if let Some(rel) = rel {
+            match std::path::Path::new(&rel).file_stem() {
+                Some(stem) => {
+                    let stem = stem.to_string_lossy().to_string();
+                    let parent = std::path::Path::new(&rel)
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let cue_uri = if parent.is_empty() {
+                        format!("{stem}.cue/track{cue:04}")
+                    } else {
+                        format!("{parent}/{stem}.cue/track{cue:04}")
+                    };
+                    return Ok((cue_uri, true));
+                }
+                None => return Ok((rel, false)),
             }
-            None => (abs, false),
         }
-    } else {
-        (abs, false)
-    };
-    Ok(result)
+        // No library root matched — fall back to absolute (will likely fail,
+        // but avoids synthesizing a bogus relative path).
+        return Ok((abs, true));
+    }
+    Ok((abs, false))
 }
 
-/// Insert `t` immediately after the currently playing song and record it as the
 /// active (highlighted) track. Uses the DB track id from the request; never the
 /// MPD song id, which is a different namespace (see AGENTS.md).
 async fn enqueue(s: &AppState, t: &TrackRef) -> AppResult<()> {
@@ -2106,6 +2119,72 @@ mod tests {
         );
         assert!(!is_cue);
     }
+    /// Regression: CUE virtual file must be addressed as a relative URI
+    /// (`<dir>/<stem>.cue/trackNNNN`) derived from its library source, not as
+    /// an absolute filesystem path (MPD would ENotADirectory-fail on
+    /// `/.../.cue/trackNNNN`). Reproduces the folder bulk-play report:
+    /// `...Trio Toykeat.cue/track0009: Not a directory`.
+    #[tokio::test]
+    async fn cue_path_resolved_as_relative_mpd_uri() {
+        let mut config = Config::default_config();
+        config.library_dirs = vec![std::path::PathBuf::from("/mnt/music1")];
+        let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let track_id = db
+            .insert_track(
+                "Jazz/Trio Toykeat-One Night In Tampere/Trio Toykeat - One Night In Tampere.flac",
+                "/mnt/music1/Jazz/Trio Toykeat-One Night In Tampere/Trio Toykeat - One Night In Tampere.flac",
+                Some("One Night In Tampere"),
+                Some("Trio Toykeat"),
+                Some("One Night In Tampere"),
+                None,
+                None,
+                None,
+                Some(9),
+                Some(180.0),
+                Some("flac"),
+                None,
+                None,
+                None,
+                None,
+                Some(9),
+                Some(100.0),
+                Some(120.0),
+                None,
+                Some("/mnt/music1"),
+            )
+            .unwrap();
+        let dsp = DspManager::new(
+            std::env::temp_dir().join("oxide_test_cue_relative.yaml"),
+            None,
+            "".to_string(),
+            44100,
+            false,
+            None,
+        );
+        let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
+        let visualizer = crate::visualizer::VisualizerAnalyzer::new(&config);
+        let bt = crate::bluetooth::BluetoothManager::new().await;
+        let state = AppState::new(config, db, dsp, mpd, visualizer, bt, None);
+
+        let (uri, is_cue) = super::resolve_play_uri(
+            &state,
+            "Jazz/Trio Toykeat-One Night In Tampere/Trio Toykeat - One Night In Tampere.flac",
+            Some(track_id),
+        )
+        .await
+        .unwrap();
+        assert!(is_cue);
+        assert_eq!(
+            uri,
+            "Jazz/Trio Toykeat-One Night In Tampere/Trio Toykeat - One Night In Tampere.cue/track0009"
+        );
+        assert!(
+            !uri.starts_with('/'),
+            "CUE MPD URI must be relative to music_directory, got {uri:?}"
+        );
+    }
+
     #[test]
     fn dsp_profile_target_requires_releasing_direct_usb_output() {
         let output = OutputDevice {
@@ -2128,7 +2207,6 @@ mod tests {
         );
     }
 
-
     fn config(name: &str, output_type: &str, device: Option<&str>) -> DeviceConfig {
         DeviceConfig {
             name: name.to_string(),
@@ -2141,7 +2219,6 @@ mod tests {
             dop: false,
         }
     }
-
     #[test]
     fn dsp_requires_a_configured_alsa_device() {
         let output = OutputDevice {
