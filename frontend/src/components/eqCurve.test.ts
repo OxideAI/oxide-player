@@ -60,11 +60,35 @@ describe("eqResponse math", () => {
     ]);
     expect(at(1000, r).db).toBeCloseTo(12, 1);
   });
-
   it("clamps display range to ±24 dB without throwing", () => {
     // Extreme gain near the cap should still produce finite numbers.
     expect(() =>
       eqResponse([{ type: "peaking", freq: 1000, gain: 24, q: 4 }]),
     ).not.toThrow();
+  });
+
+  it("db range is ±3 dB by default and expands by 1 dB past the max band", async () => {
+    const { dbRangeForBands, EQ_BASE_RANGE_DB } = await import("./eqCurve");
+    expect(EQ_BASE_RANGE_DB).toBe(3);
+    expect(dbRangeForBands([])).toEqual({ min: -3, max: 3, range: 3 });
+    expect(dbRangeForBands([{ type: "peaking", freq: 1000, gain: 3, q: 1 }])).toEqual({
+      min: -3,
+      max: 3,
+      range: 3,
+    });
+    // -5 → ceil(5)+1 = 6 → ±6; +9 → ceil(9)+1 = 10 → ±10
+    expect(dbRangeForBands([{ type: "peaking", freq: 100, gain: -5, q: 1 }]).range).toBe(6);
+    expect(dbRangeForBands([{ type: "peaking", freq: 100, gain: 9, q: 1 }]).range).toBe(10);
+    expect(dbRangeForBands([{ type: "peaking", freq: 100, gain: 3.2, q: 1 }]).range).toBe(5);
+  });
+
+  it("dbTicksForRange always includes 0 and stays symmetric", async () => {
+    const { dbTicksForRange } = await import("./eqCurve");
+    for (const r of [3, 6, 10, 12, 24]) {
+      const t = dbTicksForRange(r);
+      expect(t).toContain(0);
+      expect(t[0]).toBe(-r);
+      expect(t[t.length - 1]).toBe(r);
+    }
   });
 });

@@ -74,6 +74,17 @@ export interface CurvePoint {
 
 export const FREQ_MIN = 20;
 export const FREQ_MAX = 20000;
+/**
+ * Base display range. Empty EQ or gains within ±3 dB stay in this window.
+ * When any band exceeds it, the range grows to ceil(max|gain|)+1 on both sides.
+ */
+export const EQ_BASE_RANGE_DB = 3;
+export function dbRangeForBands(bands: EqBand[]): { min: number; max: number; range: number } {
+  const maxAbs = bands.reduce((m, b) => Math.max(m, Math.abs(b.gain)), 0);
+  const range = maxAbs <= EQ_BASE_RANGE_DB ? EQ_BASE_RANGE_DB : Math.ceil(maxAbs) + 1;
+  return { min: -range, max: range, range };
+}
+/** Back-compat: the ±24 dB window used by older snapshots. Prefer dbRangeForBands. */
 export const DB_MIN = -24;
 export const DB_MAX = 24;
 /**
@@ -108,8 +119,29 @@ export const FREQ_TICKS = [
   20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000,
 ];
 /** dB grid ticks. */
-export const DB_TICKS = [-24, -18, -12, -6, 0, 6, 12, 18, 24];
-/** Format a Hz value for the axis label. */
+export function dbTicksForRange(range: number): number[] {
+  if (range <= 3) return [-3, -2, -1, 0, 1, 2, 3];
+  let step: number;
+  if (range <= 6) step = range % 2 === 0 ? 2 : 1;
+  else if (range <= 12) {
+    if (range % 3 === 0) step = 3;
+    else if (range % 2 === 0) step = 2;
+    else step = 1;
+  } else {
+    if (range % 6 === 0) step = 6;
+    else if (range % 3 === 0) step = 3;
+    else if (range % 2 === 0) step = 2;
+    else step = 1;
+  }
+  const ticks: number[] = [];
+  for (let v = -range; v <= range; v += step) ticks.push(v);
+  if (ticks[ticks.length - 1] !== range) ticks.push(range);
+  if (!ticks.includes(0)) {
+    ticks.push(0);
+    ticks.sort((a, b) => a - b);
+  }
+  return ticks;
+}
 export function formatHz(hz: number): string {
   if (hz >= 1000) {
     const k = hz / 1000;

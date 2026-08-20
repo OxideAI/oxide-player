@@ -7,6 +7,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_camilladsp_ws_url() -> Option<String> {
+    Some("ws://127.0.0.1:1234".to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub mpd_host: String,
@@ -26,6 +30,7 @@ pub struct Config {
     pub library_dirs: Vec<PathBuf>,
     pub static_dir: PathBuf,
     pub camilladsp_config_path: PathBuf,
+    #[serde(default = "default_camilladsp_ws_url")]
     pub camilladsp_ws_url: Option<String>,
     #[serde(default = "default_true")]
     pub camilladsp_autostart: bool,
@@ -40,7 +45,6 @@ pub struct Config {
     /// Managed playback endpoint whose audio route is currently using DSP.
     #[serde(default)]
     pub dsp_active_device: Option<String>,
-    /// Enable the real FFT audio visualizer. When true the backend taps the PCM
     /// capture device and streams magnitude bins to `/api/visualizer`. Off by
     /// default so the feature has zero cost / no capture device dependency when
     /// unused (especially important where the capture device isn't available).
@@ -159,7 +163,6 @@ impl Config {
                 }
             }
         };
-
         if let Some(host) = &cli.mpd_host {
             config.mpd_host = host.clone();
         }
@@ -168,6 +171,13 @@ impl Config {
         }
         if cli.listen != "127.0.0.1:8000" {
             config.listen = cli.listen.clone();
+        }
+        // Older/manual configs may have `camilladsp_ws_url: null` persisted.
+        // That's indistinguishable from "no WS" via serde, so we coalesce it
+        // back to the default so reloads actually happen. Explicit omission
+        // still falls through via default_camilladsp_ws_url.
+        if config.camilladsp_ws_url.is_none() {
+            config.camilladsp_ws_url = default_camilladsp_ws_url();
         }
         config.validate()?;
         Ok((config, resolved))

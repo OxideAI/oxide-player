@@ -280,15 +280,46 @@ impl DspManager {
             }
         }
 
-        let (reload_confirmed, reload_error) = if let Some(error) = startup_error {
-            (false, Some(error))
-        } else if let Some(url) = &self.inner.ws_url {
-            match self.send_reload(url).await {
-                Ok(confirmed) => (confirmed, None),
-                Err(error) => (false, Some(error.to_string())),
+        // If CamillaDSP rejected the config because the ALSA device was busy
+        // (MPD still releasing its direct output), retry once after a short
+        // settle delay — the caller already waited 250ms, but USB PCM release
+        // can take longer. Bounded to one retry to avoid livelock.
+        let (reload_confirmed, reload_error) = {
+            let (mut confirmed, mut error) = if let Some(error) = startup_error {
+                (false, Some(error))
+            } else if let Some(url) = &self.inner.ws_url {
+                match self.send_reload(url).await {
+                    Ok(confirmed) => (confirmed, None),
+                    Err(error) => (false, Some(error.to_string())),
+                }
+            } else {
+                (
+                    false,
+                    Some("CamillaDSP reload is not configured".to_string()),
+                )
+            };
+            if !confirmed {
+                let busy = error
+                    .as_deref()
+                    .is_some_and(|e| is_alsa_busy_error(e));
+                if busy {
+                    tracing::warn!("CamillaDSP reload rejected as ALSA busy; retrying after settle delay");
+                    tokio::time::sleep(Duration::from_millis(350)).await;
+                    if let Some(url) = &self.inner.ws_url {
+                        match self.send_reload(url).await {
+                            Ok(true) => {
+                                confirmed = true;
+                                error = None;
+                            }
+                            Ok(false) => {}
+                            Err(retry_err) => {
+                                error = Some(retry_err.to_string());
+                            }
+                        }
+                    }
+                }
             }
-        } else {
-            (false, Some("CamillaDSP reload is not configured".to_string()))
+            (confirmed, error)
         };
         let active = reload_confirmed;
         if reload_confirmed {
@@ -313,9 +344,14 @@ impl DspManager {
             std::fs::create_dir_all(parent).context("create camilladsp config dir")?;
         }
         let yaml = serde_yaml::to_string(cfg).context("serialize camilladsp config")?;
-        std::fs::write(&self.inner.config_path, yaml).context("write camilladsp config")?;
+        // Atomic: temp+rename so a crash mid-write never leaves a half-written
+        // YAML that makes CamillaDSP reject the next reload with a parse error.
+        let tmp = self.inner.config_path.with_extension("yml.tmp");
+        std::fs::write(&tmp, &yaml).context("write camilladsp config tmp")?;
+        std::fs::rename(&tmp, &self.inner.config_path).context("rename camilladsp config")?;
         Ok(())
     }
+
 
     async fn send_reload(&self, url: &str) -> Result<bool> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -397,9 +433,13 @@ fn parse_ws(url: &str) -> Option<(String, u16)> {
     };
     Some((host, port))
 }
-
 fn is_localhost(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]" | "0.0.0.0")
+}
+
+fn is_alsa_busy_error(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("device or resource busy") || m.contains("resource busy") || m.contains("alsa") && m.contains("busy")
 }
 
 async fn tcp_reachable(host: &str, port: u16) -> bool {

@@ -352,12 +352,14 @@ impl AppState {
             // Release the direct output BEFORE applying the profile: for
             // Bluetooth the bluealsa A2DP PCM is exclusive, and CamillaDSP
             // cannot open it while MPD still holds it (same ordering as
-            // `enable_device_dsp`).
+            // `enable_device_dsp`). USB direct outputs need a short settle delay
+            // before CamillaDSP reopens the PCM, otherwise ALSA reports "busy".
             if target.enabled {
                 if let Err(error) = state.mpd().disable_output(target.id).await {
                     tracing::warn!("cannot disable direct output while restoring DSP: {error}");
                     return;
                 }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
 
             let result = match state.dsp().apply_profile_for_device(&device).await {

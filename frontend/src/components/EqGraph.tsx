@@ -4,11 +4,10 @@ import {
   eqResponse,
   FREQ_MIN,
   FREQ_MAX,
-  DB_MIN,
-  DB_MAX,
   FREQ_TICKS,
-  DB_TICKS,
   formatHz,
+  dbRangeForBands,
+  dbTicksForRange,
 } from "./eqCurve";
 import styles from "./EqGraph.module.css";
 
@@ -24,16 +23,20 @@ const freqX = (f: number) =>
   ((Math.log(f) - Math.log(FREQ_MIN)) /
     (Math.log(FREQ_MAX) - Math.log(FREQ_MIN))) *
     plotW;
-const dbY = (db: number) =>
-  PADDING.top + (1 - (db - DB_MIN) / (DB_MAX - DB_MIN)) * plotH;
+const dbYFor = (db: number, min: number, max: number) =>
+  PADDING.top + (1 - (db - min) / (max - min)) * plotH;
 
 /**
  * A read-only curve view of the summed EQ response for a band set.
- * Vertical axis spans ±24 dB, log frequency axis from 20Hz to 20kHz.
+ * Vertical axis auto-scales: ±3 dB by default, growing to ceil(max|gain|)+1
+ * when any band exceeds it (so +9 → ±10, −5 → ±6). Log frequency axis 20Hz–20kHz.
  * Bands must already be sorted by freq; band centers are marked with
- * dotted vertical guides so the user can compare centers to the curve.
+ * dotted vertical guides.
  */
 export function EqGraph({ bands }: { bands: EqBand[] }) {
+  const { min: dbMin, max: dbMax, range } = useMemo(() => dbRangeForBands(bands), [bands]);
+  const dbTicks = useMemo(() => dbTicksForRange(range), [range]);
+  const dbY = (db: number) => dbYFor(db, dbMin, dbMax);
   const { areaPath, linePath } = useMemo(() => {
     const pts = eqResponse(bands);
     let line = "";
@@ -47,8 +50,7 @@ export function EqGraph({ bands }: { bands: EqBand[] }) {
     const firstX = freqX(pts[0].f);
     const area = `${line}L${lastX.toFixed(2)},${baselineY.toFixed(2)} L${firstX.toFixed(2)},${baselineY.toFixed(2)} Z`;
     return { areaPath: area, linePath: line };
-  }, [bands]);
-
+  }, [bands, dbMin, dbMax]);
   return (
     <svg
       className={styles.graph}
@@ -57,8 +59,8 @@ export function EqGraph({ bands }: { bands: EqBand[] }) {
       role="img"
       aria-label="Equalizer frequency response"
     >
-      {/* dB grid + labels */}
-      {DB_TICKS.map((db) => (
+      {/* dB grid + labels: auto-scaled to bands (default ±3 dB, see eqCurve.ts). */}
+      {dbTicks.map((db) => (
         <g key={`db-${db}`}>
           <line
             x1={PADDING.left}
