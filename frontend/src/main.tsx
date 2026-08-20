@@ -1,15 +1,15 @@
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import { useRegisterSW } from 'virtual:pwa-register/react'
-import { App } from './App'
-import { UpdateToast } from './components/UpdateToast'
-import './index.css'
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { useRegisterSW } from "virtual:pwa-register/react";
+import { App } from "./App";
+import { UpdateToast } from "./components/UpdateToast";
+import "./index.css";
 
 function PwaRegister() {
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
-  } = useRegisterSW()
+  } = useRegisterSW();
 
   return (
     <UpdateToast
@@ -17,12 +17,12 @@ function PwaRegister() {
       onReload={() => updateServiceWorker(true)}
       onDismiss={() => setNeedRefresh(false)}
     />
-  )
+  );
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />
     <PwaRegister />
   </React.StrictMode>,
-)
+);

@@ -1,28 +1,50 @@
-import type { QueueResponse } from '../types'
-import { fmtTime, displayTitle } from '../util'
-import styles from './QueueView.module.css'
+import type { QueueResponse } from "../types";
+import { fmtTime, displayTitle } from "../util";
+import styles from "./QueueView.module.css";
 
 interface Props {
-  queue: QueueResponse
-  onJump: (pos: number) => void
-  onRemove: (pos: number) => void
-  onClear: () => void
-  onClose: () => void
+  queue: QueueResponse;
+  onJump: (pos: number) => void;
+  onRemove: (pos: number) => void;
+  onClear: () => void;
+  onClose: () => void;
 }
 
-export function QueueView({ queue, onJump, onRemove, onClear, onClose }: Props) {
+export function QueueView({
+  queue,
+  onJump,
+  onRemove,
+  onClear,
+  onClose,
+}: Props) {
   return (
     <div className={styles.panel} role="dialog" aria-label="Play queue">
       <div className={styles.head}>
         <span className={styles.eyebrow}>Queue · {queue.entries.length}</span>
         <div className={styles.headActions}>
           {queue.entries.length > 0 && (
-            <button className={styles.clear} onClick={onClear} aria-label="Clear queue">
+            <button
+              className={styles.clear}
+              onClick={onClear}
+              aria-label="Clear queue"
+            >
               Clear
             </button>
           )}
-          <button className={styles.close} onClick={onClose} aria-label="Close queue">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+          <button
+            className={styles.close}
+            onClick={onClose}
+            aria-label="Close queue"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+            >
               <path d="M6 6l12 12M18 6 6 18" />
             </svg>
           </button>
@@ -33,7 +55,7 @@ export function QueueView({ queue, onJump, onRemove, onClear, onClose }: Props) 
           <li className={styles.empty}>The queue is empty.</li>
         )}
         {queue.entries.map((t) => {
-          const active = queue.current !== null && t.pos === queue.current
+          const active = queue.current !== null && t.pos === queue.current;
           return (
             <li
               key={t.id}
@@ -50,25 +72,35 @@ export function QueueView({ queue, onJump, onRemove, onClear, onClose }: Props) 
               )}
               <span className={styles.meta}>
                 <span className={styles.tTitle}>{displayTitle(t)}</span>
-                <span className={styles.tArtist}>{t.artist ?? t.album ?? '—'}</span>
+                <span className={styles.tArtist}>
+                  {t.artist ?? t.album ?? "—"}
+                </span>
               </span>
               <span className={styles.tTime}>{fmtTime(t.duration ?? 0)}</span>
               <button
                 className={styles.remove}
                 aria-label="Remove from queue"
                 onClick={(e) => {
-                  e.stopPropagation()
-                  onRemove(t.pos)
+                  e.stopPropagation();
+                  onRemove(t.pos);
                 }}
               >
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="13"
+                  height="13"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                >
                   <path d="M6 6l12 12M18 6 6 18" />
                 </svg>
               </button>
             </li>
-          )
+          );
         })}
       </ul>
     </div>
-  )
+  );
 }

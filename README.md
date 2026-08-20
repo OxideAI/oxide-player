@@ -6,12 +6,12 @@ Oxide scans the library into SQLite and serves optimized cover art. Its JSON API
 
 ## Screenshots
 
-| Library (desktop) | Album + now playing | Queue panel |
-| --- | --- | --- |
+| Library (desktop)                        | Album + now playing                          | Queue panel                          |
+| ---------------------------------------- | -------------------------------------------- | ------------------------------------ |
 | ![Library](docs/screenshots/library.png) | ![Album](docs/screenshots/album-playing.png) | ![Queue](docs/screenshots/queue.png) |
 
-| Settings (DSP / devices) | Kiosk mode | Library (mobile) |
-| --- | --- | --- |
+| Settings (DSP / devices)                   | Kiosk mode                           | Library (mobile)                               |
+| ------------------------------------------ | ------------------------------------ | ---------------------------------------------- |
 | ![Settings](docs/screenshots/settings.png) | ![Kiosk](docs/screenshots/kiosk.png) | ![Mobile](docs/screenshots/mobile-library.png) |
 
 ## Features

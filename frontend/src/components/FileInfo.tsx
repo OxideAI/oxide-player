@@ -1,33 +1,37 @@
-import type { Track } from '../types'
-import { fmtTime, displayTitle, audioQuality } from '../util'
-import styles from './TrackMenu.module.css'
+import type { Track } from "../types";
+import { fmtTime, displayTitle, audioQuality } from "../util";
+import styles from "./TrackMenu.module.css";
 
 interface Props {
-  track: Track
-  onClose: () => void
+  track: Track;
+  onClose: () => void;
 }
 
 function Row({ label, value }: { label: string; value: string | null }) {
-  if (value === null || value === '') return null
+  if (value === null || value === "") return null;
   return (
     <div className={styles.fileInfoRow}>
       <span className={styles.fileInfoLabel}>{label}</span>
       <span className={styles.fileInfoValue}>{value}</span>
     </div>
-  )
+  );
 }
 
 export function FileInfo({ track, onClose }: Props) {
   const mtime = track.file_mtime
     ? new Date(track.file_mtime * 1000).toLocaleString()
-    : null
+    : null;
 
   return (
     <div className={styles.trackMenuModal} onClick={onClose}>
       <div className={styles.fileInfoBox} onClick={(e) => e.stopPropagation()}>
         <div className={styles.fileInfoHead}>
           <span className={styles.fileInfoTitle}>{displayTitle(track)}</span>
-          <button className={styles.trackMenuClose} onClick={onClose} aria-label="Close">
+          <button
+            className={styles.trackMenuClose}
+            onClick={onClose}
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>
@@ -68,5 +72,5 @@ export function FileInfo({ track, onClose }: Props) {
         <Row label="Track" value={track.track ? String(track.track) : null} />
       </div>
     </div>
-  )
+  );
 }

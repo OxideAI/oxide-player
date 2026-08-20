@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import type { EqBand } from '../types'
+import { useMemo } from "react";
+import type { EqBand } from "../types";
 import {
   eqResponse,
   FREQ_MIN,
@@ -9,20 +9,23 @@ import {
   FREQ_TICKS,
   DB_TICKS,
   formatHz,
-} from './eqCurve'
-import styles from './EqGraph.module.css'
+} from "./eqCurve";
+import styles from "./EqGraph.module.css";
 
-const W = 560
-const H = 160
-const PADDING = { top: 10, right: 12, bottom: 22, left: 30 }
+const W = 560;
+const H = 160;
+const PADDING = { top: 10, right: 12, bottom: 22, left: 30 };
 
-const plotW = W - PADDING.left - PADDING.right
-const plotH = H - PADDING.top - PADDING.bottom
+const plotW = W - PADDING.left - PADDING.right;
+const plotH = H - PADDING.top - PADDING.bottom;
 
 const freqX = (f: number) =>
-  PADDING.left + (Math.log(f) - Math.log(FREQ_MIN)) / (Math.log(FREQ_MAX) - Math.log(FREQ_MIN)) * plotW
+  PADDING.left +
+  ((Math.log(f) - Math.log(FREQ_MIN)) /
+    (Math.log(FREQ_MAX) - Math.log(FREQ_MIN))) *
+    plotW;
 const dbY = (db: number) =>
-  PADDING.top + (1 - (db - DB_MIN) / (DB_MAX - DB_MIN)) * plotH
+  PADDING.top + (1 - (db - DB_MIN) / (DB_MAX - DB_MIN)) * plotH;
 
 /**
  * A read-only curve view of the summed EQ response for a band set.
@@ -32,19 +35,19 @@ const dbY = (db: number) =>
  */
 export function EqGraph({ bands }: { bands: EqBand[] }) {
   const { areaPath, linePath } = useMemo(() => {
-    const pts = eqResponse(bands)
-    let line = ''
+    const pts = eqResponse(bands);
+    let line = "";
     pts.forEach((p, i) => {
-      const x = freqX(p.f)
-      const y = dbY(p.db)
-      line += `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)} `
-    })
-    const baselineY = dbY(0)
-    const lastX = freqX(pts[pts.length - 1].f)
-    const firstX = freqX(pts[0].f)
-    const area = `${line}L${lastX.toFixed(2)},${baselineY.toFixed(2)} L${firstX.toFixed(2)},${baselineY.toFixed(2)} Z`
-    return { areaPath: area, linePath: line }
-  }, [bands])
+      const x = freqX(p.f);
+      const y = dbY(p.db);
+      line += `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)} `;
+    });
+    const baselineY = dbY(0);
+    const lastX = freqX(pts[pts.length - 1].f);
+    const firstX = freqX(pts[0].f);
+    const area = `${line}L${lastX.toFixed(2)},${baselineY.toFixed(2)} L${firstX.toFixed(2)},${baselineY.toFixed(2)} Z`;
+    return { areaPath: area, linePath: line };
+  }, [bands]);
 
   return (
     <svg
@@ -64,7 +67,12 @@ export function EqGraph({ bands }: { bands: EqBand[] }) {
             y2={dbY(db)}
             className={db === 0 ? styles.zeroLine : styles.gridLine}
           />
-          <text x={PADDING.left - 4} y={dbY(db) + 3} textAnchor="end" className={styles.tickLbl}>
+          <text
+            x={PADDING.left - 4}
+            y={dbY(db) + 3}
+            textAnchor="end"
+            className={styles.tickLbl}
+          >
             {db > 0 ? `+${db}` : db}
           </text>
         </g>
@@ -79,7 +87,12 @@ export function EqGraph({ bands }: { bands: EqBand[] }) {
             y2={H - PADDING.bottom}
             className={styles.gridLine}
           />
-          <text x={freqX(f)} y={H - PADDING.bottom + 14} textAnchor="middle" className={styles.tickLbl}>
+          <text
+            x={freqX(f)}
+            y={H - PADDING.bottom + 14}
+            textAnchor="middle"
+            className={styles.tickLbl}
+          >
             {formatHz(f)}
           </text>
         </g>
@@ -100,5 +113,5 @@ export function EqGraph({ bands }: { bands: EqBand[] }) {
       {/* response curve */}
       <path d={linePath} className={styles.curve} fill="none" />
     </svg>
-  )
+  );
 }

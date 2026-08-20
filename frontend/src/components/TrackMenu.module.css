@@ -1,233 +1,251 @@
 .trackMenu {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
 }
 
 .trackMenuBtn {
-  border: 1px solid var(--hairline);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-dim);
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  box-shadow: var(--inset-hi);
-  transition: transform 0.4s var(--ease), background 0.4s var(--ease),
-    color 0.4s var(--ease), border-color 0.4s var(--ease);
+    border: 1px solid var(--hairline);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-dim);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    box-shadow: var(--inset-hi);
+    transition:
+        transform 0.4s var(--ease),
+        background 0.4s var(--ease),
+        color 0.4s var(--ease),
+        border-color 0.4s var(--ease);
 }
 .trackMenuBtn:hover {
-  background: rgba(255, 255, 255, 0.09);
-  color: var(--text);
-  transform: scale(1.05);
+    background: rgba(255, 255, 255, 0.09);
+    color: var(--text);
+    transform: scale(1.05);
 }
 .trackMenuBtn:active {
-  transform: scale(0.92);
+    transform: scale(0.92);
 }
 .trackMenuBtn :global(svg) {
-  transition: transform 0.4s var(--ease);
+    transition: transform 0.4s var(--ease);
 }
 .trackMenuBtn:hover :global(svg) {
-  transform: rotate(90deg);
+    transform: rotate(90deg);
 }
 
 /* Playing indicator: pulse the three dots sequentially when the host row is the active song.
    Triggered by the local .playing class (set via the `playing` prop), so it coexists with hover rotate. */
 .playing .trackMenuBtn :global(svg circle) {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: oxDotPulse 1.2s var(--ease) infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: oxDotPulse 1.2s var(--ease) infinite;
 }
 .playing .trackMenuBtn :global(svg circle):nth-child(2) {
-  animation-delay: 0.18s;
+    animation-delay: 0.18s;
 }
 .playing .trackMenuBtn :global(svg circle):nth-child(3) {
-  animation-delay: 0.36s;
+    animation-delay: 0.36s;
 }
 
 .trackMenuPop {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 8px);
-  z-index: 30;
-  min-width: 13rem;
-  background: rgba(12, 14, 18, 0.72);
-  backdrop-filter: blur(30px) saturate(150%);
-  -webkit-backdrop-filter: blur(30px) saturate(150%);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-md);
-  box-shadow: var(--inset-hi), 0 30px 70px -28px rgba(0, 0, 0, 0.9);
-  padding: 0.4rem;
-  display: flex;
-  flex-direction: column;
-  transform-origin: top right;
-  animation: oxPop 0.4s var(--ease) both;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 8px);
+    z-index: 30;
+    min-width: 13rem;
+    background: rgba(12, 14, 18, 0.72);
+    backdrop-filter: blur(30px) saturate(150%);
+    -webkit-backdrop-filter: blur(30px) saturate(150%);
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--r-md);
+    box-shadow:
+        var(--inset-hi),
+        0 30px 70px -28px rgba(0, 0, 0, 0.9);
+    padding: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    transform-origin: top right;
+    animation: oxPop 0.4s var(--ease) both;
 }
 
 .trackMenuItem {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  width: 100%;
-  text-align: left;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  padding: 0.55rem 0.6rem;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  font-size: 0.88rem;
-  transition: background 0.35s var(--ease), color 0.35s var(--ease),
-    transform 0.35s var(--ease);
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    padding: 0.55rem 0.6rem;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    font-size: 0.88rem;
+    transition:
+        background 0.35s var(--ease),
+        color 0.35s var(--ease),
+        transform 0.35s var(--ease);
 }
 .trackMenuItem:hover {
-  background: var(--accent-soft);
-  color: var(--accent);
-  transform: translateX(2px);
+    background: var(--accent-soft);
+    color: var(--accent);
+    transform: translateX(2px);
 }
 .trackMenuItem :global(svg) {
-  flex: none;
-  opacity: 0.8;
+    flex: none;
+    opacity: 0.8;
 }
 
 .trackMenuModal {
-  position: fixed;
-  inset: 0;
-  z-index: 70;
-  background: rgba(4, 5, 7, 0.6);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1.2rem;
-  animation: oxScrim 0.5s var(--ease) both;
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: rgba(4, 5, 7, 0.6);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.2rem;
+    animation: oxScrim 0.5s var(--ease) both;
 }
 @keyframes oxScrim {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 
 .trackMenuModalBox,
 .fileInfoBox {
-  background: rgba(12, 14, 18, 0.78);
-  backdrop-filter: blur(40px) saturate(150%);
-  -webkit-backdrop-filter: blur(40px) saturate(150%);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-lg);
-  box-shadow: var(--inset-hi), 0 50px 110px -40px rgba(0, 0, 0, 0.95);
-  padding: 1.5rem 1.6rem;
-  min-width: 18rem;
-  max-width: 24rem;
-  width: 100%;
-  max-height: 84vh;
-  overflow: auto;
-  animation: oxPop 0.5s var(--ease) both;
+    background: rgba(12, 14, 18, 0.78);
+    backdrop-filter: blur(40px) saturate(150%);
+    -webkit-backdrop-filter: blur(40px) saturate(150%);
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--r-lg);
+    box-shadow:
+        var(--inset-hi),
+        0 50px 110px -40px rgba(0, 0, 0, 0.95);
+    padding: 1.5rem 1.6rem;
+    min-width: 18rem;
+    max-width: 24rem;
+    width: 100%;
+    max-height: 84vh;
+    overflow: auto;
+    animation: oxPop 0.5s var(--ease) both;
 }
 
 .trackMenuModalTitle {
-  font-weight: 600;
-  font-size: 1.05rem;
-  letter-spacing: -0.01em;
-  margin-bottom: 0.8rem;
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+    margin-bottom: 0.8rem;
 }
 
 .trackMenuPlaylistList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 50vh;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 50vh;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
 .trackMenuEmpty {
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  padding: 0.4rem 0;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    padding: 0.4rem 0;
 }
 
 .trackMenuClose {
-  margin-top: 1rem;
-  width: 100%;
-  border: 1px solid var(--hairline);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  padding: 0.6rem;
-  border-radius: var(--r-pill);
-  cursor: pointer;
-  font-weight: 500;
-  transition: background 0.4s var(--ease), border-color 0.4s var(--ease);
+    margin-top: 1rem;
+    width: 100%;
+    border: 1px solid var(--hairline);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+    padding: 0.6rem;
+    border-radius: var(--r-pill);
+    cursor: pointer;
+    font-weight: 500;
+    transition:
+        background 0.4s var(--ease),
+        border-color 0.4s var(--ease);
 }
 .trackMenuClose:hover {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: var(--hairline-strong);
+    background: rgba(255, 255, 255, 0.09);
+    border-color: var(--hairline-strong);
 }
 
 /* —— File info modal —— */
 .fileInfoBox {
-  max-width: 27rem;
+    max-width: 27rem;
 }
 
 .fileInfoHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.9rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.9rem;
 }
 
 .fileInfoTitle {
-  font-weight: 600;
-  font-size: 1.05rem;
-  letter-spacing: -0.01em;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .fileInfoSection {
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 0.64rem;
-  font-weight: 600;
-  color: var(--accent);
-  margin: 1.1rem 0 0.45rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 0.64rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 1.1rem 0 0.45rem;
 }
 
 .fileInfoRow {
-  display: grid;
-  grid-template-columns: 7.5rem 1fr;
-  gap: 0.5rem;
-  padding: 0.22rem 0;
-  font-size: 0.86rem;
-  word-break: break-word;
+    display: grid;
+    grid-template-columns: 7.5rem 1fr;
+    gap: 0.5rem;
+    padding: 0.22rem 0;
+    font-size: 0.86rem;
+    word-break: break-word;
 }
 
 .fileInfoLabel {
-  color: var(--text-dim);
+    color: var(--text-dim);
 }
 
 .fileInfoValue {
-  color: var(--text);
+    color: var(--text);
 }
 
 @keyframes oxDotPulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.9); opacity: 0.55; }
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.9);
+        opacity: 0.55;
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .playing .trackMenuBtn :global(svg circle) {
-    animation: none !important;
-  }
+    .playing .trackMenuBtn :global(svg circle) {
+        animation: none !important;
+    }
 }

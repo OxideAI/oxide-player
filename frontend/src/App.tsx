@@ -1,199 +1,205 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from './api'
-import { usePlayerStatus } from './ws'
-import { removeTrackFromLibraryCache } from './libraryCache'
-import { NowPlaying } from './components/NowPlaying'
-import { KioskView } from './components/KioskView'
-import { LibraryView } from './components/LibraryView'
-import { RadioView } from './components/RadioView'
-import { ConfigView } from './components/ConfigView'
-import { PlaylistsView } from './components/PlaylistsView'
-import { Reveal } from './components/Reveal'
-import { InstallPrompt } from './components/InstallPrompt'
-import { OfflineBanner } from './components/OfflineBanner'
-import { useKeyboardShortcuts } from './components/useKeyboardShortcuts'
-import { ShortcutToast } from './components/ShortcutToast'
-import { ShortcutHelp } from './components/ShortcutHelp'
-import { SearchBar } from './components/SearchBar'
-import { SearchView } from './components/SearchView'
-import styles from './App.module.css'
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "./api";
+import { usePlayerStatus } from "./ws";
+import { removeTrackFromLibraryCache } from "./libraryCache";
+import { NowPlaying } from "./components/NowPlaying";
+import { KioskView } from "./components/KioskView";
+import { LibraryView } from "./components/LibraryView";
+import { RadioView } from "./components/RadioView";
+import { ConfigView } from "./components/ConfigView";
+import { PlaylistsView } from "./components/PlaylistsView";
+import { Reveal } from "./components/Reveal";
+import { InstallPrompt } from "./components/InstallPrompt";
+import { OfflineBanner } from "./components/OfflineBanner";
+import { useKeyboardShortcuts } from "./components/useKeyboardShortcuts";
+import { ShortcutToast } from "./components/ShortcutToast";
+import { ShortcutHelp } from "./components/ShortcutHelp";
+import { SearchBar } from "./components/SearchBar";
+import { SearchView } from "./components/SearchView";
+import styles from "./App.module.css";
 
-type Tab = 'library' | 'playlists' | 'settings' | 'radio'
+type Tab = "library" | "playlists" | "settings" | "radio";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'library', label: 'Library' },
-  { id: 'playlists', label: 'Playlists' },
-  { id: 'radio', label: 'Radio' },
-  { id: 'settings', label: 'Settings' },
-]
+  { id: "library", label: "Library" },
+  { id: "playlists", label: "Playlists" },
+  { id: "radio", label: "Radio" },
+  { id: "settings", label: "Settings" },
+];
 
 interface Route {
-  tab: Tab
-  album: string | null
+  tab: Tab;
+  album: string | null;
 }
 
 export function parsePath(): Route {
-  const raw = window.location.pathname.replace(/^\/+/, '')
-  const parts = raw.split('/').filter(Boolean)
-  const head = parts[0] as Tab | undefined
+  const raw = window.location.pathname.replace(/^\/+/, "");
+  const parts = raw.split("/").filter(Boolean);
+  const head = parts[0] as Tab | undefined;
   if (head && TABS.some((t) => t.id === head)) {
-    if (head === 'library' && parts[1]) {
+    if (head === "library" && parts[1]) {
       try {
-        return { tab: head, album: decodeURIComponent(parts[1]) }
+        return { tab: head, album: decodeURIComponent(parts[1]) };
       } catch {
-        return { tab: head, album: parts[1] }
+        return { tab: head, album: parts[1] };
       }
     }
-    return { tab: head, album: null }
+    return { tab: head, album: null };
   }
-  return { tab: 'library', album: null }
+  return { tab: "library", album: null };
 }
 
 export function buildPath(route: Route): string {
-  if (route.tab === 'library' && route.album) return `/library/${encodeURIComponent(route.album)}`
-  return `/${route.tab}`
+  if (route.tab === "library" && route.album)
+    return `/library/${encodeURIComponent(route.album)}`;
+  return `/${route.tab}`;
 }
 
 export function App() {
-  const [error, setError] = useState<string | null>(null)
-  const [route, setRoute] = useState<Route>(() => parsePath())
-  const tab = route.tab
-  const [refreshToken, setRefreshToken] = useState(0)
-  const [navOpen, setNavOpen] = useState(false)
-  const [kiosk] = useState(() => window.location.pathname === '/kiosk')
-  const overlayRef = useRef<HTMLDivElement>(null)
+  const [error, setError] = useState<string | null>(null);
+  const [route, setRoute] = useState<Route>(() => parsePath());
+  const tab = route.tab;
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [navOpen, setNavOpen] = useState(false);
+  const [kiosk] = useState(() => window.location.pathname === "/kiosk");
+  const overlayRef = useRef<HTMLDivElement>(null);
 
   // Live player status + queue, pushed over a single WebSocket (issue #3).
-  const { status, queue, notice, connected, error: statusError, lastSnapshotAt } = usePlayerStatus()
+  const {
+    status,
+    queue,
+    notice,
+    connected,
+    error: statusError,
+    lastSnapshotAt,
+  } = usePlayerStatus();
   const connectionError =
-    statusError ?? (status === null && !connected ? 'Connecting to player…' : null)
-  const banner = error ?? connectionError
+    statusError ??
+    (status === null && !connected ? "Connecting to player…" : null);
+  const banner = error ?? connectionError;
 
   useEffect(() => {
-    if (overlayRef.current) overlayRef.current.inert = !navOpen
-  }, [navOpen])
+    if (overlayRef.current) overlayRef.current.inert = !navOpen;
+  }, [navOpen]);
 
   useEffect(() => {
-    const onPop = () => setRoute(parsePath())
-    window.addEventListener('popstate', onPop)
-    return () => window.removeEventListener('popstate', onPop)
-  }, [])
+    const onPop = () => setRoute(parsePath());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const refreshLibrary = useCallback(async () => {
-    setError(null)
+    setError(null);
     try {
-      await api.refresh()
-      setRefreshToken((n) => n + 1)
+      await api.refresh();
+      setRefreshToken((n) => n + 1);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }, [])
+  }, []);
 
   const rescanArt = useCallback(async () => {
-    setError(null)
+    setError(null);
     try {
-      await api.rescanArt()
+      await api.rescanArt();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }, [])
+  }, []);
 
   const togglePlay = useCallback(async () => {
-    if (!status) return
+    if (!status) return;
     try {
-      if (status.state === 'playing') await api.pause(true)
-      else if (status.state === 'paused') await api.pause(false)
-      else await api.play()
+      if (status.state === "playing") await api.pause(true);
+      else if (status.state === "paused") await api.pause(false);
+      else await api.play();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }, [status])
+  }, [status]);
 
   const next = useCallback(async () => {
     try {
-      await api.next()
+      await api.next();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }, [])
+  }, []);
 
   const prev = useCallback(async () => {
     try {
-      await api.prev()
+      await api.prev();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }, [])
+  }, []);
 
   // Optimistic local update so the scrubber/volume feel instant; the WS push
   // from the server reconciles within a frame.
-  const seek = useCallback(
-    async (seconds: number) => {
-      try {
-        await api.seek(seconds)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    },
-    [],
-  )
-
-  const setVolume = useCallback(
-    async (v: number) => {
-      try {
-        await api.setVolume(v)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    },
-    [],
-  )
-
-  const prevVolume = useRef<number>(status?.volume && status.volume > 0 ? status.volume : 80)
-  useEffect(() => {
-    if (status?.volume && status.volume > 0) prevVolume.current = status.volume
-  }, [status?.volume])
-  const toggleMute = useCallback(() => {
-    if (status?.volume === null || status?.volume === undefined) return
-    const cur = status.volume
-    if (cur > 0) {
-      prevVolume.current = cur
-      void setVolume(0)
-    } else {
-      void setVolume(prevVolume.current || 80)
+  const seek = useCallback(async (seconds: number) => {
+    try {
+      await api.seek(seconds);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }, [status, setVolume])
+  }, []);
+
+  const setVolume = useCallback(async (v: number) => {
+    try {
+      await api.setVolume(v);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  const prevVolume = useRef<number>(
+    status?.volume && status.volume > 0 ? status.volume : 80,
+  );
+  useEffect(() => {
+    if (status?.volume && status.volume > 0) prevVolume.current = status.volume;
+  }, [status?.volume]);
+  const toggleMute = useCallback(() => {
+    if (status?.volume === null || status?.volume === undefined) return;
+    const cur = status.volume;
+    if (cur > 0) {
+      prevVolume.current = cur;
+      void setVolume(0);
+    } else {
+      void setVolume(prevVolume.current || 80);
+    }
+  }, [status, setVolume]);
 
   const toggleKiosk = useCallback(() => {
-    if (window.location.pathname === '/kiosk') window.location.pathname = '/'
-    else window.location.pathname = '/kiosk'
-  }, [])
+    if (window.location.pathname === "/kiosk") window.location.pathname = "/";
+    else window.location.pathname = "/kiosk";
+  }, []);
 
   const toggleShuffle = useCallback(async () => {
-    if (!status) return
+    if (!status) return;
     try {
-      await api.shuffle(!status.random)
+      await api.shuffle(!status.random);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }, [status])
+  }, [status]);
 
-  const [helpOpen, setHelpOpen] = useState(false)
-  const [toast, setToast] = useState<string | null>(null)
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [searchQuery, setSearchQuery] = useState<string | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState<string | null>(null);
   useEffect(() => {
-    if (!notice) return
-    const reason = notice.reason === 'missing' ? 'missing' : 'permanently unplayable'
-    setToast(`Skipped ${notice.label}: ${reason}.`)
-    void removeTrackFromLibraryCache(notice.track_id)
-    setRefreshToken((n) => n + 1)
-  }, [notice?.id])
+    if (!notice) return;
+    const reason =
+      notice.reason === "missing" ? "missing" : "permanently unplayable";
+    setToast(`Skipped ${notice.label}: ${reason}.`);
+    void removeTrackFromLibraryCache(notice.track_id);
+    setRefreshToken((n) => n + 1);
+  }, [notice?.id]);
 
   const openSearch = useCallback((q: string) => {
-    setSearchQuery(q)
-    setSearchOpen(false)
-  }, [])
+    setSearchQuery(q);
+    setSearchOpen(false);
+  }, []);
 
   useKeyboardShortcuts({
     status,
@@ -208,13 +214,13 @@ export function App() {
     onHelp: () => setHelpOpen((o) => !o),
     onFeedback: setToast,
     onSearch: () => setSearchOpen(true),
-  })
+  });
 
   const openAlbum = useCallback((album: string) => {
-    setRoute({ tab: 'library', album })
-    window.history.pushState(null, '', buildPath({ tab: 'library', album }))
-    setNavOpen(false)
-  }, [])
+    setRoute({ tab: "library", album });
+    window.history.pushState(null, "", buildPath({ tab: "library", album }));
+    setNavOpen(false);
+  }, []);
 
   if (kiosk) {
     return (
@@ -231,22 +237,26 @@ export function App() {
         />
         <ShortcutToast text={toast} onClear={() => setToast(null)} />
       </>
-    )
+    );
   }
 
   const go = (t: Tab) => {
     setRoute((r) => {
-      const next = { tab: t, album: t === 'library' ? r.album : null }
-      window.history.pushState(null, '', buildPath(next))
-      return next
-    })
-    setNavOpen(false)
-  }
+      const next = { tab: t, album: t === "library" ? r.album : null };
+      window.history.pushState(null, "", buildPath(next));
+      return next;
+    });
+    setNavOpen(false);
+  };
 
   return (
     <div className={styles.app}>
       <header className={styles.nav}>
-        <button className={styles.brand} onClick={() => go('library')} aria-label="Oxide home">
+        <button
+          className={styles.brand}
+          onClick={() => go("library")}
+          aria-label="Oxide home"
+        >
           <span className={styles.brandMark} aria-hidden>
             <span className={styles.brandCore} />
           </span>
@@ -266,9 +276,9 @@ export function App() {
         </nav>
 
         <button
-          className={`${styles.burger} ${navOpen ? styles.burgerOpen : ''}`}
+          className={`${styles.burger} ${navOpen ? styles.burgerOpen : ""}`}
           onClick={() => setNavOpen((o) => !o)}
-          aria-label={navOpen ? 'Close menu' : 'Open menu'}
+          aria-label={navOpen ? "Close menu" : "Open menu"}
           aria-expanded={navOpen}
         >
           <span />
@@ -276,14 +286,17 @@ export function App() {
         </button>
       </header>
 
-      <div className={`${styles.scrim} ${navOpen ? styles.scrimOn : ''}`} onClick={() => setNavOpen(false)} />
+      <div
+        className={`${styles.scrim} ${navOpen ? styles.scrimOn : ""}`}
+        onClick={() => setNavOpen(false)}
+      />
 
       <div
         ref={overlayRef}
-        className={`${styles.overlay} ${navOpen ? styles.overlayOn : ''}`}
+        className={`${styles.overlay} ${navOpen ? styles.overlayOn : ""}`}
         aria-hidden={!navOpen}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') setNavOpen(false)
+          if (e.key === "Escape") setNavOpen(false);
         }}
       >
         <div className={styles.overlayInner}>
@@ -292,7 +305,7 @@ export function App() {
               key={t.id}
               as="button"
               delay={90 + i * 70}
-              className={`${styles.bigLink} ${t.id === tab ? styles.bigLinkActive : ''}`}
+              className={`${styles.bigLink} ${t.id === tab ? styles.bigLinkActive : ""}`}
               onClick={() => go(t.id)}
             >
               <span className={styles.bigIndex}>0{i + 1}</span>
@@ -310,32 +323,32 @@ export function App() {
       )}
 
       <main className={styles.main}>
-        {tab === 'library' && (
+        {tab === "library" && (
           <LibraryView
             refreshToken={refreshToken}
             onRefresh={refreshLibrary}
             onRescanArt={rescanArt}
             nowPlayingUri={status?.current_song?.uri ?? null}
             nowPlayingId={status?.current_song?.id ?? null}
-            isPlaying={status?.state === 'playing'}
+            isPlaying={status?.state === "playing"}
             album={route.album}
             onAlbumChange={(album) => {
               setRoute((r) => {
-                const next = { tab: r.tab, album }
-                window.history.pushState(null, '', buildPath(next))
-                return next
-              })
+                const next = { tab: r.tab, album };
+                window.history.pushState(null, "", buildPath(next));
+                return next;
+              });
             }}
           />
         )}
-        {tab === 'playlists' && <PlaylistsView onOpenAlbum={openAlbum} />}
-        {tab === 'radio' && (
+        {tab === "playlists" && <PlaylistsView onOpenAlbum={openAlbum} />}
+        {tab === "radio" && (
           <RadioView
             nowPlayingUri={status?.current_song?.uri ?? null}
-            isPlaying={status?.state === 'playing'}
+            isPlaying={status?.state === "playing"}
           />
         )}
-        {tab === 'settings' && (
+        {tab === "settings" && (
           <ConfigView
             status={status}
             statusConnected={connected}
@@ -347,7 +360,7 @@ export function App() {
           <SearchView
             query={searchQuery}
             nowPlayingId={status?.current_song?.id ?? null}
-            isPlaying={status?.state === 'playing'}
+            isPlaying={status?.state === "playing"}
             onBack={() => setSearchQuery(null)}
             onOpenAlbum={openAlbum}
           />
@@ -369,7 +382,11 @@ export function App() {
       <OfflineBanner />
       <ShortcutToast text={toast} onClear={() => setToast(null)} />
       <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <SearchBar open={searchOpen} onClose={() => setSearchOpen(false)} onSearch={openSearch} />
+      <SearchBar
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onSearch={openSearch}
+      />
     </div>
-  )
+  );
 }

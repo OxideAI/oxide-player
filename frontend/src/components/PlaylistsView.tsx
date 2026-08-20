@@ -1,142 +1,142 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from '../api'
-import type { QueueItem } from '../types'
-import { folderKey } from '../util'
-import styles from './PlaylistsView.module.css'
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "../api";
+import type { QueueItem } from "../types";
+import { folderKey } from "../util";
+import styles from "./PlaylistsView.module.css";
 
 function fmt(d: number | null): string {
-  if (d == null) return '--:--'
-  const m = Math.floor(d / 60)
-  const s = Math.floor(d % 60)
-  return `${m}:${s.toString().padStart(2, '0')}`
+  if (d == null) return "--:--";
+  const m = Math.floor(d / 60);
+  const s = Math.floor(d % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 interface Props {
-  onOpenAlbum: (album: string) => void
+  onOpenAlbum: (album: string) => void;
 }
 
 export function PlaylistsView({ onOpenAlbum }: Props) {
-  const [names, setNames] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [name, setName] = useState('')
+  const [names, setNames] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [name, setName] = useState("");
 
-  const [open, setOpen] = useState<string | null>(null)
-  const [tracks, setTracks] = useState<QueueItem[]>([])
-  const [tracksLoading, setTracksLoading] = useState(false)
-  const [tracksError, setTracksError] = useState<string | null>(null)
-  const [renaming, setRenaming] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
+  const [open, setOpen] = useState<string | null>(null);
+  const [tracks, setTracks] = useState<QueueItem[]>([]);
+  const [tracksLoading, setTracksLoading] = useState(false);
+  const [tracksError, setTracksError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   // Monotonic token so a slow playlist fetch can't paint tracks for a
   // playlist the user has since navigated away from.
-  const openReq = useRef(0)
+  const openReq = useRef(0);
 
   const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
+    setError(null);
     try {
-      setNames(await api.playlists())
+      setNames(await api.playlists());
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [])
+  }, []);
 
   useEffect(() => {
-    load()
-  }, [load])
+    load();
+  }, [load]);
 
   const save = async () => {
-    const trimmed = name.trim()
-    if (!trimmed) return
-    setError(null)
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setError(null);
     try {
-      await api.savePlaylist(trimmed)
-      setName('')
-      await load()
+      await api.savePlaylist(trimmed);
+      setName("");
+      await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }
+  };
 
   const openPlaylist = async (n: string) => {
     if (open === n) {
-      setOpen(null)
-      setTracks([])
-      return
+      setOpen(null);
+      setTracks([]);
+      return;
     }
-    const token = ++openReq.current
-    setOpen(n)
-    setTracks([])
-    setTracksError(null)
-    setTracksLoading(true)
+    const token = ++openReq.current;
+    setOpen(n);
+    setTracks([]);
+    setTracksError(null);
+    setTracksLoading(true);
     try {
-      const fetched = await api.playlist(n)
-      if (token !== openReq.current) return
-      setTracks(fetched)
+      const fetched = await api.playlist(n);
+      if (token !== openReq.current) return;
+      setTracks(fetched);
     } catch (e) {
-      if (token !== openReq.current) return
-      setTracksError(e instanceof Error ? e.message : String(e))
+      if (token !== openReq.current) return;
+      setTracksError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (token === openReq.current) setTracksLoading(false)
+      if (token === openReq.current) setTracksLoading(false);
     }
-  }
+  };
 
   const play = async (n: string) => {
-    setError(null)
+    setError(null);
     try {
-      await api.playPlaylist(n)
+      await api.playPlaylist(n);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }
+  };
 
   const removeTrack = async (n: string, pos: number) => {
-    setTracksError(null)
+    setTracksError(null);
     try {
-      await api.removeFromPlaylist(n, pos)
-      setTracks(await api.playlist(n))
+      await api.removeFromPlaylist(n, pos);
+      setTracks(await api.playlist(n));
     } catch (e) {
-      setTracksError(e instanceof Error ? e.message : String(e))
+      setTracksError(e instanceof Error ? e.message : String(e));
     }
-  }
+  };
 
   const del = async (n: string) => {
-    setError(null)
+    setError(null);
     try {
-      await api.deletePlaylist(n)
+      await api.deletePlaylist(n);
       if (open === n) {
-        setOpen(null)
-        setTracks([])
+        setOpen(null);
+        setTracks([]);
       }
-      await load()
+      await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }
+  };
 
   const startRename = (n: string) => {
-    setRenaming(n)
-    setRenameValue(n)
-  }
+    setRenaming(n);
+    setRenameValue(n);
+  };
 
   const commitRename = async (n: string) => {
-    const target = renameValue.trim()
-    setRenaming(null)
-    if (!target || target === n) return
-    setError(null)
+    const target = renameValue.trim();
+    setRenaming(null);
+    if (!target || target === n) return;
+    setError(null);
     try {
-      await api.renamePlaylist(n, target)
+      await api.renamePlaylist(n, target);
       if (open === n) {
-        setOpen(target)
-        setTracks(await api.playlist(target))
+        setOpen(target);
+        setTracks(await api.playlist(target));
       }
-      await load()
+      await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }
+  };
 
   return (
     <div className={styles.wrap}>
@@ -152,7 +152,7 @@ export function PlaylistsView({ onOpenAlbum }: Props) {
           placeholder="New playlist name…"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && save()}
+          onKeyDown={(e) => e.key === "Enter" && save()}
         />
         <button className={styles.save} onClick={save} disabled={!name.trim()}>
           Save current queue
@@ -167,14 +167,20 @@ export function PlaylistsView({ onOpenAlbum }: Props) {
         {names.map((n) => (
           <li key={n} className={styles.group}>
             <div className={styles.row}>
-              <button className={styles.nameBtn} onClick={() => openPlaylist(n)}>
+              <button
+                className={styles.nameBtn}
+                onClick={() => openPlaylist(n)}
+              >
                 {n}
               </button>
               <div className={styles.actions}>
                 <button className={styles.iconBtn} onClick={() => play(n)}>
                   Play
                 </button>
-                <button className={styles.iconBtn} onClick={() => startRename(n)}>
+                <button
+                  className={styles.iconBtn}
+                  onClick={() => startRename(n)}
+                >
                   Rename
                 </button>
                 <button className={styles.iconBtnDanger} onClick={() => del(n)}>
@@ -191,8 +197,8 @@ export function PlaylistsView({ onOpenAlbum }: Props) {
                   value={renameValue}
                   onChange={(e) => setRenameValue(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitRename(n)
-                    if (e.key === 'Escape') setRenaming(null)
+                    if (e.key === "Enter") commitRename(n);
+                    if (e.key === "Escape") setRenaming(null);
                   }}
                 />
                 <button className={styles.save} onClick={() => commitRename(n)}>
@@ -204,22 +210,26 @@ export function PlaylistsView({ onOpenAlbum }: Props) {
             {open === n && (
               <div className={styles.tracks}>
                 {tracksLoading && <p className={styles.dim}>loading…</p>}
-                {tracksError && <div className={styles.error}>{tracksError}</div>}
+                {tracksError && (
+                  <div className={styles.error}>{tracksError}</div>
+                )}
                 {!tracksLoading && !tracksError && tracks.length === 0 && (
                   <p className={styles.dim}>Empty playlist.</p>
                 )}
                 {tracks.map((t) => (
                   <div key={t.pos} className={styles.trackRow}>
-                    <span className={styles.trackTitle}>{t.title ?? t.uri}</span>
+                    <span className={styles.trackTitle}>
+                      {t.title ?? t.uri}
+                    </span>
                     {t.uri && (
                       <button
                         type="button"
                         className={styles.trackMetaBtn}
                         onClick={() => onOpenAlbum(folderKey(t.uri))}
                         title="Open album"
-                        aria-label={`Open album: ${[t.artist, t.album].filter(Boolean).join(' — ')}`}
+                        aria-label={`Open album: ${[t.artist, t.album].filter(Boolean).join(" — ")}`}
                       >
-                        {[t.artist, t.album].filter(Boolean).join(' · ')}
+                        {[t.artist, t.album].filter(Boolean).join(" · ")}
                       </button>
                     )}
                     <span className={styles.trackDur}>{fmt(t.duration)}</span>
@@ -238,5 +248,5 @@ export function PlaylistsView({ onOpenAlbum }: Props) {
         ))}
       </ul>
     </div>
-  )
+  );
 }

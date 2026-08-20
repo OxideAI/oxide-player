@@ -1,29 +1,29 @@
-import { useEffect, useRef } from 'react'
-import { BINDINGS } from './shortcuts'
-import styles from './ShortcutHelp.module.css'
+import { useEffect, useRef } from "react";
+import { BINDINGS } from "./shortcuts";
+import styles from "./ShortcutHelp.module.css";
 
 interface ShortcutHelpProps {
-  open: boolean
-  onClose: () => void
+  open: boolean;
+  onClose: () => void;
 }
 
 export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
-  const ref = useRef<HTMLDivElement>(null)
+  const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open) return
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    const t = setTimeout(() => ref.current?.focus(), 0)
-    window.addEventListener('keydown', onKey)
+      if (e.key === "Escape") onClose();
+    };
+    const t = setTimeout(() => ref.current?.focus(), 0);
+    window.addEventListener("keydown", onKey);
     return () => {
-      clearTimeout(t)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open, onClose])
+      clearTimeout(t);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
 
-  if (!open) return null
+  if (!open) return null;
 
   return (
     <div className={styles.scrim} onClick={onClose}>
@@ -53,5 +53,5 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
         <p className={styles.hint}>Press Esc or click outside to close.</p>
       </div>
     </div>
-  )
+  );
 }

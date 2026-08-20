@@ -1,136 +1,136 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { FormEvent } from 'react'
-import { api } from '../api'
-import type { RadioStation } from '../types'
-import styles from './RadioView.module.css'
+import { useCallback, useEffect, useState } from "react";
+import type { FormEvent } from "react";
+import { api } from "../api";
+import type { RadioStation } from "../types";
+import styles from "./RadioView.module.css";
 
 interface Props {
-  nowPlayingUri: string | null
-  isPlaying: boolean
+  nowPlayingUri: string | null;
+  isPlaying: boolean;
 }
 
-const URL_RE = /^https?:\/\//i
+const URL_RE = /^https?:\/\//i;
 
 function normalizeArtwork(value: string): string | null {
-  const artwork = value.trim()
-  return artwork || null
+  const artwork = value.trim();
+  return artwork || null;
 }
 
 export function RadioView({ nowPlayingUri, isPlaying }: Props) {
-  const [stations, setStations] = useState<RadioStation[] | null>(null)
-  const [name, setName] = useState('')
-  const [url, setUrl] = useState('')
-  const [artwork, setArtwork] = useState('')
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editName, setEditName] = useState('')
-  const [editArtwork, setEditArtwork] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [stations, setStations] = useState<RadioStation[] | null>(null);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [artwork, setArtwork] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editArtwork, setEditArtwork] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    setError(null)
+    setError(null);
     try {
-      setStations(await api.listRadio())
+      setStations(await api.listRadio());
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     }
-  }, [])
+  }, []);
 
   useEffect(() => {
-    load()
-  }, [load])
+    load();
+  }, [load]);
 
   const add = async (e: FormEvent) => {
-    e.preventDefault()
-    setError(null)
-    const trimmedName = name.trim()
-    const trimmedUrl = url.trim()
-    const trimmedArtwork = normalizeArtwork(artwork)
+    e.preventDefault();
+    setError(null);
+    const trimmedName = name.trim();
+    const trimmedUrl = url.trim();
+    const trimmedArtwork = normalizeArtwork(artwork);
     if (!trimmedName) {
-      setError('Station name is required.')
-      return
+      setError("Station name is required.");
+      return;
     }
     if (!URL_RE.test(trimmedUrl)) {
-      setError('Station URL must start with http:// or https://')
-      return
+      setError("Station URL must start with http:// or https://");
+      return;
     }
     if (trimmedArtwork && !URL_RE.test(trimmedArtwork)) {
-      setError('Artwork URL must start with http:// or https://')
-      return
+      setError("Artwork URL must start with http:// or https://");
+      return;
     }
-    setBusy(true)
+    setBusy(true);
     try {
-      await api.addRadio(trimmedName, trimmedUrl, trimmedArtwork)
-      setName('')
-      setUrl('')
-      setArtwork('')
-      await load()
+      await api.addRadio(trimmedName, trimmedUrl, trimmedArtwork);
+      setName("");
+      setUrl("");
+      setArtwork("");
+      await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false)
+      setBusy(false);
     }
-  }
+  };
 
   const beginEdit = (station: RadioStation) => {
-    setError(null)
-    setEditingId(station.id)
-    setEditName(station.name)
-    setEditArtwork(station.artwork ?? '')
-  }
+    setError(null);
+    setEditingId(station.id);
+    setEditName(station.name);
+    setEditArtwork(station.artwork ?? "");
+  };
 
   const cancelEdit = () => {
-    setEditingId(null)
-    setEditName('')
-    setEditArtwork('')
-  }
+    setEditingId(null);
+    setEditName("");
+    setEditArtwork("");
+  };
 
   const saveEdit = async (e: FormEvent, id: string) => {
-    e.preventDefault()
-    setError(null)
-    const trimmedName = editName.trim()
-    const trimmedArtwork = normalizeArtwork(editArtwork)
+    e.preventDefault();
+    setError(null);
+    const trimmedName = editName.trim();
+    const trimmedArtwork = normalizeArtwork(editArtwork);
     if (!trimmedName) {
-      setError('Station name is required.')
-      return
+      setError("Station name is required.");
+      return;
     }
     if (trimmedArtwork && !URL_RE.test(trimmedArtwork)) {
-      setError('Artwork URL must start with http:// or https://')
-      return
+      setError("Artwork URL must start with http:// or https://");
+      return;
     }
-    setBusy(true)
+    setBusy(true);
     try {
-      await api.updateRadio(id, trimmedName, trimmedArtwork)
-      cancelEdit()
-      await load()
+      await api.updateRadio(id, trimmedName, trimmedArtwork);
+      cancelEdit();
+      await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false)
+      setBusy(false);
     }
-  }
+  };
 
   const play = async (id: string) => {
-    setError(null)
+    setError(null);
     try {
-      await api.playRadio(id)
+      await api.playRadio(id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err));
     }
-  }
+  };
 
   const remove = async (id: string) => {
-    setError(null)
+    setError(null);
     try {
-      await api.deleteRadio(id)
-      if (editingId === id) cancelEdit()
-      await load()
+      await api.deleteRadio(id);
+      if (editingId === id) cancelEdit();
+      await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err));
     }
-  }
+  };
 
-  const playingUrl = isPlaying ? nowPlayingUri : null
+  const playingUrl = isPlaying ? nowPlayingUri : null;
 
   return (
     <div className={styles.wrap}>
@@ -162,7 +162,10 @@ export function RadioView({ nowPlayingUri, isPlaying }: Props) {
           onChange={(e) => setArtwork(e.target.value)}
           aria-label="Artwork URL"
         />
-        <button className={styles.save} disabled={busy || (!name.trim() && !url.trim())}>
+        <button
+          className={styles.save}
+          disabled={busy || (!name.trim() && !url.trim())}
+        >
           Add station
         </button>
       </form>
@@ -175,14 +178,20 @@ export function RadioView({ nowPlayingUri, isPlaying }: Props) {
         {stations?.map((s) => (
           <li key={s.id} className={styles.group}>
             <div
-              className={`${styles.row} ${s.url === playingUrl ? styles.rowPlaying : ''}`}
+              className={`${styles.row} ${s.url === playingUrl ? styles.rowPlaying : ""}`}
             >
               <div className={styles.art} aria-hidden>
                 <span className={styles.artFallback}>FM</span>
-                {s.artwork && <img className={styles.artImage} src={s.artwork} alt="" />}
+                {s.artwork && (
+                  <img className={styles.artImage} src={s.artwork} alt="" />
+                )}
               </div>
               <div className={styles.ident}>
-                <span className={styles.liveDot} aria-hidden hidden={s.url !== playingUrl} />
+                <span
+                  className={styles.liveDot}
+                  aria-hidden
+                  hidden={s.url !== playingUrl}
+                />
                 <button
                   className={styles.nameBtn}
                   onClick={() => play(s.id)}
@@ -209,18 +218,24 @@ export function RadioView({ nowPlayingUri, isPlaying }: Props) {
                   onClick={() => play(s.id)}
                   disabled={s.url === playingUrl}
                 >
-                  {s.url === playingUrl ? 'Playing' : 'Play'}
+                  {s.url === playingUrl ? "Playing" : "Play"}
                 </button>
                 <button className={styles.iconBtn} onClick={() => beginEdit(s)}>
                   Edit
                 </button>
-                <button className={styles.iconBtnDanger} onClick={() => remove(s.id)}>
+                <button
+                  className={styles.iconBtnDanger}
+                  onClick={() => remove(s.id)}
+                >
                   Delete
                 </button>
               </div>
             </div>
             {editingId === s.id && (
-              <form className={styles.editPanel} onSubmit={(e) => saveEdit(e, s.id)}>
+              <form
+                className={styles.editPanel}
+                onSubmit={(e) => saveEdit(e, s.id)}
+              >
                 <label className={styles.field}>
                   <span>Station name</span>
                   <input
@@ -245,7 +260,11 @@ export function RadioView({ nowPlayingUri, isPlaying }: Props) {
                   <button className={styles.save} disabled={busy}>
                     Save changes
                   </button>
-                  <button className={styles.iconBtn} type="button" onClick={cancelEdit}>
+                  <button
+                    className={styles.iconBtn}
+                    type="button"
+                    onClick={cancelEdit}
+                  >
                     Cancel
                   </button>
                 </div>
@@ -255,5 +274,5 @@ export function RadioView({ nowPlayingUri, isPlaying }: Props) {
         ))}
       </ul>
     </div>
-  )
+  );
 }

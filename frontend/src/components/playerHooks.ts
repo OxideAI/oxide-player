@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PlayerStatus } from '../types'
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { PlayerStatus } from "../types";
 
-const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
+const clamp = (v: number, lo: number, hi: number) =>
+  v < lo ? lo : v > hi ? hi : v;
 
 /**
  * Drive the playback cursor locally between the 1s server polls so the
@@ -9,46 +10,49 @@ const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi 
  * While playing it advances `elapsed` by wall-clock time since the last
  * server sample; each poll re-anchors it to the authoritative value.
  */
-export function useSmoothElapsed(status: PlayerStatus | null, duration: number): { elapsed: number; reset: (v: number) => void } {
-  const [elapsed, setElapsed] = useState(status?.elapsed ?? 0)
-  const baseRef = useRef({ e: status?.elapsed ?? 0, t: performance.now() })
+export function useSmoothElapsed(
+  status: PlayerStatus | null,
+  duration: number,
+): { elapsed: number; reset: (v: number) => void } {
+  const [elapsed, setElapsed] = useState(status?.elapsed ?? 0);
+  const baseRef = useRef({ e: status?.elapsed ?? 0, t: performance.now() });
 
   const reset = useCallback((v: number) => {
-    baseRef.current = { e: v, t: performance.now() }
-    setElapsed(v)
-  }, [])
-  const songId = status?.current_song?.id ?? null
-  const serverElapsed = status?.elapsed ?? 0
-  const lastSongRef = useRef(songId)
+    baseRef.current = { e: v, t: performance.now() };
+    setElapsed(v);
+  }, []);
+  const songId = status?.current_song?.id ?? null;
+  const serverElapsed = status?.elapsed ?? 0;
+  const lastSongRef = useRef(songId);
   useEffect(() => {
-    const songChanged = lastSongRef.current !== songId
-    lastSongRef.current = songId
+    const songChanged = lastSongRef.current !== songId;
+    lastSongRef.current = songId;
     if (songChanged) {
-      baseRef.current = { e: serverElapsed, t: performance.now() }
-      setElapsed(serverElapsed)
+      baseRef.current = { e: serverElapsed, t: performance.now() };
+      setElapsed(serverElapsed);
     }
-  }, [songId])
+  }, [songId]);
 
   useEffect(() => {
-    baseRef.current = { e: serverElapsed, t: performance.now() }
-    setElapsed(serverElapsed)
-  }, [serverElapsed])
+    baseRef.current = { e: serverElapsed, t: performance.now() };
+    setElapsed(serverElapsed);
+  }, [serverElapsed]);
 
-  const playing = status?.state === 'playing'
+  const playing = status?.state === "playing";
   useEffect(() => {
-    if (!playing) return
-    let raf = 0
+    if (!playing) return;
+    let raf = 0;
     const tick = () => {
-      const { e: base, t } = baseRef.current
-      const next = base + (performance.now() - t) / 1000
-      setElapsed(duration > 0 && next > duration ? duration : next)
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [playing, duration])
+      const { e: base, t } = baseRef.current;
+      const next = base + (performance.now() - t) / 1000;
+      setElapsed(duration > 0 && next > duration ? duration : next);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, duration]);
 
-  return { elapsed, reset }
+  return { elapsed, reset };
 }
 
 /**
@@ -62,50 +66,50 @@ export function useDragValue(
   commit: (v: number) => void,
   throttleMs = 120,
 ) {
-  const [local, setLocal] = useState(value)
-  const draggingRef = useRef(false)
-  const pendingRef = useRef<number | null>(null)
-  const lastRef = useRef(0)
+  const [local, setLocal] = useState(value);
+  const draggingRef = useRef(false);
+  const pendingRef = useRef<number | null>(null);
+  const lastRef = useRef(0);
 
   useEffect(() => {
-    if (!draggingRef.current) setLocal(value)
-  }, [value])
+    if (!draggingRef.current) setLocal(value);
+  }, [value]);
 
   const begin = useCallback(() => {
-    draggingRef.current = true
-    pendingRef.current = null
-  }, [])
+    draggingRef.current = true;
+    pendingRef.current = null;
+  }, []);
 
   const move = useCallback(
     (v: number) => {
-      setLocal(v)
-      const now = performance.now()
+      setLocal(v);
+      const now = performance.now();
       if (now - lastRef.current >= throttleMs) {
-        lastRef.current = now
-        commit(v)
-        pendingRef.current = null
+        lastRef.current = now;
+        commit(v);
+        pendingRef.current = null;
       } else {
-        pendingRef.current = v
+        pendingRef.current = v;
       }
     },
     [commit, throttleMs],
-  )
+  );
 
   const end = useCallback(() => {
-    draggingRef.current = false
-    const pending = pendingRef.current
-    pendingRef.current = null
-    lastRef.current = 0
-    if (pending !== null) commit(pending)
-  }, [commit])
+    draggingRef.current = false;
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+    lastRef.current = 0;
+    if (pending !== null) commit(pending);
+  }, [commit]);
 
-  const isDragging = useCallback(() => draggingRef.current, [])
+  const isDragging = useCallback(() => draggingRef.current, []);
 
-  return { local, begin, move, end, isDragging }
+  return { local, begin, move, end, isDragging };
 }
 
 /** Map a pointer X position within `el` to a 0..1 fraction of the track. */
 export function fracFromPointer(el: HTMLElement, clientX: number): number {
-  const rect = el.getBoundingClientRect()
-  return clamp((clientX - rect.left) / rect.width, 0, 1)
+  const rect = el.getBoundingClientRect();
+  return clamp((clientX - rect.left) / rect.width, 0, 1);
 }

@@ -1,21 +1,26 @@
-import { useEffect, useRef, useState } from 'react'
-import type { PlaybackNotice, PlayerStatus, QueueResponse, StatusEvent } from './types'
-import { api } from './api'
+import { useEffect, useRef, useState } from "react";
+import type {
+  PlaybackNotice,
+  PlayerStatus,
+  QueueResponse,
+  StatusEvent,
+} from "./types";
+import { api } from "./api";
 
 export interface PlayerState {
-  status: PlayerStatus | null
-  queue: QueueResponse | null
-  notice: PlaybackNotice | null
-  connected: boolean
-  error: string | null
-  lastSnapshotAt: number | null
+  status: PlayerStatus | null;
+  queue: QueueResponse | null;
+  notice: PlaybackNotice | null;
+  connected: boolean;
+  error: string | null;
+  lastSnapshotAt: number | null;
 }
 
-const MAX_BACKOFF = 10000
+const MAX_BACKOFF = 10000;
 
 function wsUrl(): string {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${window.location.host}/api/ws`
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/api/ws`;
 }
 
 /**
@@ -37,103 +42,112 @@ export function usePlayerStatus(): PlayerState {
     connected: false,
     error: null,
     lastSnapshotAt: null,
-  })
-  const backoff = useRef(1000)
-  const stopped = useRef(false)
+  });
+  const backoff = useRef(1000);
+  const stopped = useRef(false);
 
   useEffect(() => {
-    stopped.current = false
-    let ws: WebSocket | null = null
-    let timer: ReturnType<typeof setTimeout> | null = null
-    let fallbackTimer: ReturnType<typeof setTimeout> | null = null
+    stopped.current = false;
+    let ws: WebSocket | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
     // One-shot REST fallback used only when the WS never connects.
     const restFallback = () => {
-      if (stopped.current) return
-      Promise.all([api.status().catch(() => null), api.queue().catch(() => null)])
+      if (stopped.current) return;
+      Promise.all([
+        api.status().catch(() => null),
+        api.queue().catch(() => null),
+      ])
         .then(([status, queue]) => {
-          if (stopped.current) return
+          if (stopped.current) return;
           setState((s) => ({
             ...s,
             status: status ?? s.status,
             queue: queue ?? s.queue,
             lastSnapshotAt: status ? Date.now() : s.lastSnapshotAt,
-          }))
+          }));
         })
-        .catch(() => {})
-    }
+        .catch(() => {});
+    };
 
     const connect = () => {
-      if (stopped.current) return
+      if (stopped.current) return;
       try {
-        ws = new WebSocket(wsUrl())
+        ws = new WebSocket(wsUrl());
       } catch {
-        restFallback()
-        scheduleReconnect()
-        return
+        restFallback();
+        scheduleReconnect();
+        return;
       }
 
       // If the socket hasn't opened shortly, try the REST fallback once so the
       // UI isn't blank while we keep retrying the socket.
-      fallbackTimer = setTimeout(restFallback, 1500)
+      fallbackTimer = setTimeout(restFallback, 1500);
 
       ws.onopen = () => {
-        if (fallbackTimer) clearTimeout(fallbackTimer)
-        backoff.current = 1000
-        setState((s) => ({ ...s, connected: true, error: null }))
-      }
+        if (fallbackTimer) clearTimeout(fallbackTimer);
+        backoff.current = 1000;
+        setState((s) => ({ ...s, connected: true, error: null }));
+      };
 
       ws.onmessage = (ev) => {
-        let event: StatusEvent
+        let event: StatusEvent;
         try {
-          event = JSON.parse(ev.data)
+          event = JSON.parse(ev.data);
         } catch {
-          return
+          return;
         }
-        if (event.type === 'status') {
-          setState((s) => ({ ...s, status: event, lastSnapshotAt: Date.now() }))
-        } else if (event.type === 'queue') {
-          setState((s) => ({ ...s, queue: event }))
-        } else if (event.type === 'notice') {
-          setState((s) => (s.notice?.id === event.id ? s : { ...s, notice: event }))
+        if (event.type === "status") {
+          setState((s) => ({
+            ...s,
+            status: event,
+            lastSnapshotAt: Date.now(),
+          }));
+        } else if (event.type === "queue") {
+          setState((s) => ({ ...s, queue: event }));
+        } else if (event.type === "notice") {
+          setState((s) =>
+            s.notice?.id === event.id ? s : { ...s, notice: event },
+          );
         }
-      }
+      };
 
       ws.onerror = () => {
-        if (fallbackTimer) clearTimeout(fallbackTimer)
+        if (fallbackTimer) clearTimeout(fallbackTimer);
         setState((s) => ({
           ...s,
           connected: false,
-          error: 'Connection to player lost — retrying…',
-        }))
-      }
+          error: "Connection to player lost — retrying…",
+        }));
+      };
 
       ws.onclose = () => {
-        if (fallbackTimer) clearTimeout(fallbackTimer)
-        setState((s) => ({ ...s, connected: false }))
-        scheduleReconnect()
-      }
-    }
+        if (fallbackTimer) clearTimeout(fallbackTimer);
+        setState((s) => ({ ...s, connected: false }));
+        scheduleReconnect();
+      };
+    };
 
     const scheduleReconnect = () => {
-      if (stopped.current) return
-      const delay = backoff.current
-      backoff.current = Math.min(backoff.current * 2, MAX_BACKOFF)
-      timer = setTimeout(connect, delay)
-    }
+      if (stopped.current) return;
+      const delay = backoff.current;
+      backoff.current = Math.min(backoff.current * 2, MAX_BACKOFF);
+      timer = setTimeout(connect, delay);
+    };
 
-    connect()
+    connect();
 
     return () => {
-      stopped.current = true
-      if (timer) clearTimeout(timer)
-      if (fallbackTimer) clearTimeout(fallbackTimer)
+      stopped.current = true;
+      if (timer) clearTimeout(timer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       if (ws) {
-        ws.onclose = null
-        ws.close()
+        ws.onclose = null;
+        ws.close();
       }
-    }
-  }, [])
+    };
+  }, []);
 
-  return state
+  return state;
 }

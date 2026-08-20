@@ -1,40 +1,40 @@
-import { useState } from 'react'
+import { useState } from "react";
 import {
   REFERENCE_VIZ_STYLES,
   VIZ_PRESETS,
   type VizParams,
   type VizStyle,
-} from './Visualizer'
-import { api } from '../api'
-import styles from './VisualizerControls.module.css'
+} from "./Visualizer";
+import { api } from "../api";
+import styles from "./VisualizerControls.module.css";
 
-type NumericVizKey = Exclude<keyof VizParams, 'style'>
+type NumericVizKey = Exclude<keyof VizParams, "style">;
 
 interface SliderDef {
-  key: NumericVizKey
-  label: string
-  min: number
-  max: number
-  step: number
+  key: NumericVizKey;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
 }
 
 const SLIDERS: SliderDef[] = [
-  { key: 'bloomAlpha', label: 'Halo opacity', min: 0, max: 1, step: 0.01 },
-  { key: 'bloomBeat', label: 'Halo beat', min: 0, max: 0.6, step: 0.01 },
-  { key: 'bloomEnergy', label: 'Halo energy', min: 0, max: 0.8, step: 0.01 },
-  { key: 'bloomRadius', label: 'Halo size', min: 0.4, max: 2, step: 0.01 },
-  { key: 'barIdle', label: 'Bar min', min: 0, max: 0.5, step: 0.01 },
-  { key: 'barPeak', label: 'Bar max', min: 0.2, max: 1, step: 0.01 },
-  { key: 'barGap', label: 'Bar gap', min: 0, max: 10, step: 1 },
-  { key: 'barRadius', label: 'Bar radius', min: 0, max: 12, step: 1 },
-  { key: 'phaseSpeed', label: 'Pulse speed', min: 0.2, max: 4, step: 0.1 },
-  { key: 'blur', label: 'Blur', min: 0, max: 20, step: 1 },
-]
+  { key: "bloomAlpha", label: "Halo opacity", min: 0, max: 1, step: 0.01 },
+  { key: "bloomBeat", label: "Halo beat", min: 0, max: 0.6, step: 0.01 },
+  { key: "bloomEnergy", label: "Halo energy", min: 0, max: 0.8, step: 0.01 },
+  { key: "bloomRadius", label: "Halo size", min: 0.4, max: 2, step: 0.01 },
+  { key: "barIdle", label: "Bar min", min: 0, max: 0.5, step: 0.01 },
+  { key: "barPeak", label: "Bar max", min: 0.2, max: 1, step: 0.01 },
+  { key: "barGap", label: "Bar gap", min: 0, max: 10, step: 1 },
+  { key: "barRadius", label: "Bar radius", min: 0, max: 12, step: 1 },
+  { key: "phaseSpeed", label: "Pulse speed", min: 0.2, max: 4, step: 0.1 },
+  { key: "blur", label: "Blur", min: 0, max: 20, step: 1 },
+];
 
 interface Props {
-  params: VizParams
-  onChange: (next: VizParams) => void
-  onClose: () => void
+  params: VizParams;
+  onChange: (next: VizParams) => void;
+  onClose: () => void;
 }
 
 /**
@@ -45,11 +45,11 @@ interface Props {
  * snippet is shown for reference / manual editing.
  */
 export function VisualizerControls({ params, onChange, onClose }: Props) {
-  const [saved, setSaved] = useState(false)
-  const snippet = JSON.stringify(params, null, 2)
+  const [saved, setSaved] = useState(false);
+  const snippet = JSON.stringify(params, null, 2);
   const set = (key: keyof VizParams, value: number) => {
-    onChange({ ...params, [key]: value })
-  }
+    onChange({ ...params, [key]: value });
+  };
   const save = () => {
     // Backend stores snake_case keys; map from the frontend camelCase shape.
     const body: Record<string, number | string> = {
@@ -64,22 +64,27 @@ export function VisualizerControls({ params, onChange, onClose }: Props) {
       bar_radius: params.barRadius,
       phase_speed: params.phaseSpeed,
       blur: params.blur,
-    }
-    api.saveVizParams(body)
+    };
+    api
+      .saveVizParams(body)
       .then(() => {
-        setSaved(true)
-        setTimeout(() => setSaved(false), 1500)
+        setSaved(true);
+        setTimeout(() => setSaved(false), 1500);
       })
       .catch(() => {
-        setSaved(false)
-      })
-  }
+        setSaved(false);
+      });
+  };
 
   return (
     <div className={styles.panel}>
       <div className={styles.head}>
         <span>Visualizer tuning</span>
-        <button className={styles.close} onClick={onClose} aria-label="Close tuning">
+        <button
+          className={styles.close}
+          onClick={onClose}
+          aria-label="Close tuning"
+        >
           ×
         </button>
       </div>
@@ -116,9 +121,9 @@ export function VisualizerControls({ params, onChange, onClose }: Props) {
       </div>
 
       <button className={styles.copy} onClick={save}>
-        {saved ? 'Saved!' : 'Save params'}
+        {saved ? "Saved!" : "Save params"}
       </button>
       <textarea className={styles.snippet} readOnly value={snippet} rows={8} />
     </div>
-  )
+  );
 }

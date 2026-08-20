@@ -12,14 +12,18 @@ Oxide — audiophile music server. Rust (Axum 0.8) backend that controls **MPD**
 ## Architecture & Data Flow
 
 ### Backend startup (`backend/src/main.rs`)
+
 `tracing_subscriber` → `Cli::parse` → `Config::load` → `LibraryDb::open` + migrate → `DspManager::new` + `ensure_running` → `VisualizerAnalyzer::new` → `Mpd::connect` + `ensure_running` (warn-only) → `BluetoothManager::new` → `AppState::new` (spawns `dsp.seed`) + `spawn_status_poller` → `api::router(state)` → axum::serve with graceful shutdown (SIGINT/SIGTERM → `mpd.stop()`).
 
 ### State (`backend/src/state.rs`)
+
 `AppState` is a `Clone` wrapper over `Arc<Inner>`:
+
 - `config: RwLock<Config>` (+ `config_path: Option<PathBuf>`), `status: RwLock<PlayerStatus>`, `event_tx: broadcast::Sender<StatusEvent>` (cap 32)
 - `db: LibraryDb` (rusqlite), `dsp: DspManager`, `mpd: Mpd`, `bluetooth: BluetoothManager`, `visualizer: VisualizerAnalyzer`, `radio: RadioManager`, `device_configs: ConfigFragmentManager`, `scan_lock: tokio::Mutex`, `config_restart_pending: AtomicBool`
 
 ### Data flow
+
 - **Status**: `spawn_status_poller` (1s loop) refreshes `PlayerStatus` and broadcasts; queue mutations broadcast immediately (`broadcast_queue_now`). `/api/ws` sends a Status+Queue snapshot on connect, then live `StatusEvent`s (tagged serde enum `{"type":"status"}` / `{"type":"queue"}`), lag-tolerant. MPD error `No such song/file/directory` → `spawn_blocking` DB delete + `next` + `clear_error`; MPD unreachable → status reset to stopped.
 - **Frontend → backend**: single `api` object of typed fetch wrappers (`frontend/src/api.ts`, 69 methods); `usePlayerStatus` (`frontend/src/ws.ts`) holds one WS to `/api/ws` with backoff reconnect (1s → 10s max) plus a one-shot REST fallback (on constructor throw or a 1.5s open-timeout). `useVisualizer` opens a second WS to `/api/visualizer` (~40fps `{bins, level}` frames; the server seeds a zeroed baseline frame on connect, while the hook itself holds `null` until the first real frame — `Visualizer.tsx` renders idle-pulsing bars for `null` frames while playing; under prefers-reduced-motion it paints a single static frame (bars at idle height) and halts the loop, while the truly empty frame appears only when stopped (`playing === false`)).
 - **DB/scanner work** is offloaded via `spawn_blocking` (SQLite is `Arc<Mutex<rusqlite::Connection>>`).
@@ -74,11 +78,13 @@ install.sh --update | --fix-perms         # installer modes (NOT backend CLI fla
 ## Code Conventions & Common Patterns
 
 ### Hard rules
+
 - **No Tailwind.** Styling is plain **CSS Modules** (`*.module.css`). Dark-only theme in `frontend/src/index.css`: CSS vars (`--bg` OLED black, `--accent` emerald, `--accent-2` indigo), mesh/grain background, `prefers-reduced-motion` kill switch.
 - **Never commit** unless explicitly asked.
 - Cove style: keep real logic, strip only boilerplate.
 
 ### Backend
+
 - Errors: `AppError` (thiserror 2) → JSON `{"error": msg}`. Mapping: `Mpd→502`, `Library/Dsp→500`, `NotFound→404`, `BadRequest→400`, `Unprocessable→422`, `Bluetooth→400`, `BluetoothUnavailable→503`. Handlers use `anyhow` internally, `AppResult<T>` alias, `.map_err(|e| AppError::X(e.to_string()))`.
 - Shared state via `AppState` (see above); config/status behind `RwLock`, scan behind `tokio::Mutex`; blocking work in `spawn_blocking`.
 - JSON is serde `snake_case`; `PlaybackState` is `playing/paused/stopped`; WS events are tagged enums (`#[serde(tag = "type")]`).
@@ -87,6 +93,7 @@ install.sh --update | --fix-perms         # installer modes (NOT backend CLI fla
 - Naming: snake_case modules/files, body structs `*Body`, handler return `AppResult<Json<..>>`.
 
 ### Frontend
+
 - No router/state/data libraries — custom path routing in `App.tsx`; `types.ts` mirrors backend JSON exactly.
 - One `api` object (`api.ts`) with a `json<T>()` helper that throws `Error(body.error)`; `toPlayRef(t)` builds the `{uri, start, end, track_id}` envelope for play-next/clear-play/playlist-add.
 - Live state is WS-push driven (`usePlayerStatus`); views fetch REST on mount; transport actions are optimistic via callbacks in `App.tsx`.
@@ -95,6 +102,7 @@ install.sh --update | --fix-perms         # installer modes (NOT backend CLI fla
 - Suites that exercise API calls mock the api module with `vi.mock('../api', ...)` (libraryView with `importOriginal` to keep real `toPlayRef`; RadioView with `importOriginal` overriding only the radio methods with spies; ConfigView full-mock); suites that render components without api calls (TrackMenu, pwa, persistence) need no mock.
 
 ### MPD gotchas (memory — easy to get wrong; smoke MPD is 0.24.0)
+
 - **`playid` does not exist** → always seek/play by 0-based position (`Mpd::play_position`; `play_song_id` resolves id→pos). Never reintroduce `playid`.
 - **Shuffle = MPD `random` mode toggle** (`random 0|1`), not a one-shot queue reorder. `POST /api/playback/shuffle {"on":bool}`; `PlayerStatus.random` reflects state.
 - **Remove from queue = `delete <pos>`** → `POST /api/playback/remove {"pos":u32}`.
@@ -104,6 +112,7 @@ install.sh --update | --fix-perms         # installer modes (NOT backend CLI fla
 - Cover resolution special-cases CUE (album-named jpg + single-image-in-folder fallback).
 
 ### UI flow notes
+
 - Track rows (LibraryView) are a CSS grid; the `@media (max-width: 640px)` block sets columns for ALL FOUR variants `.row / .rowActive / .rowPlaying / .rowPaused` — keep all four in the selector list. (`.rowActive` is currently dead CSS; SearchView has its own mobile block with 3 variants, no `.rowActive`.)
 - The 3-dot `TrackMenu` (play-next / clear-play / add-to-playlist / file-info) appears on track rows and album headers.
 - Bluetooth input (A2DP sink via bluealsa) is a TODO: Linux `input.rs` bails "not yet implemented (U4)" → 400.
@@ -112,7 +121,7 @@ install.sh --update | --fix-perms         # installer modes (NOT backend CLI fla
 
 - `backend/src/main.rs` — entry, component wiring order.
 - `backend/src/state.rs` — `AppState`, `spawn_status_poller`, status refresh + `resolve_current_song` chain (by_elapsed → by_cue_address → by_active → by_uri_cue → by_suffix).
-- `backend/src/api/mod.rs` — **70 routes total: 54 here** (status, library/scan/covers, playback, queue, ws, visualizer, devices, dsp, playlists, config, version, radio) **+ 16 in `api/bluetooth.rs`** (devices, scan, pair, connect, wake-connect, disconnect, forget, remove-output, rename, test-connect, input/*). `ServeDir(static_dir)` + SPA fallback.
+- `backend/src/api/mod.rs` — **70 routes total: 54 here** (status, library/scan/covers, playback, queue, ws, visualizer, devices, dsp, playlists, config, version, radio) **+ 16 in `api/bluetooth.rs`** (devices, scan, pair, connect, wake-connect, disconnect, forget, remove-output, rename, test-connect, input/\*). `ServeDir(static_dir)` + SPA fallback.
 - `backend/src/mpd/mod.rs` — `Mpd` wrapper (36 methods): lazy reconnect (5s timeout, double-checked via connect_lock), raw command passthrough, `ensure_running` autostarts a local mpd daemon (20×500ms retry).
 - `backend/src/dsp/camilladsp.rs` + `config.rs` + `profile.rs` — profile model (BitPerfect/Resample modes, EQ bands), CamillaDSP v4.1.3 YAML render, WS reload.
 - `backend/src/library/db.rs` — SQLite schema, FTS5 search (unicode61, prefix `tok*`), CUE addressing; `scanner.rs` — `.mpdignore`, incremental mtime scans, cover extraction/optimization.

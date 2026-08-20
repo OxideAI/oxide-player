@@ -7,11 +7,11 @@
 // re-aliases localStorage from the jsdom window to avoid that Node getter.
 const jsdom = (globalThis as Record<string, unknown>).jsdom as
   | { window: Record<string, unknown> }
-  | undefined
+  | undefined;
 if (jsdom) {
-  Object.defineProperty(globalThis, 'localStorage', {
+  Object.defineProperty(globalThis, "localStorage", {
     get: () => jsdom.window.localStorage,
     set: () => {},
     configurable: true,
-  })
+  });
 }

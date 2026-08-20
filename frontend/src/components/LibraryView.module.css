@@ -1,433 +1,449 @@
 .wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.4rem;
 }
 
 /* —— Toolbar —— */
 .toolbar {
-  display: flex;
-  gap: 0.6rem;
-  align-items: center;
-  flex-wrap: wrap;
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
 .searchShell {
-  flex: 1;
-  min-width: 220px;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.55rem 0.9rem;
-  border-radius: var(--r-pill);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--hairline);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.06);
-  transition: border-color 0.45s var(--ease), background 0.45s var(--ease);
+    flex: 1;
+    min-width: 220px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 0.9rem;
+    border-radius: var(--r-pill);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--hairline);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.06);
+    transition:
+        border-color 0.45s var(--ease),
+        background 0.45s var(--ease);
 }
 .searchShell:focus-within {
-  border-color: var(--accent);
-  background: rgba(255, 255, 255, 0.06);
+    border-color: var(--accent);
+    background: rgba(255, 255, 255, 0.06);
 }
 .searchIcon {
-  color: var(--text-faint);
-  flex: none;
+    color: var(--text-faint);
+    flex: none;
 }
 .search {
-  flex: 1;
-  min-width: 0;
-  background: none;
-  border: none;
-  outline: none;
-  color: var(--text);
-  font-size: 0.9rem;
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-size: 0.9rem;
 }
 .search::placeholder {
-  color: var(--text-faint);
+    color: var(--text-faint);
 }
 
 .ghost,
 .pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  white-space: nowrap;
-  border-radius: var(--r-pill);
-  padding: 0.55rem 1.05rem;
-  font-size: 0.84rem;
-  font-weight: 500;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--hairline);
-  color: var(--text-dim);
-  transition: transform 0.45s var(--ease), background 0.45s var(--ease),
-    border-color 0.45s var(--ease), color 0.45s var(--ease);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    white-space: nowrap;
+    border-radius: var(--r-pill);
+    padding: 0.55rem 1.05rem;
+    font-size: 0.84rem;
+    font-weight: 500;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--hairline);
+    color: var(--text-dim);
+    transition:
+        transform 0.45s var(--ease),
+        background 0.45s var(--ease),
+        border-color 0.45s var(--ease),
+        color 0.45s var(--ease);
 }
 .ghost:hover,
 .pill:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.08);
-  transform: translateY(-1px);
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateY(-1px);
 }
 .pill:active {
-  transform: scale(0.97);
+    transform: scale(0.97);
 }
 
 .count {
-  color: var(--text-faint);
-  font-size: 0.8rem;
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
+    color: var(--text-faint);
+    font-size: 0.8rem;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
 }
 
 .error {
-  background: var(--danger-soft);
-  color: var(--danger);
-  padding: 0.6rem 0.9rem;
-  border-radius: var(--r-sm);
-  font-size: 0.9rem;
-  border: 1px solid var(--danger);
+    background: var(--danger-soft);
+    color: var(--danger);
+    padding: 0.6rem 0.9rem;
+    border-radius: var(--r-sm);
+    font-size: 0.9rem;
+    border: 1px solid var(--danger);
 }
 
 .toast {
-  position: fixed;
-  left: 50%;
-  bottom: calc(var(--dock-h) + 1.6rem);
-  transform: translateX(-50%);
-  z-index: 40;
-  background: rgba(12, 14, 18, 0.8);
-  backdrop-filter: blur(24px);
-  color: var(--text);
-  border: 1px solid var(--hairline-strong);
-  padding: 0.6rem 1rem;
-  border-radius: var(--r-pill);
-  box-shadow: var(--glow);
-  font-size: 0.88rem;
-  animation: oxPop 0.5s var(--ease) both;
+    position: fixed;
+    left: 50%;
+    bottom: calc(var(--dock-h) + 1.6rem);
+    transform: translateX(-50%);
+    z-index: 40;
+    background: rgba(12, 14, 18, 0.85);
+    backdrop-filter: blur(24px);
+    color: var(--text);
+    border: 1px solid var(--hairline-strong);
+    padding: 0.6rem 1rem;
+    border-radius: var(--r-pill);
+    box-shadow: var(--glow);
+    font-size: 0.88rem;
+    animation: oxPop 0.5s var(--ease) both;
 }
 
 /* —— Empty state —— */
 .empty {
-  text-align: center;
-  color: var(--text-dim);
-  padding: 4rem 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  align-items: center;
+    text-align: center;
+    color: var(--text-dim);
+    padding: 4rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    align-items: center;
 }
 .emptyMark {
-  font-size: 3rem;
-  color: var(--text-faint);
+    font-size: 3rem;
+    color: var(--text-faint);
 }
 
 /* —— Album grid (double-bezel tiles) —— */
 .grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: 1.4rem 1.2rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 1.4rem 1.2rem;
 }
 .grid > * {
-  min-width: 0;
-  content-visibility: auto;
-  contain-intrinsic-size: 230px;
+    min-width: 0;
+    content-visibility: auto;
+    contain-intrinsic-size: 230px;
 }
 
 .tile {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  background: none;
-  border: none;
-  text-align: left;
-  cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    text-align: left;
+    cursor: pointer;
 }
 
 .tileShell {
-  display: block;
-  padding: 6px;
-  border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-glow);
-  transition: transform 0.55s var(--ease), box-shadow 0.55s var(--ease),
-    border-color 0.55s var(--ease);
+    display: block;
+    padding: 6px;
+    border-radius: var(--r-md);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--shadow-glow);
+    transition:
+        transform 0.55s var(--ease),
+        box-shadow 0.55s var(--ease),
+        border-color 0.55s var(--ease);
 }
 .tile:hover .tileShell {
-  transform: translateY(-6px);
-  border-color: var(--hairline-strong);
-  box-shadow: 0 36px 70px -34px rgba(0, 0, 0, 0.95);
+    transform: translateY(-6px);
+    border-color: var(--hairline-strong);
+    box-shadow: 0 36px 70px -34px rgba(0, 0, 0, 0.95);
 }
 
 .tileCore {
-  display: block;
-  aspect-ratio: 1 / 1;
-  width: 100%;
-  border-radius: calc(var(--r-md) - 6px);
-  overflow: hidden;
-  background: var(--bg-solid);
-  box-shadow: var(--inset-hi, inset 0 1px 1px rgba(255, 255, 255, 0.08));
+    display: block;
+    aspect-ratio: 1 / 1;
+    width: 100%;
+    border-radius: calc(var(--r-md) - 6px);
+    overflow: hidden;
+    background: var(--bg-solid);
+    box-shadow: var(--inset-hi, inset 0 1px 1px rgba(255, 255, 255, 0.08));
 }
 .tileCore img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transition: transform 0.7s var(--ease);
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.7s var(--ease);
 }
 .tile:hover .tileCore img {
-  transform: scale(1.06);
+    transform: scale(1.06);
 }
 
 .tilePh {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 100%;
-  font-size: 2.6rem;
-  color: var(--text-faint);
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    font-size: 2.6rem;
+    color: var(--text-faint);
 }
 
 .tileName {
-  font-weight: 600;
-  font-size: 0.92rem;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+    font-weight: 600;
+    font-size: 0.92rem;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .tileArtist {
-  color: var(--text-dim);
-  font-size: 0.8rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* —— Album detail (editorial split) —— */
 .album {
-  display: flex;
-  flex-direction: column;
-  gap: 1.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.6rem;
 }
 
 .albumHead {
-  display: flex;
-  gap: 1.6rem;
-  align-items: center;
-  padding: 1.4rem;
-  border-radius: var(--r-lg);
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-glow);
+    display: flex;
+    gap: 1.6rem;
+    align-items: center;
+    padding: 1.4rem;
+    border-radius: var(--r-lg);
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--shadow-glow);
 }
 
 .albumShell {
-  flex-shrink: 0;
-  display: block;
-  padding: 8px;
-  border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--hairline);
-  box-shadow: var(--inset-hi, var(--inset-hi));
+    flex-shrink: 0;
+    display: block;
+    padding: 8px;
+    border-radius: var(--r-md);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--inset-hi, var(--inset-hi));
 }
 .albumCore {
-  display: block;
-  width: 132px;
-  height: 132px;
-  border-radius: calc(var(--r-md) - 8px);
-  overflow: hidden;
-  background: var(--bg-solid);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
+    display: block;
+    width: 132px;
+    height: 132px;
+    border-radius: calc(var(--r-md) - 8px);
+    overflow: hidden;
+    background: var(--bg-solid);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
 }
 .albumCore img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .albumInfo {
-  min-width: 0;
-  flex: 1;
+    min-width: 0;
+    flex: 1;
 }
 .eyebrow {
-  display: inline-block;
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--accent);
-  margin-bottom: 0.4rem;
+    display: inline-block;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.4rem;
 }
 .albumTitle {
-  font-size: clamp(1.4rem, 3vw, 2rem);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.08;
+    font-size: clamp(1.4rem, 3vw, 2rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.08;
 }
 .albumArtist {
-  color: var(--text-dim);
-  margin-top: 0.3rem;
-  font-size: 0.98rem;
+    color: var(--text-dim);
+    margin-top: 0.3rem;
+    font-size: 0.98rem;
 }
 .albumMeta {
-  color: var(--text-faint);
-  font-size: 0.8rem;
-  margin-top: 0.5rem;
-  font-variant-numeric: tabular-nums;
+    color: var(--text-faint);
+    font-size: 0.8rem;
+    margin-top: 0.5rem;
+    font-variant-numeric: tabular-nums;
 }
 .albumActions {
-  margin-left: auto;
-  align-self: flex-start;
+    margin-left: auto;
+    align-self: flex-start;
 }
 
 /* —— Track rows (glass, grid) —— */
 .list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
 }
 
 .row,
 .rowActive,
 .rowPlaying,
 .rowPaused {
-  display: grid;
-  grid-template-columns: 2.4rem 1fr 1.4fr auto auto;
-  gap: 0.6rem;
-  padding: 0.6rem 0.85rem;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  align-items: center;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid transparent;
-  transition: background 0.4s var(--ease), border-color 0.4s var(--ease),
-    transform 0.4s var(--ease);
+    display: grid;
+    grid-template-columns: 2.4rem 1fr 1.4fr auto auto;
+    gap: 0.6rem;
+    padding: 0.6rem 0.85rem;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid transparent;
+    transition:
+        background 0.4s var(--ease),
+        border-color 0.4s var(--ease),
+        transform 0.4s var(--ease);
 }
 
 .row:hover {
-  background: rgba(255, 255, 255, 0.06);
-  transform: translateX(3px);
+    background: rgba(255, 255, 255, 0.06);
+    transform: translateX(3px);
 }
 
 .rowActive {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: var(--hairline);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--hairline);
 }
 
 .rowPlaying {
-  background: var(--accent-soft);
-  border-color: rgba(110, 231, 183, 0.3);
+    background: var(--accent-soft);
+    border-color: rgba(110, 231, 183, 0.3);
 }
 .rowPlaying .tTitle {
-  color: var(--accent);
+    color: var(--accent);
 }
 
 .rowPaused {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: var(--hairline);
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--hairline);
 }
 
 .tPos {
-  font-variant-numeric: tabular-nums;
-  font-size: 0.8rem;
-  color: var(--text-faint);
-  text-align: right;
-  display: grid;
-  place-items: center;
-  height: 16px;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8rem;
+    color: var(--text-faint);
+    text-align: right;
+    display: grid;
+    place-items: center;
+    height: 16px;
 }
 
 .rowEq {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 15px;
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 15px;
 }
 .rowEq i {
-  width: 2.5px;
-  height: 100%;
-  border-radius: 2px;
-  background: var(--accent);
-  transform-origin: bottom;
+    width: 2.5px;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent);
+    transform-origin: bottom;
 }
 .rowPlaying .rowEq i {
-  animation: oxEq 0.9s var(--ease) infinite;
+    animation: oxEq 0.9s var(--ease) infinite;
 }
 .rowPlaying .rowEq i:nth-child(2) {
-  animation-delay: 0.18s;
+    animation-delay: 0.18s;
 }
 .rowPlaying .rowEq i:nth-child(3) {
-  animation-delay: 0.36s;
+    animation-delay: 0.36s;
 }
 @keyframes oxEq {
-  0%, 100% { transform: scaleY(0.35); }
-  50% { transform: scaleY(1); }
+    0%,
+    100% {
+        transform: scaleY(0.35);
+    }
+    50% {
+        transform: scaleY(1);
+    }
 }
 @media (prefers-reduced-motion: reduce) {
-  .rowPlaying .rowEq i {
-    animation: none !important;
-  }
+    .rowPlaying .rowEq i {
+        animation: none !important;
+    }
 }
 
 .tTitle {
-  font-weight: 500;
-  font-size: 0.92rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+    font-weight: 500;
+    font-size: 0.92rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .tArtist,
 .tAlbum {
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .tTime {
-  color: var(--text-faint);
-  font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
+    color: var(--text-faint);
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
 }
 
 .rowMenu {
-  display: inline-flex;
-  opacity: 0;
-  transform: scale(0.85);
-  transition: opacity 0.35s var(--ease), transform 0.35s var(--ease);
+    display: inline-flex;
+    opacity: 0;
+    transform: scale(0.85);
+    transition:
+        opacity 0.35s var(--ease),
+        transform 0.35s var(--ease);
 }
 .row:hover .rowMenu,
 .rowPlaying .rowMenu,
 .rowPaused .rowMenu {
-  opacity: 1;
-  transform: scale(1);
+    opacity: 1;
+    transform: scale(1);
 }
 
 @media (max-width: 640px) {
-  .row,
-  .rowActive,
-  .rowPlaying,
-  .rowPaused {
-    grid-template-columns: 2rem 1fr auto auto;
-  }
-  .tArtist,
-  .tAlbum {
-    display: none;
-  }
-  .albumHead {
-    flex-wrap: wrap;
-    gap: 1rem;
-  }
-  .albumActions {
-    margin-left: 0;
-  }
+    .row,
+    .rowActive,
+    .rowPlaying,
+    .rowPaused {
+        grid-template-columns: 2rem 1fr auto auto;
+    }
+    .tArtist,
+    .tAlbum {
+        display: none;
+    }
+    .albumHead {
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+    .albumActions {
+        margin-left: 0;
+    }
 }

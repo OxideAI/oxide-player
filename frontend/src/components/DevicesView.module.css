@@ -1,530 +1,543 @@
 .wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 1.2rem;
-  max-width: 680px;
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+    max-width: 680px;
 }
 
 .h {
-  margin: 0;
-  font-size: 1.4rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+    margin: 0;
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
 .dim {
-  color: var(--text-dim);
-  font-size: 0.92rem;
+    color: var(--text-dim);
+    font-size: 0.92rem;
 }
 
 .eyebrow {
-  display: inline-block;
-  font-size: 0.64rem;
-  font-weight: 600;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--accent);
-  margin-bottom: 0.5rem;
+    display: inline-block;
+    font-size: 0.64rem;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
 }
 
 .error {
-  background: var(--danger-soft);
-  color: var(--danger);
-  padding: 0.6rem 0.9rem;
-  border-radius: var(--r-sm);
-  font-size: 0.9rem;
-  border: 1px solid var(--danger);
+    background: var(--danger-soft);
+    color: var(--danger);
+    padding: 0.6rem 0.9rem;
+    border-radius: var(--r-sm);
+    font-size: 0.9rem;
+    border: 1px solid var(--danger);
 }
 
 .list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
 }
 
 .rowOn,
 .rowOff,
 .cfgRow {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem 1.1rem;
-  border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid var(--hairline);
-  box-shadow: var(--shadow-glow);
-  transition: border-color 0.5s var(--ease), transform 0.5s var(--ease);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.1rem;
+    border-radius: var(--r-md);
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--shadow-glow);
+    transition:
+        border-color 0.5s var(--ease),
+        transform 0.5s var(--ease);
 }
 .rowOn {
-  border-color: rgba(110, 231, 183, 0.3);
+    border-color: rgba(110, 231, 183, 0.3);
 }
 .rowOn:hover,
 .rowOff:hover,
 .cfgRow:hover {
-  transform: translateY(-2px);
+    transform: translateY(-2px);
 }
 
 .cfgRow {
-  border-color: rgba(96, 165, 250, 0.2);
+    border-color: rgba(96, 165, 250, 0.2);
 }
 
 .name {
-  font-weight: 600;
-  font-size: 1rem;
+    font-weight: 600;
+    font-size: 1rem;
 }
 
 .meta {
-  color: var(--text-faint);
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-  margin-top: 0.15rem;
+    color: var(--text-faint);
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    margin-top: 0.15rem;
 }
 
 .id {
-  composes: meta;
+    composes: meta;
 }
 
 .on,
 .off {
-  border-radius: var(--r-pill);
-  padding: 0.5rem 1.1rem;
-  border: 1px solid var(--hairline);
-  background: rgba(255, 255, 255, 0.04);
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  transition: transform 0.4s var(--ease), background 0.4s var(--ease),
-    border-color 0.4s var(--ease), color 0.4s var(--ease);
+    border-radius: var(--r-pill);
+    padding: 0.5rem 1.1rem;
+    border: 1px solid var(--hairline);
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    transition:
+        transform 0.4s var(--ease),
+        background 0.4s var(--ease),
+        border-color 0.4s var(--ease),
+        color 0.4s var(--ease);
 }
 .on {
-  color: var(--accent);
-  border-color: rgba(110, 231, 183, 0.4);
-  background: var(--accent-soft);
+    color: var(--accent);
+    border-color: rgba(110, 231, 183, 0.4);
+    background: var(--accent-soft);
 }
 .on:active,
 .off:active {
-  transform: scale(0.96);
+    transform: scale(0.96);
 }
 .off {
-  color: var(--text-dim);
+    color: var(--text-dim);
 }
 .off:hover {
-  border-color: var(--hairline-strong);
-  color: var(--text);
+    border-color: var(--hairline-strong);
+    color: var(--text);
 }
 
 .outputActions {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-shrink: 0;
 }
 
 .dspOn,
 .dspOff {
-  border-radius: var(--r-pill);
-  padding: 0.5rem 0.85rem;
-  border: 1px solid var(--hairline);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-dim);
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  transition: transform 0.4s var(--ease), background 0.4s var(--ease),
-    border-color 0.4s var(--ease), color 0.4s var(--ease);
+    border-radius: var(--r-pill);
+    padding: 0.5rem 0.85rem;
+    border: 1px solid var(--hairline);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    transition:
+        transform 0.4s var(--ease),
+        background 0.4s var(--ease),
+        border-color 0.4s var(--ease),
+        color 0.4s var(--ease);
 }
 
 .dspOn {
-  color: var(--accent-2);
-  border-color: rgba(96, 165, 250, 0.5);
-  background: rgba(96, 165, 250, 0.1);
+    color: var(--accent-2);
+    border-color: rgba(96, 165, 250, 0.5);
+    background: rgba(96, 165, 250, 0.1);
 }
 
 .dspOff:hover {
-  border-color: var(--hairline-strong);
-  color: var(--text);
+    border-color: var(--hairline-strong);
+    color: var(--text);
 }
 
 .dspOn:active,
 .dspOff:active {
-  transform: scale(0.96);
+    transform: scale(0.96);
 }
 
 .dspOn:disabled,
 .dspOff:disabled {
-  cursor: not-allowed;
-  opacity: 0.42;
+    cursor: not-allowed;
+    opacity: 0.42;
 }
 
 /* ---- Config section ---- */
 
 .cfgSection {
-  border-top: 1px solid var(--hairline);
-  padding-top: 1.5rem;
+    border-top: 1px solid var(--hairline);
+    padding-top: 1.5rem;
 }
 
 .cfgToolbar {
-  display: flex;
-  gap: 0.6rem;
-  margin-bottom: 0.8rem;
+    display: flex;
+    gap: 0.6rem;
+    margin-bottom: 0.8rem;
 }
 
 .addBtn {
-  border-radius: var(--r-pill);
-  padding: 0.5rem 1.1rem;
-  border: 1px solid var(--hairline-strong);
-  background: rgba(255, 255, 255, 0.04);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  color: var(--text);
-  transition: transform 0.4s var(--ease), background 0.4s var(--ease);
+    border-radius: var(--r-pill);
+    padding: 0.5rem 1.1rem;
+    border: 1px solid var(--hairline-strong);
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--text);
+    transition:
+        transform 0.4s var(--ease),
+        background 0.4s var(--ease);
 }
 .addBtn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  transform: translateY(-1px);
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateY(-1px);
 }
 
 /* ---- Form ---- */
 
 .form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
-  padding: 1.2rem;
-  background: rgba(255, 255, 255, 0.025);
-  border-radius: var(--r-md);
-  border: 1px solid var(--hairline);
-  margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    padding: 1.2rem;
+    background: rgba(255, 255, 255, 0.025);
+    border-radius: var(--r-md);
+    border: 1px solid var(--hairline);
+    margin-bottom: 1rem;
 }
 
 .formRow {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
 }
 
 .formLabel {
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--text-dim);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-dim);
 }
 
 .formInput {
-  border: 1px solid var(--hairline-strong);
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: var(--r-sm);
-  padding: 0.45rem 0.7rem;
-  color: var(--text);
-  font-size: 0.9rem;
-  font-family: inherit;
+    border: 1px solid var(--hairline-strong);
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: var(--r-sm);
+    padding: 0.45rem 0.7rem;
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: inherit;
 }
 .formInput::placeholder {
-  color: var(--text-faint);
+    color: var(--text-faint);
 }
 
 .formCheck {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .formActions {
-  display: flex;
-  gap: 0.6rem;
-  margin-top: 0.2rem;
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 0.2rem;
 }
 
 .btnPrimary {
-  border-radius: var(--r-pill);
-  padding: 0.5rem 1.3rem;
-  border: 1px solid var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.4s var(--ease), background 0.4s var(--ease);
+    border-radius: var(--r-pill);
+    padding: 0.5rem 1.3rem;
+    border: 1px solid var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        transform 0.4s var(--ease),
+        background 0.4s var(--ease);
 }
 .btnPrimary:hover {
-  background: var(--accent);
-  color: var(--bg);
+    background: var(--accent);
+    color: var(--bg);
 }
 .btnPrimary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .btnDanger {
-  border-radius: var(--r-pill);
-  padding: 0.35rem 0.9rem;
-  border: 1px solid var(--danger);
-  background: transparent;
-  color: var(--danger);
-  font-size: 0.78rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.4s var(--ease), background 0.4s var(--ease);
+    border-radius: var(--r-pill);
+    padding: 0.35rem 0.9rem;
+    border: 1px solid var(--danger);
+    background: transparent;
+    color: var(--danger);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        transform 0.4s var(--ease),
+        background 0.4s var(--ease);
 }
 .btnDanger:hover {
-  background: var(--danger-soft);
+    background: var(--danger-soft);
 }
 
 .btnGhost {
-  border: 1px solid var(--hairline);
-  background: transparent;
-  color: var(--text-dim);
-  border-radius: var(--r-pill);
-  padding: 0.35rem 0.9rem;
-  font-size: 0.78rem;
-  cursor: pointer;
-  transition: background 0.4s var(--ease);
+    border: 1px solid var(--hairline);
+    background: transparent;
+    color: var(--text-dim);
+    border-radius: var(--r-pill);
+    padding: 0.35rem 0.9rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background 0.4s var(--ease);
 }
 .btnGhost:hover {
-  background: rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.06);
 }
 
 /* ---- Restart banner ---- */
 
 .banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.8rem 1.1rem;
-  border-radius: var(--r-md);
-  background: rgba(234, 179, 8, 0.08);
-  border: 1px solid rgba(234, 179, 8, 0.3);
-  color: var(--text);
-  font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.8rem 1.1rem;
+    border-radius: var(--r-md);
+    background: rgba(234, 179, 8, 0.08);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    color: var(--text);
+    font-size: 0.9rem;
 }
 
 .bannerBtn {
-  border-radius: var(--r-pill);
-  padding: 0.45rem 1.1rem;
-  border: 1px solid rgba(234, 179, 8, 0.4);
-  background: rgba(234, 179, 8, 0.12);
-  color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.4s var(--ease);
+    border-radius: var(--r-pill);
+    padding: 0.45rem 1.1rem;
+    border: 1px solid rgba(234, 179, 8, 0.4);
+    background: rgba(234, 179, 8, 0.12);
+    color: var(--text);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.4s var(--ease);
 }
 .bannerBtn:hover {
-  background: rgba(234, 179, 8, 0.25);
+    background: rgba(234, 179, 8, 0.25);
 }
 .bannerBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* ---- Confirmation overlay ---- */
 
 .confirmOverlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 100;
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 100;
 }
 
 .confirmBox {
-  background: var(--bg);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-lg);
-  padding: 1.5rem;
-  max-width: 400px;
-  width: 90%;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
+    background: var(--bg);
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--r-lg);
+    padding: 1.5rem;
+    max-width: 400px;
+    width: 90%;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
 }
 
 .confirmText {
-  font-size: 0.95rem;
-  line-height: 1.5;
+    font-size: 0.95rem;
+    line-height: 1.5;
 }
 
 .confirmActions {
-  display: flex;
-  gap: 0.6rem;
-  justify-content: flex-end;
+    display: flex;
+    gap: 0.6rem;
+    justify-content: flex-end;
 }
 
 /* ---- Bluetooth section ---- */
 
 .btBadge {
-  display: inline-block;
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 0.15rem 0.5rem;
-  border-radius: var(--r-pill);
-  margin-left: 0.5rem;
-  vertical-align: middle;
-  background: var(--accent-soft);
-  color: var(--accent);
-  border: 1px solid rgba(110, 231, 183, 0.3);
+    display: inline-block;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.5rem;
+    border-radius: var(--r-pill);
+    margin-left: 0.5rem;
+    vertical-align: middle;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid rgba(110, 231, 183, 0.3);
 }
 
 .btActions {
-  display: flex;
-  gap: 0.4rem;
-  align-items: center;
-  flex-shrink: 0;
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    flex-shrink: 0;
 }
 
 .btInputRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem 1.1rem;
-  margin-top: 0.8rem;
-  border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid var(--hairline);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.1rem;
+    margin-top: 0.8rem;
+    border-radius: var(--r-md);
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid var(--hairline);
 }
 
 .btInputRow h4 {
-  margin: 0 0 0.2rem;
+    margin: 0 0 0.2rem;
 }
 
 .btNote {
-  font-size: 0.82rem;
-  color: var(--accent);
-  padding: 0.5rem 0.9rem;
-  background: rgba(110, 231, 183, 0.06);
-  border-radius: var(--r-sm);
-  border: 1px solid rgba(110, 231, 183, 0.2);
+    font-size: 0.82rem;
+    color: var(--accent);
+    padding: 0.5rem 0.9rem;
+    background: rgba(110, 231, 183, 0.06);
+    border-radius: var(--r-sm);
+    border: 1px solid rgba(110, 231, 183, 0.2);
 }
-
 
 .primarySection,
 .btSection {
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
 }
 
 .sectionHead {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
 }
 
 .outputSelect {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.7rem;
-  border: 0;
-  padding: 0;
-  color: inherit;
-  text-align: left;
-  background: transparent;
-  cursor: pointer;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.7rem;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    text-align: left;
+    background: transparent;
+    cursor: pointer;
 }
 
 .outputSelect:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 4px;
-  border-radius: var(--r-sm);
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: var(--r-sm);
 }
 
 .outputKind {
-  display: block;
-  color: var(--text-dim);
-  font-size: 0.78rem;
-  margin-top: 0.2rem;
+    display: block;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    margin-top: 0.2rem;
 }
 
 .stale {
-  margin: 0;
-  color: var(--warning, #eab308);
-  font-size: 0.84rem;
+    margin: 0;
+    color: var(--warning, #eab308);
+    font-size: 0.84rem;
 }
 
 .advancedBlock {
-  border-top: 1px solid var(--hairline);
-  padding-top: 1rem;
+    border-top: 1px solid var(--hairline);
+    padding-top: 1rem;
 }
 
 .advancedSummary {
-  cursor: pointer;
-  color: var(--text-dim);
-  font-size: 0.9rem;
-  font-weight: 600;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    font-weight: 600;
 }
 
 .advancedBlock[open] > .advancedSummary {
-  color: var(--text);
-  margin-bottom: 0.8rem;
+    color: var(--text);
+    margin-bottom: 0.8rem;
 }
 
 .rowMenu {
-  position: relative;
+    position: relative;
 }
 
 .rowMenu summary {
-  list-style: none;
+    list-style: none;
 }
 
 .rowMenu summary::-webkit-details-marker {
-  display: none;
+    display: none;
 }
 
 .rowMenu[open] {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.4rem;
-  padding: 0.35rem;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-sm);
-  background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+    padding: 0.35rem;
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-sm);
+    background: var(--bg);
 }
 
 .pending {
-  color: var(--warning, #eab308);
-  font-size: 0.72rem;
-  white-space: nowrap;
+    color: var(--warning, #eab308);
+    font-size: 0.72rem;
+    white-space: nowrap;
 }
 
 .ready {
-  color: var(--accent);
-  font-size: 0.72rem;
-  white-space: nowrap;
+    color: var(--accent);
+    font-size: 0.72rem;
+    white-space: nowrap;
 }
 
 .provisioning {
-  margin-top: 0.35rem;
-  color: var(--warning, #eab308);
-  font-size: 0.78rem;
-  max-width: 42rem;
+    margin-top: 0.35rem;
+    color: var(--warning, #eab308);
+    font-size: 0.78rem;
+    max-width: 42rem;
 }
 
 .scanStatus {
-  margin: 0;
-  color: var(--accent);
-  font-size: 0.84rem;
+    margin: 0;
+    color: var(--accent);
+    font-size: 0.84rem;
 }
 
 .airplay {
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--hairline);
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--hairline);
 }
