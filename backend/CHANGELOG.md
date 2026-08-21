@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.19.2...oxide-player-v0.19.3) (2026-08-21)
+
+
+### Bug Fixes
+
+* boot speed up ([3162f5a](https://github.com/OxideAI/oxide-player/commit/3162f5aa77d7c8970120a177ea65afe7ee650013))
+
 ## [0.19.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.19.1...oxide-player-v0.19.2) (2026-08-20)
 
 
