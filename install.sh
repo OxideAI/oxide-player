@@ -1053,7 +1053,7 @@ install_units() {
   cat > /etc/systemd/system/camilladsp.service <<EOF
 [Unit]
 Description=CamillaDSP audio processor
-After=network-online.target sound.target
+After=network.target sound.target
 Wants=sound.target
 
 [Service]
@@ -1069,8 +1069,8 @@ EOF
   cat > /etc/systemd/system/oxide-airplay.service <<EOF
 [Unit]
 Description=Oxide Player AirPlay receiver
-After=network-online.target avahi-daemon.service sound.target
-Wants=network-online.target avahi-daemon.service sound.target
+After=network.target avahi-daemon.service sound.target
+Wants=network.target avahi-daemon.service sound.target
 
 [Service]
 Type=simple
@@ -1090,7 +1090,7 @@ EOF
     cat > /etc/systemd/system/oxide-player.service <<EOF
 [Unit]
 Description=oxide-player — audiophile MPD + CamillaDSP controller
-After=network-online.target mpd.service camilladsp.service
+After=network.target mpd.service camilladsp.service
 Wants=mpd.service camilladsp.service
 
 [Service]

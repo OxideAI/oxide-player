@@ -2,7 +2,7 @@
 Description=oxide-player — audiophile MPD + CamillaDSP controller
 Documentation=https://github.com/OxideAI/oxide-player
 # Start only once MPD and CamillaDSP are ready.
-After=network-online.target mpd.service camilladsp.service
+After=network.target mpd.service camilladsp.service
 Wants=mpd.service camilladsp.service
 RequiresMountsFor=/var/lib/oxide-player
 
