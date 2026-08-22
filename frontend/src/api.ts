@@ -105,6 +105,11 @@ export const api = {
     fetch("/api/library/albums/sources").then((r) => json<AlbumSources[]>(r)),
   artists: () => fetch("/api/library/artists").then((r) => json<string[]>(r)),
   coverUrl: (key: string | number) => `/api/cover/${key}`,
+  // Live per-directory art (`folder.jpg`/`cover.jpg` read straight from disk by
+  // the backend, no rescan needed) for the folder-browse view. The absolute
+  // folder path is URL-encoded so it travels safely through the `{*folder}`
+  // wildcard route.
+  coverForDir: (absDir: string) => `/api/library/cover/${encodeURIComponent(absDir)}`,
   // Prefer the album-level cover key; fall back to the track id for rows not
   // yet migrated to album-keyed covers.
   coverFor: (hasCover: boolean, coverKey: string | null, id: number) =>

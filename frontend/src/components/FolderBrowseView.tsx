@@ -14,6 +14,32 @@ import { TrackMenu } from "./TrackMenu";
 import styles from "./FolderBrowseView.module.css";
 import libStyles from "./LibraryView.module.css";
 
+/**
+ * A folder's thumbnail. Prefers the live per-directory cover (`folder.jpg` /
+ * `cover.jpg`, read straight from disk by the backend so art added after a
+ * scan still shows), falls back to the first descendant album cover (the only
+ * art that existed before per-directory covers), then to the ♫ placeholder.
+ */
+function FolderThumb({ dir, coverKey }: { dir: string; coverKey: string | null }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    setSrc(api.coverForDir(dir));
+  }, [dir]);
+  if (!src) return <span className={styles.folderPh}>♫</span>;
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onError={() => {
+        if (coverKey) setSrc(api.coverUrl(coverKey));
+        else setSrc(null);
+      }}
+    />
+  );
+}
+
 interface Props {
   tracks: Track[];
   loading: boolean;
@@ -263,7 +289,7 @@ export function FolderBrowseView({
                 return (
                   <li key={dir} className={styles.folderRow} onClick={() => onFolderChange(dir)}>
                     <span className={styles.folderThumb}>
-                      {ck ? <img src={api.coverUrl(ck)} alt="" loading="lazy" decoding="async" /> : <span className={styles.folderPh}>♫</span>}
+                      <FolderThumb dir={dir} coverKey={ck} />
                     </span>
                     <span className={styles.folderName} title={dir}>
                       {node.basename}

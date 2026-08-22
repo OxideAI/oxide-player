@@ -157,6 +157,10 @@ export function App() {
     setError(null);
     try {
       await api.rescanArt();
+      // Covers are re-extracted into the album-keyed cache, which feeds the
+      // descendant-cover fallback in the folder view — refresh the snapshot so
+      // updated `has_cover`/`cover_key` values reach the UI.
+      setRefreshToken((n) => n + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

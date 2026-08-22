@@ -46,6 +46,7 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/library/albums/sources", get(library_albums_sources))
         .route("/api/library/artists", get(library_artists))
         .route("/api/cover/{key}", get(cover))
+        .route("/api/library/cover/{*folder}", get(folder_cover))
         .route("/api/library/scan", post(library_scan))
         .route("/api/library/refresh", post(library_refresh))
         .route("/api/library/rescan-art", post(library_rescan_art))
@@ -365,6 +366,56 @@ async fn cover(State(s): State<AppState>, Path(key): Path<String>) -> AppResult<
         }
     }
     Err(AppError::NotFound(format!("cover {key}")))
+}
+
+/// Serve a cover image stored directly in a library folder (`cover.jpg`,
+/// `folder.jpg`, ...) -- the folder-browse view's per-directory art. Unlike the
+/// album-keyed `/api/cover/{key}` cache, this reads the live image from disk on
+/// every request, so art added (or changed) after a scan shows up without a
+/// rescan, and artist folders that hold no audio of their own get their
+/// `folder.jpg` even though no track ever mapped a cover key to them.
+///
+/// The folder must resolve to a real directory (or, if it doesn't exist, a
+/// directory real enough to mirror the stored `path` of its tracks). Only paths
+/// inside a configured library root are served, so arbitrary disk reads are not
+/// possible through this route.
+async fn folder_cover(
+    State(s): State<AppState>,
+    Path(folder): Path<String>,
+) -> AppResult<Response> {
+    let folder = folder.trim_end_matches('/').to_string();
+    if folder.is_empty() {
+        return Err(AppError::NotFound("cover folder".to_string()));
+    }
+    let dir = std::path::Path::new(&folder);
+    let cfg = s.config().await;
+    let in_library = cfg.library_dirs.iter().any(|d| dir.starts_with(d));
+    if !in_library {
+        return Err(AppError::NotFound(format!("cover folder {folder}")));
+    }
+    let Some(local) = crate::library::scanner::find_local_cover(dir) else {
+        return Err(AppError::NotFound(format!("cover folder {folder}")));
+    };
+    let bytes = tokio::fs::read(&local).await.map_err(|e| {
+        AppError::NotFound(format!("cover folder {folder}: {e}"))
+    })?;
+    let ct = match local
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        _ => "image/jpeg",
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, ct),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 /// Scan the configured library directories into the DB. `incremental` chooses
@@ -1821,6 +1872,130 @@ mod tests {
         let bt = crate::bluetooth::BluetoothManager::new().await;
         let state = AppState::new(config, db, dsp, mpd, visualizer, bt, None);
         super::router(state).await
+    }
+
+    #[tokio::test]
+    async fn folder_cover_serves_folder_art_inside_library() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("music");
+        let artist = library.join("Artist");
+        std::fs::create_dir_all(&artist).unwrap();
+        // A tiny valid JPEG; the route only streams bytes and never decodes.
+        let jpeg = vec![0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46];
+        std::fs::write(artist.join("folder.jpeg"), &jpeg).unwrap();
+
+        let mut config = Config::default_config();
+        config.data_dir = temp.path().join("data");
+        config.camilladsp_config_path = temp.path().join("camilladsp/config.yml");
+        config.library_dirs = vec![library.clone()];
+        let app = test_app_with_config(config).await;
+
+        let uri = format!(
+            "/api/library/cover/{}",
+            artist.to_string_lossy()
+        );
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let ct = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert_eq!(ct, "image/jpeg");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], &jpeg[..]);
+    }
+
+    #[tokio::test]
+    async fn folder_cover_rejects_paths_outside_library() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("music");
+        std::fs::create_dir_all(&library).unwrap();
+        let outside = temp.path().join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("folder.jpg"), b"junk").unwrap();
+
+        let mut config = Config::default_config();
+        config.data_dir = temp.path().join("data");
+        config.camilladsp_config_path = temp.path().join("camilladsp/config.yml");
+        config.library_dirs = vec![library.clone()];
+        let app = test_app_with_config(config).await;
+
+        let uri = format!(
+            "/api/library/cover/{}",
+            outside.to_string_lossy()
+        );
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn folder_cover_missing_image_is_404() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("music");
+        let artist = library.join("Artist");
+        std::fs::create_dir_all(&artist).unwrap();
+
+        let mut config = Config::default_config();
+        config.data_dir = temp.path().join("data");
+        config.camilladsp_config_path = temp.path().join("camilladsp/config.yml");
+        config.library_dirs = vec![library.clone()];
+        let app = test_app_with_config(config).await;
+
+        let uri = format!(
+            "/api/library/cover/{}",
+            artist.to_string_lossy()
+        );
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn folder_cover_handles_percent_encoded_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("music");
+        let artist = library.join("Artist");
+        std::fs::create_dir_all(&artist).unwrap();
+        let jpeg = vec![0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46];
+        std::fs::write(artist.join("folder.jpeg"), &jpeg).unwrap();
+
+        let mut config = Config::default_config();
+        config.data_dir = temp.path().join("data");
+        config.camilladsp_config_path = temp.path().join("camilladsp/config.yml");
+        config.library_dirs = vec![library.clone()];
+        let app = test_app_with_config(config).await;
+
+        // The frontend percent-encodes the absolute path (encodeURIComponent),
+        // so `/` becomes %2F. The wildcard must still capture and decode it.
+        let encoded = artist.to_string_lossy().chars().map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.~".contains(c) {
+                c.to_string()
+            } else {
+                let mut buf = [0u8; 4];
+                c.encode_utf8(&mut buf).bytes().map(|b| format!("%{b:02X}")).collect::<String>()
+            }
+        }).collect::<String>();
+        let uri = format!("/api/library/cover/{encoded}");
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]

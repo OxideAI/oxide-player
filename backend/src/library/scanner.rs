@@ -337,7 +337,7 @@ fn cover_ext(mime: &MimeType) -> &'static str {
 
 /// Look for a local cover image in `dir`, preferring `cover.*` over `folder.*`
 /// and jpg over png. Matching is case-insensitive on both name and extension.
-fn find_local_cover(dir: &Path) -> Option<PathBuf> {
+pub(crate) fn find_local_cover(dir: &Path) -> Option<PathBuf> {
     const NAMES: &[&str] = &[
         "cover.jpg",
         "cover.jpeg",
