@@ -32,3 +32,16 @@ export function audioQuality(t: {
   const q = parts.join(" / ");
   return t.format ? `${t.format.toUpperCase()} · ${q}` : q;
 }
+
+/** Best artwork for a now-playing row: library cover first, then radio
+ *  station art, else nothing (callers show their placeholder). */
+export function artUrlFor(song: {
+  id: number;
+  has_cover: boolean;
+  cover_key: string | null;
+  art_url: string | null;
+} | null): string | null {
+  if (!song) return null;
+  if (song.has_cover) return `/api/cover/${song.cover_key ?? song.id}`;
+  return song.art_url ?? null;
+}

@@ -741,6 +741,7 @@ impl AppState {
                 _ => t.duration,
             }),
             cue_start: t.cue_index.and(t.start_time),
+            art_url: None,
         });
         // Fallback: MPD is playing a song but we couldn't resolve it from the
         // library DB — still return a minimal TrackRef so the UI doesn't show
@@ -750,11 +751,17 @@ impl AppState {
             // the live icy-metadata title MPD reports and the station name as
             // artist so NowPlaying shows something meaningful instead of a
             // bare URL.
-            let (title, artist) = if u.starts_with("http://") || u.starts_with("https://") {
-                let station = self.inner.radio.by_url(&u);
-                (ms.current_title.clone(), station.map(|s| s.name))
+            let station = self.inner.radio.by_url(&u);
+            let (title, artist, art_url) = if u.starts_with("http://")
+                || u.starts_with("https://")
+            {
+                (
+                    ms.current_title.clone(),
+                    station.as_ref().map(|s| s.name.clone()),
+                    station.and_then(|s| s.artwork),
+                )
             } else {
-                (None, None)
+                (ms.current_title.clone(), None, None)
             };
             crate::types::TrackRef {
                 id: 0,
@@ -770,6 +777,7 @@ impl AppState {
                 channels: None,
                 duration: None,
                 cue_start: None,
+                art_url,
             }
         }))
     }
@@ -990,6 +998,79 @@ mod tests {
         assert_eq!(song.artist.as_deref(), Some("JFK Ibiza"));
         assert_eq!(song.duration, None, "streams have no duration");
         assert!(!song.has_cover);
+    }
+
+    /// A station with configured artwork must surface that art on the fallback
+    /// TrackRef (`art_url`) so NowPlaying and Kiosk can show it for streams.
+    #[tokio::test]
+    async fn resolve_current_song_stream_carries_station_artwork() {
+        let (state, _db) = test_state().await;
+
+        // test_state shares the real data dir; drop only this test's own
+        // leftovers from a previous run before adding (never other stations).
+        for id in state.radio().list() {
+            if id.url.contains("kiosk-art-test.example") {
+                let _ = state.radio().remove(&id.id);
+            }
+        }
+        state
+            .radio()
+            .add(
+                "Art FM",
+                "https://kiosk-art-test.example/stream",
+                None,
+                Some("https://kiosk-art-test.example/logo.png".to_string()),
+            )
+            .expect("station with artwork must be accepted");
+
+        let ms = MpdStatus {
+            state: PlaybackState::Playing,
+            volume: Some(80),
+            elapsed: 0.0,
+            duration: 0.0,
+            error: None,
+            current_uri: Some("https://kiosk-art-test.example/stream".to_string()),
+            current_track: None,
+            current_id: Some(7),
+            current_title: Some("Live Track".to_string()),
+            random: false,
+        };
+
+        let song = state
+            .resolve_current_song(&ms)
+            .await
+            .expect("stream URI must resolve to a fallback TrackRef");
+
+        assert!(!song.has_cover, "streams have no library cover");
+        assert_eq!(
+            song.art_url.as_deref(),
+            Some("https://kiosk-art-test.example/logo.png"),
+            "station artwork must surface as art_url"
+        );
+
+        // A station without artwork leaves art_url empty rather than pointing
+        // at a broken image.
+        state
+            .radio()
+            .add(
+                "Bare FM",
+                "https://kiosk-art-test.example/bare",
+                None,
+                None,
+            )
+            .expect("station without artwork must be accepted");
+        let ms = MpdStatus {
+            current_uri: Some("https://kiosk-art-test.example/bare".to_string()),
+            current_title: Some("Live Track".to_string()),
+            ..ms
+        };
+        let song = state.resolve_current_song(&ms).await.unwrap();
+        assert_eq!(song.art_url, None, "no artwork station stays artless");
+        for id in state.radio().list() {
+            if id.url.contains("kiosk-art-test.example") {
+                let _ = state.radio().remove(&id.id);
+            }
+        }
     }
 
     /// Regression for #3: a freshly subscribed broadcast receiver must receive

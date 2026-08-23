@@ -19,6 +19,7 @@ function makeTrack(): Track {
     channels: 2,
     duration: 239,
     cue_start: null,
+    art_url: null,
     genre: null,
     year: null,
     track: 1,

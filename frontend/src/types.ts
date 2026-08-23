@@ -12,6 +12,8 @@ export interface TrackRef {
   channels: number | null;
   duration: number | null;
   cue_start: number | null;
+  /** Remote artwork for streams (radio station art); library tracks use has_cover. */
+  art_url: string | null;
 }
 
 export interface Track extends TrackRef {

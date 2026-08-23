@@ -150,6 +150,10 @@ pub struct TrackRef {
     /// begins. MPD reports `elapsed` against the full file, so the UI subtracts
     /// this to get the position within the track.
     pub cue_start: Option<f64>,
+    /// Remote artwork for streams (the playing radio station's art). Library
+    /// tracks carry their art via `has_cover`/`cover_key` instead.
+    #[serde(default)]
+    pub art_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

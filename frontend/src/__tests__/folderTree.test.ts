@@ -18,6 +18,7 @@ function track(over: Partial<Track> & { id: number; uri: string; path: string })
     channels: null,
     duration: null,
     cue_start: null,
+    art_url: null,
     genre: null,
     year: null,
     track: (over as Track).track ?? null,

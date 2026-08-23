@@ -18,6 +18,7 @@ function makeTrack(): Track {
     channels: 2,
     duration: 180,
     cue_start: null,
+    art_url: null,
     path: "/music/Album/track.flac",
     genre: "Rock",
     year: 2020,

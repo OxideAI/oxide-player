@@ -12,6 +12,7 @@ import {
 } from "./Visualizer";
 import { VisualizerControls } from "./VisualizerControls";
 import { useVisualizer } from "../useVisualizer";
+import { artUrlFor } from "../util";
 import styles from "./KioskView.module.css";
 
 interface Props {
@@ -36,9 +37,7 @@ export function KioskView({
 }: Props) {
   const loading = status === null;
   const song = status?.current_song ?? null;
-  const cover = song?.has_cover
-    ? api.coverUrl(song.cover_key ?? song.id)
-    : null;
+  const cover = artUrlFor(song);
   const title = loading
     ? "Loading…"
     : song

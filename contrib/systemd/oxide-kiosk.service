@@ -8,28 +8,31 @@
 [Unit]
 Description=Oxide Player wall display kiosk (cage + Chromium)
 Documentation=https://github.com/OxideAI/oxide-player
-# Start only once logind can grant the seat and the backend can serve the UI.
 After=systemd-logind.service dbus.socket oxide-player.service
 Wants=oxide-player.service
+# Headless boot (no panel attached): fail fast instead of looping forever.
+# `systemctl restart oxide-kiosk` recovers once a display is reattached.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=oxide
 Group=oxide
-PAMName=login
+PAMName=oxide-kiosk
+# /etc/pam.d/oxide-kiosk forces a full seat session (class=user); newer
+# systemd's default lightweight sessions never activate and wlroots waits.
 TTYPath=/dev/tty7
 StandardInput=tty
 StandardOutput=journal
-StandardError=journal
 UtmpIdentifier=tty7
+# Logind activates the session but does not switch the foreground VT on newer
+# releases; the compositor waits for exactly that.
+ExecStartPre=-/usr/bin/chvt 7
 ExecStart=/usr/local/bin/oxide-kiosk-session
 # Restart on any exit so a crashed browser lands back on the wall view.
 Restart=always
 RestartSec=3
-# Headless boot (no panel attached): fail fast instead of looping forever.
-# `systemctl restart oxide-kiosk` recovers once a display is reattached.
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

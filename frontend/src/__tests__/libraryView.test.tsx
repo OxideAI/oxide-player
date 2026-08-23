@@ -39,6 +39,7 @@ function makeTrack(over: Partial<Track> = {}): Track {
     album: "The Girl In The Other Room",
     has_cover: false,
     cover_key: null,
+    art_url: null,
     format: "M4A",
     sample_rate: 48000,
     bit_depth: 24,

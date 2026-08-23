@@ -265,6 +265,9 @@ build_frontend() {
     log "Using prebuilt frontend dist from release package"
     run mkdir -p "$SHARE_DIR/dist"
     run cp -r "$SRC_DIR/dist/." "$SHARE_DIR/dist/"
+    # The backend serves these as the unprivileged service user; root-owned
+    # 0600 copies from scp/umask variants would leave the UI unreadable.
+    run chmod -R a+rX "$SHARE_DIR/dist"
     log "Installed frontend UI -> $SHARE_DIR/dist"
     return
   fi
@@ -283,6 +286,7 @@ build_frontend() {
   ( cd "$SRC_DIR/frontend" && npm ci && npm run build )
   run mkdir -p "$SHARE_DIR/dist"
   run cp -r "$SRC_DIR/frontend/dist/." "$SHARE_DIR/dist/"
+  run chmod -R a+rX "$SHARE_DIR/dist"
   log "Installed frontend UI -> $SHARE_DIR/dist"
 }
 
@@ -1187,7 +1191,51 @@ write_kiosk() {
     warn "Kiosk packages unavailable — skipping wall display setup (playback is unaffected)"
     return 0
   fi
+  # The transitional chromium-browser package contains no files — the real
+  # browser is the snap. Resolve an actual executable and fail soft when none
+  # can be provided.
+  _browser=""
+  for _cand in /usr/bin/chromium-browser /snap/bin/chromium /usr/bin/chromium; do
+    [ -x "$_cand" ] && _browser="$_cand" && break
+  done
+  if [ -z "$_browser" ]; then
+    log "No chromium binary found — installing the chromium snap"
+    # On a freshly reinstalled system snapd may still be initializing; wait
+    # for its socket before attempting the install, then retry once.
+    for _i in 1 2 3 4 5 6; do
+      [ -S /run/snapd.socket ] && systemctl is-active --quiet snapd && break
+      log "Waiting for snapd to become ready ($_i/6)"
+      sleep 5
+    done
+    if run snap install chromium; then
+      _browser="/snap/bin/chromium"
+    else
+      # Snap downloads can stall on slow links; one clean retry.
+      warn "Chromium snap install failed — retrying once"
+      run snap install chromium && _browser="/snap/bin/chromium"
+    fi
+    [ -n "$_browser" ] || _browser="$(command -v chromium 2>/dev/null || true)"
+  fi
+  if [ -z "$_browser" ]; then
+    warn "Chromium unavailable — skipping wall display setup (playback is unaffected)"
+    return 0
+  fi
 
+  # The snap-packaged browser needs a writable home for its data directory,
+  # and logind tears down /run/user/<uid> between sessions without linger -
+  # which deletes the Wayland socket underneath the compositor. System
+  # accounts are created without either, so provide both here.
+  run mkdir -p "/home/$SERVICE_USER"
+  run chown "$SERVICE_USER:$SERVICE_USER" "/home/$SERVICE_USER"
+  run loginctl enable-linger "$SERVICE_USER" || warn "Could not enable linger for $SERVICE_USER"
+  # Newer systemd registers PAM sessions as lightweight by default; light
+  # sessions never become active on the seat and wlroots waits forever.
+  cat > /etc/pam.d/oxide-kiosk <<EOF
+auth     required   pam_permit.so
+account  required   pam_permit.so
+session  required   pam_unix.so
+session  optional   pam_systemd.so class=user
+EOF
   local _port="${LISTEN##*:}"
   local _port_suffix=""
   [ "$_port" != "80" ] && _port_suffix=":$_port"
@@ -1276,7 +1324,10 @@ WATCHER_EOF
 #!/bin/sh
 # oxide-kiosk-session — single-app Wayland kiosk session for the wall display.
 export XDG_SESSION_TYPE=wayland
-
+# PAM does not always export this into the unit environment; snap browsers
+# need it to find the compositor socket.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+# Wait for the backend before launching the browser (After= orders exec, not bind).
 i=0
 until curl -sf --max-time 2 "http://127.0.0.1__PORT_SUFFIX__/api/version" >/dev/null 2>&1; do
     [ "$i" -ge 60 ] && break
@@ -1284,7 +1335,7 @@ until curl -sf --max-time 2 "http://127.0.0.1__PORT_SUFFIX__/api/version" >/dev/
     i=$((i + 1))
 done
 
-cage -d -s -- /usr/bin/chromium-browser \
+cage -d -s -- __BROWSER__ \
     --ozone-platform=wayland --enable-features=UseOzonePlatform \
     --kiosk --noerrdialogs --disable-infobars \
     --disable-session-crashed-bubble --hide-crash-restore-bubble \
@@ -1319,11 +1370,16 @@ SESSION_EOF
   _session="${_session//__PORT_SUFFIX__/$_port_suffix}"
   _session="${_session//__KIOSK_IDLE_SECONDS__/$_idle}"
   _session="${_session//__BINDIR__/$BIN_DIR}"
+  _session="${_session//__BROWSER__/$_browser}"
   printf '%s\n' "$_session" > "$BIN_DIR/oxide-kiosk-session"
   run chmod 755 "$BIN_DIR/oxide-kiosk-session"
 
+  # Switch to the kiosk VT before the compositor starts: logind activates the
+  # session but does not change the foreground VT on newer releases, and
+  # wlroots waits for exactly that. The leading '-' tolerates headless boots.
   if [ -f "$SRC_DIR/contrib/systemd/oxide-kiosk.service" ]; then
     run install -Dm0644 "$SRC_DIR/contrib/systemd/oxide-kiosk.service" "$SYSTEMD_DIR/oxide-kiosk.service"
+    sed -i "\|^ExecStart=|i ExecStartPre=-/usr/bin/chvt ${KIOSK_TTY:-7}" "$SYSTEMD_DIR/oxide-kiosk.service"
   else
     cat > "$SYSTEMD_DIR/oxide-kiosk.service" <<EOF
 # Oxide Player wall display kiosk: a single-app Wayland session (cage) that
@@ -1334,24 +1390,25 @@ Description=Oxide Player wall display kiosk (cage + Chromium)
 Documentation=https://github.com/OxideAI/oxide-player
 After=systemd-logind.service dbus.socket oxide-player.service
 Wants=oxide-player.service
+# Headless boot (no panel attached): fail fast instead of looping forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_USER
-PAMName=login
+PAMName=oxide-kiosk
 TTYPath=/dev/tty7
 StandardInput=tty
 StandardOutput=journal
 StandardError=journal
 UtmpIdentifier=tty7
+ExecStartPre=-/usr/bin/chvt ${KIOSK_TTY:-7}
 ExecStart=$BIN_DIR/oxide-kiosk-session
 # Restart on any exit so a crashed browser lands back on the wall view.
 Restart=always
 RestartSec=3
-# Headless boot (no panel attached): fail fast instead of looping forever.
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
@@ -1455,6 +1512,11 @@ do_uninstall() {
   remove_path "$BIN_DIR/camilladsp"
   remove_path "$BIN_DIR/oxide-kiosk-idle-watcher"
   remove_path "$BIN_DIR/oxide-kiosk-session"
+  remove_path /etc/pam.d/oxide-kiosk
+  # Linger keeps /run/user/<uid> alive for the kiosk session; without the
+  # kiosk it only wastes a runtime dir. Home dir and browser profile are
+  # preserved like the rest of the user's data.
+  loginctl disable-linger "$SERVICE_USER" 2>/dev/null || true
   remove_path "$SHARE_DIR"
   remove_path "/etc/avahi/services/oxide-player.service"
   remove_path "$SUDOERS_RULE"
