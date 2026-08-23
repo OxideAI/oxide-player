@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.20.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.19.4...oxide-player-v0.20.0) (2026-08-23)
+
+
+### Features
+
+* **frontend:** auto-return panel sessions to /kiosk when stopped ([8e9b196](https://github.com/OxideAI/oxide-player/commit/8e9b196a8a8fa7dc6b4b8c19448eab6fb9218bec))
+* **installer:** wall-display kiosk session (cage + Chromium) ([72e08dc](https://github.com/OxideAI/oxide-player/commit/72e08dca69a70ae18988e527576b1c9bcb7a8b13))
+* wall-display kiosk session for the attached HDMI panel ([7d9b470](https://github.com/OxideAI/oxide-player/commit/7d9b4707bff91965020f816322abd8aa4556d1ce))
+
+
+### Bug Fixes
+
+* **review:** resolve __BINDIR__ placeholder in kiosk session template ([0afedcd](https://github.com/OxideAI/oxide-player/commit/0afedcde4e26eec53e494dd8a085d154e626ddfe))
+
 ## [0.19.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.19.3...oxide-player-v0.19.4) (2026-08-22)
 
 
