@@ -1269,7 +1269,7 @@ _wl="$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null | head -n 1)"
 
 swayidle -w timeout 30 'true' \
     resume 'wlopm --on "*"; touch /tmp/oxide-kiosk-wake' &
-"$BINDIR/oxide-kiosk-idle-watcher" &
+"__BINDIR__/oxide-kiosk-idle-watcher" &
 
 wait "$CAGE_PID"
 SESSION_EOF
