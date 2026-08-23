@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { usePanelIdleReturn } from "../components/usePanelIdleReturn";
+import type { PlaybackState } from "../types";
 
 // Panel-mode idle auto-return (plan 2026-08-23 U1 / KTD4): only sessions
 // launched with ?panel=1 may navigate themselves back to /kiosk after
@@ -30,13 +31,13 @@ function armPanel(idleSeconds: number) {
   sessionStorage.setItem(PANEL_KEY, JSON.stringify({ panel: true, idleSeconds }));
 }
 
-function renderIdleHook(state: string) {
+function renderIdleHook(state: PlaybackState) {
   const harness = renderHook(
-    (props: { state: string }) => usePanelIdleReturn(props.state),
+    (props: { state: PlaybackState }) => usePanelIdleReturn(props.state),
     { initialProps: { state } },
   );
   return {
-    setState: (next: string) =>
+    setState: (next: PlaybackState) =>
       act(() => {
         harness.rerender({ state: next });
       }),
@@ -137,5 +138,101 @@ describe("usePanelIdleReturn", () => {
     h.setState("stopped");
     h.elapse(2000);
     expect(window.location.pathname).toBe("/kiosk");
+  });
+
+  it("launch params override a previously persisted config", () => {
+    // Pre-existing session armed with a different threshold must be
+    // overridden by the fresh launch URL (#158).
+    armPanel(600);
+    installLocationMock("/library", "?panel=1&idle=30");
+    const h = renderIdleHook("stopped");
+    expect(JSON.parse(sessionStorage.getItem(PANEL_KEY)!).idleSeconds).toBe(30);
+    h.elapse(30_000);
+    expect(window.location.pathname).toBe("/kiosk");
+  });
+
+  it("falls back to the default idle when ?idle is invalid, zero or negative", () => {
+    for (const bad of ["bogus", "0", "-5"]) {
+      sessionStorage.clear();
+      installLocationMock("/library", `?panel=1&idle=${bad}`);
+      const h = renderIdleHook("stopped");
+      // Nothing navigates on the first tick (a 0/NaN threshold would fire here).
+      h.elapse(1000);
+      expect(window.location.pathname).toBe("/library");
+      // And the persisted config carries the clamped default.
+      expect(JSON.parse(sessionStorage.getItem(PANEL_KEY)!).idleSeconds).toBe(600);
+      h.unmount();
+    }
+  });
+
+  it("treats corrupted or invalid sessionStorage payloads as not armed", () => {
+    const payloads = [
+      "not-json{{",
+      JSON.stringify({ panel: false }),
+      JSON.stringify({}),
+    ];
+    for (const payload of payloads) {
+      sessionStorage.clear();
+      sessionStorage.setItem(PANEL_KEY, payload);
+      installLocationMock("/library");
+      const h = renderIdleHook("stopped");
+      h.elapse(60_000);
+      expect(window.location.pathname).toBe("/library");
+      h.unmount();
+    }
+  });
+
+  it("clamps an invalid persisted idleSeconds to the default", () => {
+    sessionStorage.setItem(
+      PANEL_KEY,
+      JSON.stringify({ panel: true, idleSeconds: -1 }),
+    );
+    installLocationMock("/library");
+    const h = renderIdleHook("stopped");
+    h.elapse(600_000);
+    expect(window.location.pathname).toBe("/kiosk");
+  });
+
+  it("still arms and navigates when sessionStorage.setItem throws", () => {
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota exceeded");
+    });
+    installLocationMock("/library", "?panel=1&idle=2");
+    const h = renderIdleHook("stopped");
+    h.elapse(2000);
+    expect(window.location.pathname).toBe("/kiosk");
+    spy.mockRestore();
+  });
+
+  it("disarms and clears storage on explicit ?panel=0", () => {
+    armPanel(5);
+    installLocationMock("/library", "?panel=0");
+    const h = renderIdleHook("stopped");
+    expect(sessionStorage.getItem(PANEL_KEY)).toBeNull();
+    h.elapse(60_000);
+    expect(window.location.pathname).toBe("/library");
+  });
+
+  it("resets the idle clock on user interaction while stopped", () => {
+    installLocationMock("/library", "?panel=1&idle=5");
+    const h = renderIdleHook("stopped");
+    // Four seconds in, the listener taps the panel.
+    h.elapse(4000);
+    act(() => {
+      window.dispatchEvent(new Event("pointerdown"));
+    });
+    h.elapse(4000);
+    // Eight seconds elapsed since mount but only four since the tap.
+    expect(window.location.pathname).toBe("/library");
+    h.elapse(1000);
+    expect(window.location.pathname).toBe("/kiosk");
+  });
+
+  it("stops accumulating entirely after unmount", () => {
+    installLocationMock("/library", "?panel=1&idle=3");
+    const h = renderIdleHook("stopped");
+    h.unmount();
+    h.elapse(60_000);
+    expect(window.location.pathname).toBe("/library");
   });
 });
