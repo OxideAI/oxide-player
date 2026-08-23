@@ -1,0 +1,35 @@
+# Oxide Player wall display kiosk: a single-app Wayland session (cage) that
+# runs Chromium pointed at the backend's /kiosk view on the HDMI panel.
+#
+# The PAM login session below gives the compositor its logind seat, DRM/input
+# device access, and XDG_RUNTIME_DIR — there is no display manager and no
+# autologin prompt, so nothing between power-on and cover art can show a login
+# terminal. See docs/plans/2026-08-23-1432-feat-hdmi-kiosk-display-plan.md.
+[Unit]
+Description=Oxide Player wall display kiosk (cage + Chromium)
+Documentation=https://github.com/OxideAI/oxide-player
+# Start only once logind can grant the seat and the backend can serve the UI.
+After=systemd-logind.service dbus.socket oxide-player.service
+Wants=oxide-player.service
+
+[Service]
+Type=simple
+User=oxide
+Group=oxide
+PAMName=login
+TTYPath=/dev/tty7
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty7
+ExecStart=/usr/local/bin/oxide-kiosk-session
+# Restart on any exit so a crashed browser lands back on the wall view.
+Restart=always
+RestartSec=3
+# Headless boot (no panel attached): fail fast instead of looping forever.
+# `systemctl restart oxide-kiosk` recovers once a display is reattached.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
