@@ -1180,7 +1180,13 @@ MOTD_EOF
 # playback past KIOSK_IDLE_SECONDS blanks it; touch wakes it (swayidle resume).
 write_kiosk() {
   log "Installing wall display kiosk (cage + Chromium)"
-  apt_install cage swayidle wlopm chromium-browser
+  # Fault isolation: a host where a kiosk package is unavailable (e.g. the
+  # snap-transitional chromium-browser without snapd) must not abort the whole
+  # install — playback and every other feature stay unaffected.
+  if ! apt_install cage swayidle wlopm chromium-browser; then
+    warn "Kiosk packages unavailable — skipping wall display setup (playback is unaffected)"
+    return 0
+  fi
 
   local _port="${LISTEN##*:}"
   local _port_suffix=""
@@ -1197,9 +1203,9 @@ write_kiosk() {
 BASE_URL="http://127.0.0.1__PORT_SUFFIX__"
 IDLE_SECONDS="__KIOSK_IDLE_SECONDS__"
 POLL=15
-WAKE_FILE="/tmp/oxide-kiosk-wake"
 stopped=0
 blanked=0
+wlopm_fails=0
 wake_seen=0
 [ -f "$WAKE_FILE" ] && wake_seen=$(stat -c %Y "$WAKE_FILE" 2>/dev/null || echo 0)
 while :; do
@@ -1222,12 +1228,22 @@ while :; do
         if [ "$blanked" -eq 0 ]; then
             stopped=$((stopped + POLL))
             if [ "$stopped" -ge "$IDLE_SECONDS" ]; then
-                wlopm --off '*' && blanked=1
+                # Cap consecutive failures so a wedged compositor cannot turn
+                # this loop into unbounded identical retries; retrying resumes
+                # as soon as playback leaves stopped.
+                if wlopm --off '*'; then
+                    blanked=1
+                    wlopm_fails=0
+                else
+                    wlopm_fails=$((wlopm_fails + 1))
+                    [ "$wlopm_fails" -ge 5 ] && blanked=1
+                fi
             fi
         fi
     else
         # Playing or paused counts as activity (paused keeps the panel lit).
         stopped=0
+        wlopm_fails=0
         if [ "$blanked" -eq 1 ]; then
             wlopm --on '*' || true
             blanked=0
@@ -1242,16 +1258,32 @@ WATCHER_EOF
   printf '%s\n' "$_watcher" > "$BIN_DIR/oxide-kiosk-idle-watcher"
   run chmod 755 "$BIN_DIR/oxide-kiosk-idle-watcher"
 
-  # Session launcher: cage must own the seat first; helpers only get a Wayland
-  # connection after cage creates its socket, so they start afterwards with
-  # WAYLAND_DISPLAY exported. swayidle uses a short dummy timeout purely to arm
-  # its resume hook (resume fires only after idle has been entered); the wake
-  # stamp tells the watcher a human touched the panel.
+  # Session launcher. Order matters:
+  #   1. Wait for the backend's HTTP endpoint before starting Chromium —
+  #      After= only orders exec start, not port bind; without this wait a slow
+  #      boot leaves a browser error page on the panel forever (nothing retries).
+  #   2. Start cage, then poll for its Wayland socket — but bail out if cage
+  #      dies meanwhile (headless box) so systemd's restart policy engages
+  #      instead of stalling ~20s per attempt.
+  #   3. Helpers run only once WAYLAND_DISPLAY exists, and swayidle runs under
+  #      a tiny supervision loop so a crash cannot silently kill wake-on-touch.
+  #   swayidle's timeout is deliberately shorter than the watcher poll: resume
+  #      fires when input follows an idle stretch, so frequent-enough touches
+  #      keep stamping activity and the watcher never blanks under an active
+  #      finger.
   local _session
   _session="$(cat <<'SESSION_EOF'
 #!/bin/sh
 # oxide-kiosk-session — single-app Wayland kiosk session for the wall display.
 export XDG_SESSION_TYPE=wayland
+
+i=0
+until curl -sf --max-time 2 "http://127.0.0.1__PORT_SUFFIX__/api/version" >/dev/null 2>&1; do
+    [ "$i" -ge 60 ] && break
+    sleep 1
+    i=$((i + 1))
+done
+
 cage -d -s -- /usr/bin/chromium-browser \
     --ozone-platform=wayland --enable-features=UseOzonePlatform \
     --kiosk --noerrdialogs --disable-infobars \
@@ -1260,15 +1292,25 @@ cage -d -s -- /usr/bin/chromium-browser \
 CAGE_PID=$!
 
 i=0
-until [ -n "$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null)" ] || [ "$i" -ge 100 ]; do
+while :; do
+    [ -n "$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null)" ] && break
+    # Cage exited (no DRM seat / headless): fail now so Restart=always and the
+    # start limit engage instead of burning the poll budget as a zombie.
+    kill -0 "$CAGE_PID" 2>/dev/null || exit 1
+    [ "$i" -ge 100 ] && break
     sleep 0.2
     i=$((i + 1))
 done
 _wl="$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null | head -n 1)"
 [ -n "$_wl" ] && WAYLAND_DISPLAY="$(basename "$_wl")" && export WAYLAND_DISPLAY
 
-swayidle -w timeout 30 'true' \
-    resume 'wlopm --on "*"; touch /tmp/oxide-kiosk-wake' &
+# Supervised swayidle: if it ever exits, relaunch it — its resume hook is the
+# only wake-on-touch path, so losing it silently would strand a blanked panel.
+( while :; do
+      swayidle -w timeout 10 'true' \
+          resume 'wlopm --on "*"; touch /tmp/oxide-kiosk-wake'
+      sleep 2
+  done ) &
 "__BINDIR__/oxide-kiosk-idle-watcher" &
 
 wait "$CAGE_PID"
@@ -1284,8 +1326,12 @@ SESSION_EOF
     run install -Dm0644 "$SRC_DIR/contrib/systemd/oxide-kiosk.service" "$SYSTEMD_DIR/oxide-kiosk.service"
   else
     cat > "$SYSTEMD_DIR/oxide-kiosk.service" <<EOF
+# Oxide Player wall display kiosk: a single-app Wayland session (cage) that
+# runs Chromium pointed at the backend's /kiosk view on the HDMI panel.
+# Keep this copy in sync with contrib/systemd/oxide-kiosk.service.
 [Unit]
 Description=Oxide Player wall display kiosk (cage + Chromium)
+Documentation=https://github.com/OxideAI/oxide-player
 After=systemd-logind.service dbus.socket oxide-player.service
 Wants=oxide-player.service
 
@@ -1297,10 +1343,13 @@ PAMName=login
 TTYPath=/dev/tty7
 StandardInput=tty
 StandardOutput=journal
+StandardError=journal
 UtmpIdentifier=tty7
 ExecStart=$BIN_DIR/oxide-kiosk-session
+# Restart on any exit so a crashed browser lands back on the wall view.
 Restart=always
 RestartSec=3
+# Headless boot (no panel attached): fail fast instead of looping forever.
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
