@@ -18,6 +18,7 @@ import { ShortcutHelp } from "./components/ShortcutHelp";
 import { SearchBar } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
 import { useLibraryTracks } from "./useLibraryTracks";
+import { usePanelIdleReturn } from "./components/usePanelIdleReturn";
 import styles from "./App.module.css";
 export type LibraryViewMode = "albums" | "folders";
 
@@ -118,6 +119,10 @@ export function App() {
     statusError ??
     (status === null && !connected ? "Connecting to player…" : null);
   const banner = error ?? connectionError;
+  // Panel sessions only: auto-return to /kiosk after continuous stopped
+  // playback (plan U1/KTD4). Outside the kiosk branch so a Back-button trip
+  // into the full UI still returns; inert for non-panel clients and on /kiosk.
+  usePanelIdleReturn(status?.state ?? "stopped");
 
   useEffect(() => {
     if (overlayRef.current) overlayRef.current.inert = !navOpen;

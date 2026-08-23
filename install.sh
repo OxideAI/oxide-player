@@ -1174,6 +1174,147 @@ MOTD_EOF
   run chmod 755 /etc/update-motd.d/99-oxide-player
 }
 
+# Wall display kiosk: a single-app Wayland session (cage) running Chromium
+# pointed at the backend's /kiosk view on the attached HDMI touchscreen.
+# Blank/wake policy: playing or paused keeps the panel lit; continuous stopped
+# playback past KIOSK_IDLE_SECONDS blanks it; touch wakes it (swayidle resume).
+write_kiosk() {
+  log "Installing wall display kiosk (cage + Chromium)"
+  apt_install cage swayidle wlopm chromium-browser
+
+  local _port="${LISTEN##*:}"
+  local _port_suffix=""
+  [ "$_port" != "80" ] && _port_suffix=":$_port"
+  local _idle="${KIOSK_IDLE_SECONDS:-600}"
+
+  # Playback-aware blanker. Decides *when* to blank; wake-on-touch belongs to
+  # swayidle's resume hook, which also stamps a wake file so this watcher
+  # restarts its idle clock after a manual wake instead of re-blanking at once.
+  local _watcher
+  _watcher="$(cat <<'WATCHER_EOF'
+#!/bin/sh
+# oxide-kiosk-idle-watcher — blank the wall display after continuous stopped playback.
+BASE_URL="http://127.0.0.1__PORT_SUFFIX__"
+IDLE_SECONDS="__KIOSK_IDLE_SECONDS__"
+POLL=15
+WAKE_FILE="/tmp/oxide-kiosk-wake"
+stopped=0
+blanked=0
+wake_seen=0
+[ -f "$WAKE_FILE" ] && wake_seen=$(stat -c %Y "$WAKE_FILE" 2>/dev/null || echo 0)
+while :; do
+    state="$(curl -s --max-time 5 "$BASE_URL/api/status" 2>/dev/null \
+        | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')"
+    if [ -z "$state" ]; then
+        # Backend unreachable: hold current power state, pause the idle clock.
+        sleep "$POLL"
+        continue
+    fi
+    if [ "$state" = "stopped" ]; then
+        if [ -f "$WAKE_FILE" ]; then
+            wake_now=$(stat -c %Y "$WAKE_FILE" 2>/dev/null || echo 0)
+            if [ "$wake_now" -gt "$wake_seen" ]; then
+                wake_seen=$wake_now
+                stopped=0
+                blanked=0
+            fi
+        fi
+        if [ "$blanked" -eq 0 ]; then
+            stopped=$((stopped + POLL))
+            if [ "$stopped" -ge "$IDLE_SECONDS" ]; then
+                wlopm --off '*' && blanked=1
+            fi
+        fi
+    else
+        # Playing or paused counts as activity (paused keeps the panel lit).
+        stopped=0
+        if [ "$blanked" -eq 1 ]; then
+            wlopm --on '*' || true
+            blanked=0
+        fi
+    fi
+    sleep "$POLL"
+done
+WATCHER_EOF
+)"
+  _watcher="${_watcher//__PORT_SUFFIX__/$_port_suffix}"
+  _watcher="${_watcher//__KIOSK_IDLE_SECONDS__/$_idle}"
+  printf '%s\n' "$_watcher" > "$BIN_DIR/oxide-kiosk-idle-watcher"
+  run chmod 755 "$BIN_DIR/oxide-kiosk-idle-watcher"
+
+  # Session launcher: cage must own the seat first; helpers only get a Wayland
+  # connection after cage creates its socket, so they start afterwards with
+  # WAYLAND_DISPLAY exported. swayidle uses a short dummy timeout purely to arm
+  # its resume hook (resume fires only after idle has been entered); the wake
+  # stamp tells the watcher a human touched the panel.
+  local _session
+  _session="$(cat <<'SESSION_EOF'
+#!/bin/sh
+# oxide-kiosk-session — single-app Wayland kiosk session for the wall display.
+export XDG_SESSION_TYPE=wayland
+cage -d -s -- /usr/bin/chromium-browser \
+    --ozone-platform=wayland --enable-features=UseOzonePlatform \
+    --kiosk --noerrdialogs --disable-infobars \
+    --disable-session-crashed-bubble --hide-crash-restore-bubble \
+    "http://127.0.0.1__PORT_SUFFIX__/kiosk?panel=1&idle=__KIOSK_IDLE_SECONDS__" &
+CAGE_PID=$!
+
+i=0
+until [ -n "$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null)" ] || [ "$i" -ge 100 ]; do
+    sleep 0.2
+    i=$((i + 1))
+done
+_wl="$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null | head -n 1)"
+[ -n "$_wl" ] && WAYLAND_DISPLAY="$(basename "$_wl")" && export WAYLAND_DISPLAY
+
+swayidle -w timeout 30 'true' \
+    resume 'wlopm --on "*"; touch /tmp/oxide-kiosk-wake' &
+"__BINDIR__/oxide-kiosk-idle-watcher" &
+
+wait "$CAGE_PID"
+SESSION_EOF
+)"
+  _session="${_session//__PORT_SUFFIX__/$_port_suffix}"
+  _session="${_session//__KIOSK_IDLE_SECONDS__/$_idle}"
+  _session="${_session//__BINDIR__/$BIN_DIR}"
+  printf '%s\n' "$_session" > "$BIN_DIR/oxide-kiosk-session"
+  run chmod 755 "$BIN_DIR/oxide-kiosk-session"
+
+  if [ -f "$SRC_DIR/contrib/systemd/oxide-kiosk.service" ]; then
+    run install -Dm0644 "$SRC_DIR/contrib/systemd/oxide-kiosk.service" "$SYSTEMD_DIR/oxide-kiosk.service"
+  else
+    cat > "$SYSTEMD_DIR/oxide-kiosk.service" <<EOF
+[Unit]
+Description=Oxide Player wall display kiosk (cage + Chromium)
+After=systemd-logind.service dbus.socket oxide-player.service
+Wants=oxide-player.service
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+PAMName=login
+TTYPath=/dev/tty7
+StandardInput=tty
+StandardOutput=journal
+UtmpIdentifier=tty7
+ExecStart=$BIN_DIR/oxide-kiosk-session
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  fi
+
+  run systemctl daemon-reload
+  run systemctl enable oxide-kiosk || warn "Could not enable oxide-kiosk.service"
+  run systemctl restart oxide-kiosk || warn "oxide-kiosk not started (headless or no seat?) — playback is unaffected"
+}
+
+
 
 finish() {
   local _ip="$(hostname -I | awk '{print $1}')"
@@ -1251,6 +1392,7 @@ do_uninstall() {
     oxide-airplay.service
     oxide-bluealsa.service
     oxide-bluetooth-discoverable.service
+    oxide-kiosk.service
     camilladsp.service
   )
   run systemctl disable --now "${units[@]}" 2>/dev/null || true
@@ -1262,6 +1404,8 @@ do_uninstall() {
 
   remove_path "$BIN_DIR/oxide-player"
   remove_path "$BIN_DIR/camilladsp"
+  remove_path "$BIN_DIR/oxide-kiosk-idle-watcher"
+  remove_path "$BIN_DIR/oxide-kiosk-session"
   remove_path "$SHARE_DIR"
   remove_path "/etc/avahi/services/oxide-player.service"
   remove_path "$SUDOERS_RULE"
@@ -1325,6 +1469,7 @@ do_update() {
   setup_airplay
   install_units
   write_motd
+  write_kiosk
 
   log "Update complete."
   finish
@@ -1380,6 +1525,7 @@ main() {
   setup_airplay
   install_units
   write_motd
+  write_kiosk
   finish
 }
 
