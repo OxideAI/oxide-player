@@ -55,7 +55,7 @@ export function usePanelIdleReturn(playbackState: string): void {
 
   useEffect(() => {
     const config = readPanelConfig();
-    if (!config || !config.panel) return;
+    if (!config) return;
     if (window.location.pathname === "/kiosk") return;
 
     let stoppedSeconds = 0;
