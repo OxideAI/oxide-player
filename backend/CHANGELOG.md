@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.1...oxide-player-v0.20.2) (2026-08-27)
+
+
+### Bug Fixes
+
+* ability di disable kiosk ([8fd2f53](https://github.com/OxideAI/oxide-player/commit/8fd2f5351c60b759fa1064c2e56d99c54cac9623))
+
 ## [0.20.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.0...oxide-player-v0.20.1) (2026-08-23)
 
 
