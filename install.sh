@@ -43,6 +43,11 @@ BUILD_DIR="${BUILD_DIR:-/tmp/oxide-player-build}"
 # installer from racing that upload on a fresh release.
 RELEASE_ASSET_RETRIES="${RELEASE_ASSET_RETRIES:-30}"
 RELEASE_ASSET_RETRY_DELAY="${RELEASE_ASSET_RETRY_DELAY:-10}"
+# Wall display kiosk (cage + Chromium on the HDMI panel). Opt-in: disabled by
+# default so headless installs keep the login TTY and avoid burning the GPU/DRM
+# on boxes without a panel; set to 1 to provision it. KIOSK_IDLE_SECONDS and
+# KIOSK_TTY tune the blank timer and VT when enabled.
+KIOSK_ENABLED="${KIOSK_ENABLED:-0}"
 
 # ---- CLI / mode ------------------------------------------------------------
 update_mode=false
@@ -69,7 +74,7 @@ Environment variables (all optional):
   DATA_DIR, MPD_CONFIG, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
   CAMILLADSP_WS, AIRPLAY_NAME, AIRPLAY_CONFIG, ASOUND_CONFIG, SAMBA_CONFIG,
   SAMBA_SHARES_CONFIG, SERVICE_USER, BUILD_DIR, RELEASE_ASSET_RETRIES,
-  RELEASE_ASSET_RETRY_DELAY
+  RELEASE_ASSET_RETRY_DELAY, KIOSK_ENABLED, KIOSK_IDLE_SECONDS, KIOSK_TTY
 EOF
   exit 0
 }
@@ -1186,6 +1191,12 @@ write_kiosk() {
   log "Installing wall display kiosk (cage + Chromium)"
   # Fault isolation: a host where a kiosk package is unavailable (e.g. the
   # snap-transitional chromium-browser without snapd) must not abort the whole
+  # Wall display is opt-in: Chromium only launches on the HDMI panel when
+  # KIOSK_ENABLED=1. Default off keeps headless installs on the login TTY.
+  if [ "${KIOSK_ENABLED:-0}" != "1" ]; then
+    log "Wall display kiosk disabled (set KIOSK_ENABLED=1 to provision it) — playback is unaffected"
+    return 0
+  fi
   # install — playback and every other feature stay unaffected.
   if ! apt_install cage swayidle wlopm chromium-browser; then
     warn "Kiosk packages unavailable — skipping wall display setup (playback is unaffected)"

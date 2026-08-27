@@ -212,7 +212,7 @@ Pass a particular file with `./target/debug/oxide-player -c path/to/config.json`
 - Add an HTTP(S) stream in Radio, play it, or remove it. When available, icy metadata appears in now playing.
 - Edit CamillaDSP profiles, configure library sources, manage output devices, and manage Bluetooth audio devices on Linux from Settings.
 - Open `/kiosk` for the full-screen player and tune the FFT visualizer.
-- On a server with an HDMI display attached, the installer sets up a wall-display kiosk: the panel boots straight into `/kiosk` (no login prompt), touch works for walk-up control, and the screen blanks after 10 minutes of stopped playback — playing or paused keeps it lit, and touching the panel resets that timer; a touch on a blanked screen wakes it. Disable it with `sudo systemctl disable --now oxide-kiosk`; set the blank timer with `KIOSK_IDLE_SECONDS=<seconds>` at install time.
+- The wall-display kiosk (cage + Chromium on the HDMI panel) is opt-in and disabled by default — the installer keeps the login TTY unless you set `KIOSK_ENABLED=1` at install time. When enabled, the panel boots straight into `/kiosk` (no login prompt), touch works for walk-up control, and the screen blanks after 10 minutes of stopped playback — playing or paused keeps it lit, and touching the panel resets that timer; a touch on a blanked screen wakes it. Turn it off with `sudo systemctl disable --now oxide-kiosk`; set the blank timer with `KIOSK_IDLE_SECONDS=<seconds>` at install time.
 - Press `?` or `h` to open the keyboard shortcut reference.
 
 ## Development
