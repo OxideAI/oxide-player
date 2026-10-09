@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>Oxide Visualizer</title>
+  <style>
+    :root {
+      /* Mirror frontend/src/index.css accents */
+      --accent: #10b981;   /* emerald */
+      --accent-2: #818cf8; /* indigo */
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #000; overflow: hidden;
+      /* OLED black, no scrollbars */
+    }
+    #stage {
+      position: fixed; inset: 0;
+      width: 100vw; height: 100vh;
+      display: block;
+      /* Smooth fade to black when audio is silent (plan R8) */
+      transition: opacity 900ms ease;
+      opacity: 1;
+    }
+    #stage.idle { opacity: 0; }
+    /* On a touch panel, suppress the long-press / text selection menu */
+    body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  </style>
+</head>
+<body>
+  <canvas id="stage"></canvas>
+  <script>
+  (function () {
+    "use strict";
+
+    var ACCENT = "#10b981";
+    var ACCENT2 = "#818cf8";
+    var BANDS = 72;        // matches backend visualizer::BANDS
+    var BAR_COUNT = 64;    // drawn bars (bins are resampled down)
+    var IDLE_LEVEL = 0.01; // level below this counts as silence
+    var IDLE_FRAMES = 60;  // ~1.5s at 40fps before fade
+
+    var canvas = document.getElementById("stage");
+    var ctx = canvas.getContext("2d");
+
+    var dpr = Math.max(1, window.devicePixelRatio || 1);
+    var W = 0, H = 0;
+    function resize() {
+      dpr = Math.max(1, window.devicePixelRatio || 1);
+      W = canvas.clientWidth;
+      H = canvas.clientHeight;
+      canvas.width = Math.floor(W * dpr);
+      canvas.height = Math.floor(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    // Smoothed bar values (attack fast, release slow) for a calm look.
+    var bars = new Float32Array(BAR_COUNT);
+    var targets = new Float32Array(BAR_COUNT);
+    var level = 0;
+    var silence = 0;
+
+    function resample(bins) {
+      // Average BANDS source bins down into BAR_COUNT drawn bars, log-ish
+      // grouping so low frequencies (dense in the source) still read.
+      var n = bins.length;
+      for (var i = 0; i < BAR_COUNT; i++) {
+        var lo = Math.floor((i / BAR_COUNT) * n);
+        var hi = Math.max(lo + 1, Math.floor(((i + 1) / BAR_COUNT) * n));
+        var sum = 0;
+        for (var j = lo; j < hi; j++) sum += bins[j];
+        targets[i] = sum / (hi - lo);
+      }
+    }
+
+    function hexToRgba(hex, a) {
+      var v = hex.replace("#", "");
+      var r = parseInt(v.substring(0, 2), 16);
+      var g = parseInt(v.substring(2, 4), 16);
+      var b = parseInt(v.substring(4, 6), 16);
+      return "rgba(" + r + "," + g + "," + b + "," + a + ")";
+    }
+
+    function draw() {
+      // Attack/release smoothing
+      for (var i = 0; i < BAR_COUNT; i++) {
+        var t = targets[i];
+        if (t > bars[i]) bars[i] += (t - bars[i]) * 0.5;
+        else bars[i] += (t - bars[i]) * 0.12;
+      }
+
+      ctx.clearRect(0, 0, W, H);
+      var gap = Math.max(2, Math.floor(W / BAR_COUNT * 0.28));
+      var bw = (W - gap * (BAR_COUNT - 1)) / BAR_COUNT;
+      var baseY = H * 0.78;
+      var maxH = H * 0.62;
+
+      for (var k = 0; k < BAR_COUNT; k++) {
+        var v = Math.min(1, bars[k]);
+        var h = Math.max(2, v * maxH);
+        var x = k * (bw + gap);
+        // Accent -> accent-2 gradient across the spectrum
+        var mix = k / (BAR_COUNT - 1);
+        var col = mix < 0.5
+          ? hexToRgba(ACCENT, 0.95)
+          : hexToRgba(ACCENT2, 0.95);
+        var glow = mix < 0.5 ? ACCENT : ACCENT2;
+
+        // Up bar
+        var grad = ctx.createLinearGradient(0, baseY - h, 0, baseY);
+        grad.addColorStop(0, glow);
+        grad.addColorStop(1, hexToRgba(mix < 0.5 ? ACCENT : ACCENT2, 0.25));
+        ctx.fillStyle = grad;
+        ctx.shadowColor = glow;
+        ctx.shadowBlur = 18 * v;
+        roundRect(x, baseY - h, bw, h, Math.min(bw / 2, 6));
+        ctx.fill();
+
+        // Mirrored reflection
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = hexToRgba(mix < 0.5 ? ACCENT : ACCENT2, 0.12);
+        roundRect(x, baseY + gap, bw, h * 0.5, Math.min(bw / 2, 6));
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      // Idle fade (plan R8): fade the whole canvas when level stays silent.
+      if (level < IDLE_LEVEL) {
+        silence++;
+        if (silence >= IDLE_FRAMES) canvas.classList.add("idle");
+      } else {
+        silence = 0;
+        canvas.classList.remove("idle");
+      }
+    }
+
+    function roundRect(x, y, w, h, r) {
+      if (h < 0) { y += h; h = -h; }
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    var raf = 0;
+    function loop() {
+      draw();
+      raf = requestAnimationFrame(loop);
+    }
+    loop();
+
+    // ---- WebSocket: /api/visualizer ---------------------------------------
+    var ws = null;
+    var backoff = 1000;
+    var stopped = false;
+
+    function url() {
+      var proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return proto + "//" + location.host + "/api/visualizer";
+    }
+
+    function connect() {
+      if (stopped) return;
+      try {
+        ws = new WebSocket(url());
+      } catch (e) {
+        schedule();
+        return;
+      }
+      ws.onmessage = function (ev) {
+        try {
+          var f = JSON.parse(ev.data);
+          if (Array.isArray(f.bins)) {
+            resample(f.bins);
+            level = typeof f.level === "number" ? f.level : 0;
+            backoff = 1000;
+          }
+        } catch (e) { /* ignore malformed frame */ }
+      };
+      ws.onopen = function () { backoff = 1000; };
+      ws.onclose = function () { schedule(); };
+      ws.onerror = function () { if (ws) ws.close(); };
+    }
+
+    function schedule() {
+      if (stopped) return;
+      var delay = backoff;
+      backoff = Math.min(backoff * 2, 10000);
+      setTimeout(connect, delay);
+    }
+
+    connect();
+
+    // Pause the render loop when the tab is hidden to save GPU.
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
+      } else if (!raf) {
+        loop();
+      }
+    });
+  })();
+  </script>
+</body>
+</html>

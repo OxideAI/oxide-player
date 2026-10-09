@@ -142,7 +142,6 @@ install.sh --update | --fix-perms         # installer modes (NOT backend CLI fla
 - **External services**: MPD 0.24 (autostart via backend), CamillaDSP 4.1.3, BlueZ on Linux; default listen **127.0.0.1:8000** (installer defaults to :80; README is stale on both counts — install URLs say :8000 and its quick-start comment claims default listen 0.0.0.0:8000).
 - **Versioning**: release-please, single rust package `backend`, tags `oxide-player-v*`. **Known bug**: the `extra-files: ["frontend/package.json"]` entry resolves relative to the package dir → `backend/frontend/package.json` (missing) → silently skipped; `frontend/package.json` is stuck at 0.9.0 while backend is 0.11.1 (fix would be `../frontend/package.json`). `frontend/CHANGELOG.md` is likewise stale (legacy `oxide-player-frontend-v*` component). Don't assume frontend/backend versions match.
 - **Dependabot**: cargo `/backend` + npm `/frontend` weekly (limit 10 each), github-actions weekly.
-- **Security**: `.envrc` (direnv) contains a plaintext `SUDO_PASSWORD` (plus SEARXNG_BASE_URL and a device comment) and is NOT in `.gitignore` — never commit it; treat repo pushes as needing a pre-push check for it.
 
 ## Testing & QA
 
