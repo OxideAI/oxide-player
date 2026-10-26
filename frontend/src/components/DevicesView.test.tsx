@@ -5,11 +5,11 @@ import { ApiError } from "../api";
 import type {
   BtDevice,
   DeviceConfig,
+  DeviceOutput,
   InputStatusResponse,
-  OutputDevice,
   UsbAudioDevice,
 } from "../types";
-const listDevices = vi.fn<() => Promise<OutputDevice[]>>();
+const listDevices = vi.fn<() => Promise<DeviceOutput[]>>();
 const listConfigs = vi.fn<() => Promise<DeviceConfig[]>>();
 const listUsbDevices = vi.fn<() => Promise<UsbAudioDevice[]>>();
 const listBluetoothDevices = vi.fn<() => Promise<BtDevice[]>>();
@@ -74,11 +74,18 @@ function makeBluetoothConfig(address = "AA:BB:CC:DD:EE:FF"): DeviceConfig {
   };
 }
 
-function makeOutput(over: Partial<OutputDevice> = {}): OutputDevice {
+function makeOutput(over: Partial<DeviceOutput> = {}): DeviceOutput {
   return {
     id: 1,
     name: "USB DAC",
     enabled: true,
+    role: "playback",
+    selectable: true,
+    selection_key: "alsa:USB DAC",
+    configured: true,
+    available: true,
+    connected: null,
+    active: true,
     dsp_supported: true,
     dsp_enabled: false,
     ...over,
@@ -148,6 +155,27 @@ describe("DevicesView output controls", () => {
 
     fireEvent.click(disable);
     await waitFor(() => expect(disableDeviceDsp).toHaveBeenCalledWith(1));
+  });
+  it("labels a routed output as DSP active instead of disabled", async () => {
+    listDevices.mockResolvedValue([
+      makeOutput({
+        dsp_enabled: true,
+        enabled: false,
+        diagnostic_code: "inactive",
+      }),
+    ]);
+
+    const { getByText, queryByText } = render(<DevicesView />);
+    await waitFor(() => expect(getByText("DSP active · direct output off")).toBeTruthy());
+    expect(queryByText("DSP active · direct output off")).not.toBeNull();
+  });
+  it("keeps the Disabled label for an output with no DSP route", async () => {
+    listDevices.mockResolvedValue([
+      makeOutput({ dsp_enabled: false, enabled: false, diagnostic_code: "inactive" }),
+    ]);
+
+    const { getByText } = render(<DevicesView />);
+    await waitFor(() => expect(getByText("Disabled")).toBeTruthy());
   });
   it("scans USB audio hardware and opens its device details", async () => {
     listUsbDevices.mockResolvedValue([
@@ -264,7 +292,7 @@ describe("DevicesView Bluetooth actions", () => {
         ...makeOutput({ id: 9, name: "visualizer" }),
         role: "system",
         selectable: false,
-      } as OutputDevice,
+      } as DeviceOutput,
     ]);
 
     const { getByRole, queryByRole } = render(<DevicesView />);

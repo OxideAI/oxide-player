@@ -48,7 +48,8 @@ function outputStatus(output: DeviceOutput): string {
     return "Provisioning failed — retry MPD reload";
   if (output.diagnostic_code === "disconnected")
     return "Bluetooth disconnected";
-  if (output.diagnostic_code === "inactive") return "Disabled";
+  if (output.diagnostic_code === "inactive")
+    return output.dsp_enabled ? "DSP active · direct output off" : "Disabled";
   if (output.diagnostic_code === "missing_profile")
     return "DSP profile missing";
   if (output.diagnostic_code === "unsupported_output_type")
