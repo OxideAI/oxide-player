@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.2...oxide-player-v0.20.3) (2026-10-26)
+
+
+### Bug Fixes
+
+* Labeling ([ac4f0ae](https://github.com/OxideAI/oxide-player/commit/ac4f0aea393eb3ef0bdc731fd8089621f257e767))
+
 ## [0.20.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.1...oxide-player-v0.20.2) (2026-08-27)
 
 
