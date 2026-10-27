@@ -81,7 +81,10 @@ jobs:
             echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $ubuntu_codename main" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
             echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${ubuntu_codename}-updates main" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
             sudo apt-get update
-            sudo apt-get install -y libasound2-dev:arm64 libdbus-1-dev:arm64
+            # --allow-downgrades: fresh Ubuntu images (e.g. resolute 26.04) ship base
+            # packages newer than what ports.ubuntu.com main currently offers for arm64,
+            # so pulling libasound2-dev:arm64 pulls older arm64 deps; apt refuses otherwise.
+            sudo apt-get install -y --allow-downgrades libasound2-dev:arm64 libdbus-1-dev:arm64
             ls /usr/lib/aarch64-linux-gnu/pkgconfig/alsa.pc
           else
             sudo apt-get install -y libasound2-dev libdbus-1-dev
