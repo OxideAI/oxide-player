@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.5](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.4...oxide-player-v0.20.5) (2026-10-27)
+
+
+### Bug Fixes
+
+* keep release binaries runnable on baseline x86_64 CPUs ([cc21fad](https://github.com/OxideAI/oxide-player/commit/cc21fad9c19ecaf686fcb605b596033652886765))
+
 ## [0.20.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.3...oxide-player-v0.20.4) (2026-10-27)
 
 
