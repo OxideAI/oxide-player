@@ -644,7 +644,10 @@ mod tests {
         let started = tokio::time::Instant::now();
         let outcome = m.apply_profile(base("DAC")).await.unwrap();
 
-        assert!(started.elapsed() < Duration::from_secs(2));
+        // On loaded CI runners the connect probe (2s timeout) or scheduler
+        // stalls can push wall-clock past 2s; the semantic guard is the error
+        // message itself, and this only bounds us below the 10s ws deadline.
+        assert!(started.elapsed() < Duration::from_secs(8));
         assert!(outcome.persisted);
         assert!(!outcome.reload_confirmed);
         assert!(outcome.reload_error.as_deref().is_some_and(|error| {
