@@ -333,9 +333,12 @@ install_prebuilt_backend() {
     return 0
   fi
   warn "Prebuilt binary cannot run on this CPU (codegen newer than the machine supports)"
-  warn "Falling back to building from source with baseline x86-64 codegen"
+  warn "Falling back to building from source with generic x86-64 baseline codegen"
   ensure_rust
-  ( cd "$SRC_DIR" && RUSTFLAGS="${OXIDE_BASELINE_RUSTFLAGS:--C target-cpu=x86-64-v2}" cargo build --release )
+  # x86-64-v2 (SSE4.2/POPCNT) still SIGILLs on pre-2009 CPUs (Penryn/Core 2 Duo).
+  # Default `-C target-cpu=x86-64` never emits those; runtime dispatch handles
+  # faster paths only where the host supports them.
+  ( cd "$SRC_DIR" && RUSTFLAGS="${OXIDE_BASELINE_RUSTFLAGS:--C target-cpu=x86-64}" cargo build --release )
   run install -Dm0755 "$SRC_DIR/target/release/oxide-player" "$BIN_DIR/oxide-player"
   if ! smoke_backend; then
     die "Locally built backend still fails its startup smoke test — see /tmp/oxide-smoke-failure.log"
