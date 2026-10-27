@@ -216,7 +216,7 @@ Product Contract preserved unchanged from the requirements-only source.
 - **Goal:** Confirm the `surf` kiosk runs on target hardware and meets the RAM target.
 - **Requirements:** R11, R1, R3, R8.
 - **Dependencies:** U1, U2, U3.
-- **Files:** (verification only) deploy to `192.168.100.104`; no repository file changes.
+- **Files:** (verification only) deploy to `192.168.3.100`; no repository file changes.
 - **Approach:**
   1. Build the frontend (emits `dist/viz.html`) and deploy backend + frontend to the target.
   2. Re-run `install.sh` with `KIOSK_ENABLED=1` (default `viz`), or edit the baked URL for `full`; `systemctl restart oxide-kiosk`.
@@ -234,7 +234,7 @@ Product Contract preserved unchanged from the requirements-only source.
 - **Static serve:** `GET http://127.0.0.1__PORT_SUFFIX__/viz.html` → 200; `GET http://127.0.0.1__PORT_SUFFIX__/kiosk` → 200 (on a default install that is port 80; the `__PORT_SUFFIX__` token tracks `LISTEN`).
 - **Animation smoke:** load `/viz.html` against a running backend with active audio and the visualizer capture enabled; the canvas animates from WS frames (browser smoke, no automated unit test).
 - **Installer:** clean VM/container install with `KIOSK_ENABLED=1` — `surf` present, session execs `surf -F <url>`, no `chromium` package installed.
-- **Live deploy (target `192.168.100.104`):** re-run `install.sh` `KIOSK_ENABLED=1`; `systemctl restart oxide-kiosk`; measure `surf` RSS (e.g. `ps -o rss= -C surf`) ≤ ~130 MB; kill `surf` → session restarts; stop playback → panel blanks via `wlopm`; touch wakes.
+- **Live deploy (target `192.168.3.100`):** re-run `install.sh` `KIOSK_ENABLED=1`; `systemctl restart oxide-kiosk`; measure `surf` RSS (e.g. `ps -o rss= -C surf`) ≤ ~130 MB; kill `surf` → session restarts; stop playback → panel blanks via `wlopm`; touch wakes.
 - No automated unit tests for the page; UI smoke and installer verification cover it.
 
 ---
