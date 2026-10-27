@@ -29,6 +29,7 @@ Oxide scans the library into SQLite and serves optimized cover art. Its JSON API
 - Open kiosk mode for full-screen now playing, a real-time FFT visualizer, persistent visualizer settings, and reduced-motion support.
 - Install the PWA to a home screen. The service worker updates the app and caches cover art.
 - The installer creates an SMB Music share and advertises the web UI, share, and AirPlay receiver through mDNS.
+- On Linux, the installer hardens the network for SMB-over-wifi: wifi power-save off, a 2-minute dead-link watchdog that restarts the wifi subsystem, an idle-timeout bump for SMB sessions, and wired-first netplan precedence so an Ethernet cable always outranks wifi when plugged.
 
 ## Install
 
@@ -66,14 +67,31 @@ Data/library: /var/lib/oxide-player
 Logs:         journalctl -u oxide-player -f
 ```
 
-Copy music into the `Music` share. Additional folders added under **Settings → Music library sources** are validated, exposed as their own SMB shares, and rescanned automatically; removing a source removes its share. If the library is empty after files were copied with `sudo`, repair ownership and permissions and rescan:
+Copy music into the `Music` share (the installer names the first share `[Music]` when `MPD_MUSIC_DIR` ends in `music`; sources added in the UI get `Oxide-<name>` share names). Additional folders added under **Settings → Music library sources** are validated, exposed as their own SMB shares, and rescanned automatically; removing a source removes its share. If the library is empty after files were copied with `sudo`, repair ownership and permissions and rescan:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh \
   | sudo bash -s -- --fix-perms
 ```
 
-Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `MPD_CONFIG`, `SAMBA_CONFIG`, `SAMBA_SHARES_CONFIG`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, `AIRPLAY_NAME`, `AIRPLAY_CONFIG`, and `SERVICE_USER`.
+Run `sudo bash install.sh --help` to see all installer options. Common environment overrides include `MPD_MUSIC_DIR`, `MPD_CONFIG`, `SAMBA_CONFIG`, `SAMBA_SHARES_CONFIG`, `LISTEN`, `BIN_DIR`, `CONFIG_DIR`, `DATA_DIR`, `CAMILLADSP_CONFIG`, `AIRPLAY_NAME`, `AIRPLAY_CONFIG`, `SERVICE_USER`, `WIFI_IFACE`, and `WIFI_HEAL_INTERVAL`.
+
+### Network stability for SMB over wifi
+
+If the server loses its network link during heavy SMB copies, the watchdog repairs it
+automatically and logs what it did:
+
+```bash
+journalctl -t oxide-wifi-heal
+```
+
+The suite is installed by default on hosts with a wifi interface: wifi power-save off
+(`oxide-wifi-powersave-off.service`), the heal watchdog (`oxide-wifi-heal.timer`, default every
+2 minutes, adjustable with `WIFI_HEAL_INTERVAL`), Samba `deadtime = 120`, and
+`/etc/netplan/01-oxide-wired-priority.yaml` (a plugged-in Ethernet cable always takes over the
+default route). Force a specific wifi interface with `WIFI_IFACE=<name>` at install time. All
+three units are removed by `sudo bash install.sh --uninstall`. Full details:
+[`ARCHITECTURE.md`](ARCHITECTURE.md), section **Installer & system integration**.
 
 ### iPhone and iPad playback
 
@@ -103,7 +121,10 @@ curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.s
   | sudo bash -s -- --update
 ```
 
-The `--update` mode repairs the managed MPD output include and preserves existing MPD/ALSA configuration where possible. Run the full installer when provisioning a host or reapplying all system integration:
+The `--update` mode repairs the managed MPD output include, adds `deadtime` to installer-managed
+Samba configs, and (re)installs the WiFi stability suite (power-save off, heal watchdog,
+wired-first netplan). It preserves existing MPD/ALSA configuration where possible. Run the full
+installer when provisioning a host or reapplying all system integration:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh | sudo bash
@@ -128,11 +149,14 @@ sudo bash install.sh --uninstall
 Uninstall preserves `/etc/oxide-player`, `/var/lib/oxide-player`, and the
 configured music directory, including the library database, playlists, radio
 stations, and DSP data. It does not remove the service account or Debian
-packages. When the installer created `.pre-oxide` backups for MPD or Samba,
-uninstall restores them; otherwise those system configuration files are left
-unchanged and a warning is printed. Pass the same `DATA_DIR`, `MPD_CONFIG`,
-`CONFIG_DIR`, `BIN_DIR`, `SHARE_DIR`, and related overrides used during
-installation when uninstalling a custom deployment.
+packages. It removes the WiFi stability suite (`oxide-wifi-heal.timer`/
+`.service`, `oxide-wifi-powersave-off.service`, `oxide-wifi-heal.sh`,
+`/etc/netplan/01-oxide-wired-priority.yaml` — run `sudo netplan apply`
+afterwards to converge). When the installer created `.pre-oxide` backups for
+MPD or Samba, uninstall restores them; otherwise those system configuration
+files are left unchanged and a warning is printed. Pass the same `DATA_DIR`,
+`MPD_CONFIG`, `CONFIG_DIR`, `BIN_DIR`, `SHARE_DIR`, and related overrides used
+during installation when uninstalling a custom deployment.
 
 **From source (manual build):**
 
@@ -231,6 +255,7 @@ Pass a particular file with `./target/debug/oxide-player -c path/to/config.json`
 - Backend and frontend module breakdown.
 - API route overview and integration notes.
 - MPD integration notes and gotchas, including 0-based positions, random-mode shuffle, and CUE handling.
+- Installer & system integration, including the WiFi stability suite, Samba, and library sources.
 - Build and serve details.
 
 ## License

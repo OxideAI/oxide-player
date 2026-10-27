@@ -125,6 +125,17 @@ apt_install() {
   fi
 }
 
+# Install iputils-ping even when the toolchain above doesn't need it: the
+# wifi watchdog below pings the gateway, and minimized server images
+# (Ubuntu cloud/minimal layers) ship without ping entirely. Without it the
+# watchdog runs blind (detection always fails) and can bounce wpa_supplicant
+# every cycle even on a healthy link.
+ensure_ping() {
+  command -v ping >/dev/null 2>&1 && return 0
+  log "Installing ping (iputils-ping) — required by the wifi watchdog"
+  apt_install iputils-ping
+}
+
 ensure_rust() {
   if command -v cargo >/dev/null 2>&1; then
     log "Rust toolchain already present: $(cargo --version)"
@@ -385,6 +396,208 @@ fix_vfat_music_mounts() {
   fi
 }
 
+#
+# WiFi stability suite. Observed failure mode on brcmsmac/b43 boxes serving
+# SMB copies over wifi: bursts of CTRL-EVENT-BEACON-LOSS, sometimes ending in
+# a silently dead link (no error anywhere in the journal) that only a
+# wpa_supplicant restart or a link bounce recovers. Two parts:
+#   1. powersave off (live + persistent unit) — wifi power-save idle timers
+#      are the usual trigger for beacon loss on this driver family;
+#   2. a 2-minute watchdog that pings the gateway and heals a dead link by
+#      restarting wpa_supplicant+networkd, then by bouncing the interface.
+# Wired-first netplan precedence is also provisioned so an Ethernet cable,
+# when plugged later, always outranks wifi without a manual config edit.
+#
+
+WIFI_IFACE="${WIFI_IFACE:-}"
+WIFI_HEAL_INTERVAL="${WIFI_HEAL_INTERVAL:-2min}"
+
+detect_wifi_iface() {
+  # Only linux wifi class devices; empty when the box is wired-only.
+  local dev
+  for dev in /sys/class/net/*; do
+    if [ -d "${dev}/wireless" ]; then
+      basename "$dev"
+      return 0
+    fi
+  done
+  return 1
+}
+
+setup_wifi_powersave_off() {
+  local iface="$WIFI_IFACE"
+  if [ -z "$iface" ]; then
+    iface="$(detect_wifi_iface)" || { log "No wifi interface; skipping wifi powersave setup"; return 0; }
+  fi
+  [ -e "/sys/class/net/$iface" ] || { log "Wifi interface $iface not present; skipping powersave setup"; return 0; }
+  if command -v iw >/dev/null 2>&1; then
+    run iw dev "$iface" set power_save off || warn "could not set power_save off (driver may not support iw)"
+  fi
+  local unit="${SYSTEMD_DIR}/oxide-wifi-powersave-off.service"
+  log "Installing wifi powersave-off unit ($unit)"
+  cat > "$unit" <<EOF
+[Unit]
+Description=Oxide: disable wifi power save (stable SMB over wifi)
+After=wpa_supplicant.service
+Wants=wpa_supplicant.service
+
+[Service]
+Type=oneshot
+# $iface may not exist on other hardware; failure must not wedge the boot.
+ExecStart=-/usr/sbin/iw dev $iface set power_save off
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  run systemctl daemon-reload
+  run systemctl enable --now oxide-wifi-powersave-off.service
+}
+
+setup_wifi_heal() {
+  local iface="$WIFI_IFACE"
+  if [ -z "$iface" ]; then
+    iface="$(detect_wifi_iface)" || { log "No wifi interface; skipping wifi heal watchdog"; return 0; }
+  fi
+  [ -e "/sys/class/net/$iface" ] || { log "Wifi interface $iface not present; skipping heal watchdog"; return 0; }
+  ensure_ping
+
+  # Discover the gateway at install time; the watchdog only needs a default
+  # target on the wifi subnet. Falls back to any default route's gateway.
+  local gw
+  gw="$(ip route show default 2>/dev/null | awk '{print $3; exit}')"
+  if [ -z "$gw" ]; then
+    warn "No default gateway found; watchdog will discover it at run time"
+    gw="\$(ip route show default | awk '{print \$3; exit}')"
+  fi
+
+  log "Installing wifi heal watchdog (gateway $gw, every $WIFI_HEAL_INTERVAL)"
+  run mkdir -p "$BIN_DIR"
+  cat > "$BIN_DIR/oxide-wifi-heal.sh" <<EOF
+#!/bin/bash
+# Managed by oxide-player install.sh — wifi dead-link watchdog.
+# Healthy link: exit 0, nothing touched. Dead link: restart
+# wpa_supplicant+networkd, then bounce the link as a second attempt.
+GW="$gw"
+IFACE="$iface"
+LOG_TAG="oxide-wifi-heal"
+[ "\$EUID" -eq 0 ] || { echo "must run as root" >&2; exit 1; }
+guard() {
+  [ -n "\$GW" ] || return 1
+  ip route get "\$GW" >/dev/null 2>&1 || return 1
+  ping -c 3 -W 3 "\$GW" >/dev/null 2>&1
+}
+if guard; then
+  exit 0
+fi
+logger -t "\$LOG_TAG" "gateway \$GW unreachable — bouncing wpa_supplicant"
+systemctl restart wpa_supplicant systemd-networkd
+sleep 8
+if guard; then
+  logger -t "\$LOG_TAG" "healed by wpa_supplicant/networkd restart"
+  exit 0
+fi
+logger -t "\$LOG_TAG" "still down — bouncing $iface"
+ip link set "$iface" down
+ip link set "$iface" up
+sleep 5
+if guard; then
+  logger -t "\$LOG_TAG" "healed by link bounce"
+else
+  logger -t "\$LOG_TAG" "wifi still down — manual check needed"
+fi
+EOF
+  run chmod 755 "$BIN_DIR/oxide-wifi-heal.sh"
+
+  cat > "$SYSTEMD_DIR/oxide-wifi-heal.service" <<EOF
+[Unit]
+Description=Oxide: heal silent wifi death (restart wpa/networkd, bounce link)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$BIN_DIR/oxide-wifi-heal.sh
+EOF
+
+  cat > "$SYSTEMD_DIR/oxide-wifi-heal.timer" <<EOF
+[Unit]
+Description=Oxide: run wifi heal watchdog every $WIFI_HEAL_INTERVAL
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=$WIFI_HEAL_INTERVAL
+AccuracySec=30s
+Unit=oxide-wifi-heal.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  run systemctl daemon-reload
+  run systemctl enable --now oxide-wifi-heal.timer
+  # First run must be a proven no-op on a healthy link, not a surprise bounce.
+  if "$BIN_DIR/oxide-wifi-heal.sh"; then
+    log "Wifi watchdog armed (healthy-link check passed)"
+  else
+    warn "Wifi watchdog first run could not confirm the gateway — check $BIN_DIR/oxide-wifi-heal.sh"
+  fi
+}
+
+# Netplan: give Ethernet a lower route metric than wifi so that a plugged
+# cable always wins the default route. WiFi stays the fallback — nothing is
+# removed, so installs without ethernet or without netplan are unaffected.
+setup_wired_priority() {
+  [ -d /etc/netplan ] || { log "No netplan; skipping wired-priority setup"; return 0; }
+  # Find the first physical (non-virtual) ethernet interface: has a device
+  # dir (PCI/USB backing) and no wireless subdir.
+  local eth=""
+  local dev
+  for dev in /sys/class/net/*; do
+    dev="$(basename "$dev")"
+    case "$dev" in lo|docker*|veth*|br-*) continue ;; esac
+    if [ -e "/sys/class/net/$dev/device" ] && ! [ -d "/sys/class/net/$dev/wireless" ]; then
+      eth="$dev"
+      break
+    fi
+  done
+  [ -n "$eth" ] || { log "No physical ethernet interface; skipping wired-priority setup"; return 0; }
+  local mac
+  mac="$(cat "/sys/class/net/$eth/address")"
+  local target="/etc/netplan/01-oxide-wired-priority.yaml"
+  if [ -f "$target" ] && grep -Fq "01-oxide-wired-priority.yaml is managed by install.sh" "$target"; then
+    log "Wired-priority netplan already installed"
+    return 0
+  fi
+  log "Installing wired-priority netplan ($eth, metric 100)"
+  # Keep the interface name stable like subiquity does (match by MAC); some
+  # installs (this one included) rely on set-name for the enp4s0f0 identity.
+  cat > "$target" <<EOF
+# 01-oxide-wired-priority.yaml is managed by install.sh. Plugging an ethernet
+# cable must always outrank wifi; wifi stays the fallback unchanged.
+network:
+  version: 2
+  ethernets:
+    $eth:
+      match:
+        macaddress: "$mac"
+      set-name: $eth
+      dhcp4: true
+      dhcp4-overrides:
+        route-metric: 100
+EOF
+  run chmod 600 "$target"
+  if command -v netplan >/dev/null 2>&1; then
+    if run netplan generate; then
+      # Apply is disruptive (interfaces bounce); wifi rejoins in seconds.
+      run netplan apply
+    else
+      warn "netplan generate failed — removing $target"
+      remove_path "$target"
+    fi
+  fi
+}
+
 setup_user_dirs() {
   if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     run useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -466,6 +679,8 @@ setup_samba() {
   fi
 
   log "Writing Samba config"
+  # deadtime=120: idle SMB sessions (Finder windows) survive network blips
+  # instead of being torn down after Samba's 15-min default idle timeout.
   cat > "$SAMBA_CONFIG" <<SAMBAEOF
 [global]
    workgroup = WORKGROUP
@@ -474,6 +689,7 @@ setup_samba() {
    security = user
    map to guest = Bad User
    guest account = nobody
+   deadtime = 120
    include = $SAMBA_SHARES_CONFIG
 SAMBAEOF
 
@@ -512,6 +728,20 @@ ensure_samba_shares() {
   else
     warn "Samba config is not Oxide-managed; leaving it unchanged (library-source shares need an include)"
   fi
+}
+
+# Older Oxide-managed configs predate the idle-session keepalive. Add
+# deadtime only to configs the installer generated (marked by netbios name);
+# user-managed configs are left untouched.
+ensure_samba_deadtime() {
+  [ -f "$SAMBA_CONFIG" ] || return 0
+  grep -Fq 'netbios name = OXIDE-PLAYER' "$SAMBA_CONFIG" || return 0
+  if grep -Fq 'deadtime' "$SAMBA_CONFIG"; then
+    return 0
+  fi
+  log "Adding deadtime=120 to $SAMBA_CONFIG (idle SMB sessions survive network blips)"
+  run sed -i '/^\[global\]/a\   deadtime = 120' "$SAMBA_CONFIG"
+  run systemctl restart smbd || warn "smbd restart failed"
 }
 
 setup_avahi() {
@@ -1425,6 +1655,7 @@ finish() {
   log "  mDNS:        smb://${_hostname}.local/Music"
   log "AirPlay:       select '$AIRPLAY_NAME' on an iPhone/iPad on the same LAN"
   log "Bluetooth:     pair an iPhone with 'Oxide Player', then enable A2DP input in Settings"
+  log "Wifi:          power-save off + 2-min dead-link watchdog (journalctl -t oxide-wifi-heal)"
   log "Edit config:   $CONFIG_DIR/config.json"
   log "Logs:          journalctl -u oxide-player -f"
   log ""
@@ -1488,14 +1719,28 @@ do_uninstall() {
     oxide-bluealsa.service
     oxide-bluetooth-discoverable.service
     oxide-kiosk.service
+    oxide-wifi-powersave-off.service
     camilladsp.service
   )
+  run systemctl disable --now oxide-wifi-heal.timer 2>/dev/null || true
+  run systemctl disable --now oxide-wifi-powersave-off.service 2>/dev/null || true
   run systemctl disable --now "${units[@]}" 2>/dev/null || true
   run systemctl daemon-reload || true
 
   for unit in "${units[@]}"; do
     remove_path "$SYSTEMD_DIR/$unit"
   done
+
+  remove_path "$SYSTEMD_DIR/oxide-wifi-heal.timer"
+  remove_path "$SYSTEMD_DIR/oxide-wifi-heal.service"
+  remove_path "$BIN_DIR/oxide-wifi-heal.sh"
+  # Wired-priority netplan: removing it reverts to subiquity-config only.
+  # Only touch netplan if our file exists; never trigger netplan re-apply
+  # automatically (interfaces would bounce during an uninstall).
+  if [ -f /etc/netplan/01-oxide-wired-priority.yaml ]; then
+    remove_path /etc/netplan/01-oxide-wired-priority.yaml
+    warn "Removed /etc/netplan/01-oxide-wired-priority.yaml — run 'sudo netplan apply' to converge"
+  fi
 
   remove_path "$BIN_DIR/oxide-player"
   remove_path "$BIN_DIR/camilladsp"
@@ -1563,6 +1808,10 @@ do_update() {
   ensure_mpd_loopback_mixer || true
   write_camilladsp_config
   ensure_samba_shares || true
+  ensure_samba_deadtime || true
+  setup_wifi_powersave_off
+  setup_wifi_heal
+  setup_wired_priority
   write_visualizer_fifo || true
   write_oxide_config
   setup_bluetooth
@@ -1618,6 +1867,9 @@ main() {
   setup_samba
   setup_avahi
   setup_bluetooth
+  setup_wifi_powersave_off
+  setup_wifi_heal
+  setup_wired_priority
   write_mpd_config
   write_camilladsp_config
   write_visualizer_fifo
