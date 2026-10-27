@@ -102,6 +102,15 @@ jobs:
           echo "rustc: $(rustc --version)"
           echo "target: ${{ matrix.target }}"
           echo "cargo version: $(cargo --version)"
+          # Baseline codegen only: release binaries must run on any consumer CPU.
+          # The default rustc codegen for the host runner's CPU level vectorizes
+          # with AVX/AVX2, which hard-crashes (SIGILL) older x86_64 CPUs that
+          # top out at SSE4.x (observed on a Core 2 Duo with 0.20.3+).
+          # x86-64-v2 = SSE4.2/POPCNT (anything since ~2009); the arm64 target
+          # ignores target-cpu values meant for x86 and stays generic.
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+            export RUSTFLAGS="-C target-cpu=x86-64-v2"
+          fi
           cargo build --release --target ${{ matrix.target }}
 
       - name: Install Node

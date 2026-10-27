@@ -260,8 +260,7 @@ build_backend() {
   # already carries a release binary, skip the toolchain entirely and copy the
   # existing artifact instead of compiling on-device.
   if [ -x "$SRC_DIR/target/release/oxide-player" ]; then
-    log "Prebuilt backend found in $SRC_DIR — skipping cargo build"
-    run install -Dm0755 "$SRC_DIR/target/release/oxide-player" "$BIN_DIR/oxide-player"
+    install_prebuilt_backend "$SRC_DIR/target/release/oxide-player"
     log "Installed backend -> $BIN_DIR/oxide-player"
     return
   fi
@@ -271,6 +270,76 @@ build_backend() {
   # workspace root target/ dir, not backend/target/.
   ( cd "$SRC_DIR" && cargo build --release )
   run install -Dm0755 "$SRC_DIR/target/release/oxide-player" "$BIN_DIR/oxide-player"
+  log "Installed backend -> $BIN_DIR/oxide-player"
+  smoke_backend
+}
+
+# Install a prebuilt release binary, verify it actually starts on this machine,
+# and fall back to a source build with baseline codegen when it does not.
+# (smoke_backend is defined below install_prebuilt_backend;
+# bash resolves calls at runtime so definition order is irrelevant.)
+
+# A release binary built for a newer CPU than this machine hard-crashes (SIGILL
+# on AVX/AVX2 opcodes) the moment the service starts, before any log line.
+# A bare `--version` run is NOT enough to catch that — the crash happens in
+# dependency init (SQLite/JPEG decode paths) that --version never reaches.
+# Instead, start the backend against a throwaway fixture config (unused host
+# ports, everything autostart off) for a few seconds: a healthy binary stays up
+# until killed; an incompatible one dies with SIGILL (128+4).
+smoke_backend() {
+  local out_dir fixture out pid rc
+  out_dir="$(mktemp -d "${TMPDIR:-/tmp}/oxide-smoke.XXXXXX")"
+  fixture="$out_dir/config.json"
+  cat > "$fixture" <<JSON
+{
+  "listen": "127.0.0.1:0",
+  "data_dir": "$out_dir",
+  "library_dirs": ["$out_dir"],
+  "static_dir": "$out_dir",
+  "mpd_host": "127.0.0.1",
+  "mpd_port": 1,
+  "mpd_autostart": false,
+  "camilladsp_config_path": "$out_dir/camilladsp.yml",
+  "camilladsp_autostart": false,
+  "bluetooth_reconnect_on_startup": false,
+  "visualizer_fft": false,
+  "default_dsp_profiles": []
+}
+JSON
+  "$BIN_DIR/oxide-player" -c "$fixture" >"$out_dir/out.log" 2>&1 &
+  pid=$!
+  # Long enough to traverse config parse -> library DB open -> service init —
+  # the exact paths that die on an incompatible CPU.
+  sleep 5
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    log "Backend binary runs on this machine: $("$BIN_DIR/oxide-player" --version)"
+    rm -rf "$out_dir"
+    return 0
+  fi
+  wait "$pid"
+  rc=$?
+  warn "Backend binary failed startup smoke (rc=$rc) — likely CPU-incompatible build"
+  cp "$out_dir/out.log" "${TMPDIR:-/tmp}/oxide-smoke-failure.log" 2>/dev/null || true
+  rm -rf "$out_dir"
+  return 1
+}
+install_prebuilt_backend() {
+  local src_bin="$1"
+  log "Prebuilt backend found in $SRC_DIR — skipping cargo build"
+  run install -Dm0755 "$src_bin" "$BIN_DIR/oxide-player"
+  if smoke_backend; then
+    return 0
+  fi
+  warn "Prebuilt binary cannot run on this CPU (codegen newer than the machine supports)"
+  warn "Falling back to building from source with baseline x86-64 codegen"
+  ensure_rust
+  ( cd "$SRC_DIR" && RUSTFLAGS="${OXIDE_BASELINE_RUSTFLAGS:--C target-cpu=x86-64-v2}" cargo build --release )
+  run install -Dm0755 "$SRC_DIR/target/release/oxide-player" "$BIN_DIR/oxide-player"
+  if ! smoke_backend; then
+    die "Locally built backend still fails its startup smoke test — see /tmp/oxide-smoke-failure.log"
+  fi
   log "Installed backend -> $BIN_DIR/oxide-player"
 }
 
