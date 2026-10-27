@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.3...oxide-player-v0.20.4) (2026-10-27)
+
+
+### Bug Fixes
+
+* install ([c449ff9](https://github.com/OxideAI/oxide-player/commit/c449ff93257e203a35f2cbf06d6f2c07bed5f41b))
+
 ## [0.20.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.2...oxide-player-v0.20.3) (2026-10-26)
 
 
