@@ -626,6 +626,106 @@ EOF
 # Netplan: give Ethernet a lower route metric than wifi so that a plugged
 # cable always wins the default route. WiFi stays the fallback — nothing is
 # removed, so installs without ethernet or without netplan are unaffected.
+setup_sata_lpm() {
+  # The MCP89 AHCI controller (and other low-power SATA bridges) wedges when
+  # the disk sits in the narrow med_power_with_dipm band while udev coldplugs
+  # devices during boot: READ FPDMA timeouts, hard link resets, and duplicate
+  # device discovery stretch the initrd phase by ~90s. min_power keeps every
+  # transition on the same edge of the band and eliminates the storm.
+  local rule="${SYSTEMD_DIR}/../../udev/rules.d/69-oxide-sata-lpm.rules"
+  rule="/etc/udev/rules.d/69-oxide-sata-lpm.rules"
+  if grep -Fq "69-oxide-sata-lpm.rules is managed by install.sh" "$rule" 2>/dev/null; then
+    log "SATA LPM rule already installed"
+    return 0
+  fi
+  log "Installing SATA LPM min_power udev rule"
+  cat > "$rule" <<'EOF'
+# 69-oxide-sata-lpm.rules is managed by install.sh.
+# Avoid SATA hot link-power transitions that dependence on med_power causes:
+# boot-time udev coldplug sends the MCP89 AHCI controller into CommWake/
+# Dispar resets, straining the initrd by ~90s. min_power stays stable.
+ACTION=="add", SUBSYSTEM=="scsi_host", KERNEL=="host[0-9]*", ATTR{link_power_management_policy}="min_power"
+EOF
+  if command -v udevadm >/dev/null 2>&1; then
+    run udevadm control --reload-rules || true
+    run udevadm trigger --subsystem-match=scsi_host --attr-match=link_power_management_policy=med_power_with_dipm 2>/dev/null || \
+      run udevadm trigger --subsystem-match=scsi_host || true
+  fi
+  local host
+  for host in /sys/class/scsi_host/host*; do
+    [ -w "$host/link_power_management_policy" ] && echo min_power > "$host/link_power_management_policy" 2>/dev/null || true
+  done
+}
+
+# MPD must resolve its state file's queued songs against the real library
+# mount. When the library mount lives outside MPD_MUSIC_DIR (e.g. library at
+# /mnt/music1 added through Settings, MPD music dir at $DATA_DIR/music,
+# possibly empty), every restart re-verifies the persisted queue one file at
+# a time — 10-15s of avoidable startup, and auto_update keeps the DB empty.
+# Bind each external library mount into MPD_MUSIC_DIR so MPD serves the real
+# files from its configured directory.
+setup_music_bind() {
+  # Collect candidate sources: MPD_MUSIC_DIR itself is the target.
+  local dirs=()
+  dirs+=("$MPD_MUSIC_DIR")
+  # Any library_dirs from a previous install's config (Settings → Library).
+  if [ -f "$CONFIG_DIR/config.json" ]; then
+    if command -v jq >/dev/null 2>&1; then
+      while IFS= read -r d; do dirs+=("$d"); done \
+        < <(jq -r '.library_dirs[]? // empty' "$CONFIG_DIR/config.json" 2>/dev/null)
+    elif command -v python3 >/dev/null 2>&1; then
+      while IFS= read -r d; do dirs+=("$d"); done \
+        < <(python3 -c 'import json,sys
+for d in json.load(open(sys.argv[1])).get("library_dirs", []): print(d)' "$CONFIG_DIR/config.json" 2>/dev/null)
+    fi
+  fi
+  local d
+  for d in "${dirs[@]}"; do
+    [ -n "$d" ] || continue
+    [ "$d" = "$MPD_MUSIC_DIR" ] && continue
+    # Only real mounts qualify (directories on the root fs would just be data).
+    if ! awk -v mp="$d" '$2==mp {found=1; exit} END{exit !found}' /proc/mounts 2>/dev/null; then
+      continue
+    fi
+    # Skip if this dir already lives inside MPD_MUSIC_DIR or vice versa.
+    case "$d" in "$MPD_MUSIC_DIR"|"$MPD_MUSIC_DIR"/*) continue ;; esac
+    case "$MPD_MUSIC_DIR" in "$d"|"$d"/*) continue ;; esac
+    # Idempotent: fstab entry + mounted => done.
+    if mountpoint -q "$MPD_MUSIC_DIR" && grep -qF " $MPD_MUSIC_DIR " /etc/fstab 2>/dev/null; then
+      log "Library bind $d -> $MPD_MUSIC_DIR already active"
+      return 0
+    fi
+    if [ -L "$MPD_MUSIC_DIR" ]; then
+      log "$MPD_MUSIC_DIR is a symlink; skipping library bind"
+      return 0
+    fi
+    log "Binding library mount $d into $MPD_MUSIC_DIR (MPD restart speed)"
+    grep -qF " $MPD_MUSIC_DIR " /etc/fstab || \
+      printf "%s %s none bind,nofail,x-systemd.device-timeout=10s 0 0\n" "$d" "$MPD_MUSIC_DIR" >> /etc/fstab
+    run mkdir -p "$MPD_MUSIC_DIR"
+    if mountpoint -q "$MPD_MUSIC_DIR"; then
+      run umount "$MPD_MUSIC_DIR" 2>/dev/null || true
+    fi
+    run mount "$MPD_MUSIC_DIR" 2>/dev/null || warn "Library bind not active under $MPD_MUSIC_DIR"
+    run systemctl daemon-reload 2>/dev/null || true
+    return 0
+  done
+}
+
+# The typical oxide-player box has no coin cell or an exhausted one; the RTC
+# may boot at an arbitrary time. chronyd corrects this quickly, but journal
+# ordering suffers and anything comparing timestamps across the step is
+# confusing to debug. A one-time hwclock sync at the end of install keeps
+# later boots consistent.
+sync_rtc_from_system() {
+  command -v hwclock >/dev/null 2>&1 || return 0
+  log "Syncing hardware clock from system time"
+  run hwclock --systohc --no-localtime || warn "hwclock sync failed (RTC may be absent)"
+}
+
+# Netplan: give Ethernet a lower route metric than wifi so that a plugged
+# cable always wins the default route. WiFi stays the fallback — nothing is
+# removed, so installs without ethernet or without netplan are unaffected.
 setup_wired_priority() {
   [ -d /etc/netplan ] || { log "No netplan; skipping wired-priority setup"; return 0; }
   # Find the first physical (non-virtual) ethernet interface: has a device
@@ -1842,6 +1942,21 @@ do_uninstall() {
     warn "Removed /etc/netplan/01-oxide-wired-priority.yaml — run 'sudo netplan apply' to converge"
   fi
 
+  # SATA LPM rule + music bind: return system to stock networking/FS layout.
+  if [ -f /etc/udev/rules.d/69-oxide-sata-lpm.rules ]; then
+    remove_path /etc/udev/rules.d/69-oxide-sata-lpm.rules
+    udevadm control --reload-rules 2>/dev/null || true
+  fi
+  if mountpoint -q "$MPD_MUSIC_DIR" && grep -qF " $MPD_MUSIC_DIR " /etc/fstab 2>/dev/null; then
+    run umount "$MPD_MUSIC_DIR" 2>/dev/null || warn "Could not unmount library bind at $MPD_MUSIC_DIR"
+    local fstab_tmp
+    fstab_tmp="$(mktemp)"
+    grep -vF " $MPD_MUSIC_DIR " /etc/fstab > "$fstab_tmp" && cat "$fstab_tmp" > /etc/fstab
+    rm -f "$fstab_tmp"
+    run systemctl daemon-reload || true
+    warn "Removed library bind fstab entry for $MPD_MUSIC_DIR"
+  fi
+
   remove_path "$BIN_DIR/oxide-player"
   remove_path "$BIN_DIR/camilladsp"
   remove_path "$BIN_DIR/oxide-kiosk-idle-watcher"
@@ -1913,6 +2028,8 @@ do_update() {
   setup_wifi_powersave_off
   setup_wifi_heal
   setup_wired_priority
+  setup_sata_lpm
+  setup_music_bind
   write_visualizer_fifo || true
   write_oxide_config
   setup_bluetooth
@@ -1920,6 +2037,7 @@ do_update() {
   install_units
   write_motd
   write_kiosk
+  sync_rtc_from_system
 
   log "Update complete."
   finish
@@ -1971,6 +2089,8 @@ main() {
   setup_wifi_powersave_off
   setup_wifi_heal
   setup_wired_priority
+  setup_sata_lpm
+  setup_music_bind
   write_mpd_config
   write_camilladsp_config
   write_visualizer_fifo
@@ -1979,6 +2099,7 @@ main() {
   install_units
   write_motd
   write_kiosk
+  sync_rtc_from_system
   finish
 }
 
