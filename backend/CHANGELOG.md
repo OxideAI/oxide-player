@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.7](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.6...oxide-player-v0.20.7) (2026-10-28)
+
+
+### Bug Fixes
+
+* intaller ([c2b9190](https://github.com/OxideAI/oxide-player/commit/c2b9190f1e407321a7ef83bac320ac0411563218))
+
 ## [0.20.6](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.5...oxide-player-v0.20.6) (2026-10-27)
 
 
