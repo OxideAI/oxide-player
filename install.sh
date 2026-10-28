@@ -43,7 +43,7 @@ BUILD_DIR="${BUILD_DIR:-/tmp/oxide-player-build}"
 # installer from racing that upload on a fresh release.
 RELEASE_ASSET_RETRIES="${RELEASE_ASSET_RETRIES:-30}"
 RELEASE_ASSET_RETRY_DELAY="${RELEASE_ASSET_RETRY_DELAY:-10}"
-# Wall display kiosk (cage + surf (webkit2gtk) on the HDMI panel). Opt-in: disabled by
+# Wall display kiosk (cage + snap Chromium on the HDMI panel). Opt-in: disabled by
 # default so headless installs keep the login TTY and avoid burning the GPU/DRM
 # on boxes without a panel; set to 1 to provision it. KIOSK_IDLE_SECONDS and
 # KIOSK_TTY tune the blank timer and VT when enabled.
@@ -905,6 +905,24 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+  cat > "$BIN_DIR/oxide-bt-discoverable" <<'EOF'
+#!/bin/sh
+# bluetoothctl races bluetoothd adapter init at boot (org.bluez.Error.Busy);
+# retry until the adapter actually takes the properties.
+i=0
+while :; do
+    if bluetoothctl power on >/dev/null 2>&1 \
+       && bluetoothctl pairable on >/dev/null 2>&1 \
+       && bluetoothctl discoverable on >/dev/null 2>&1 \
+       && bluetoothctl discoverable-timeout 0 >/dev/null 2>&1; then
+        exit 0
+    fi
+    i=$((i + 1))
+    [ "$i" -ge 10 ] && exit 1
+    sleep 2
+done
+EOF
+  run chmod 755 "$BIN_DIR/oxide-bt-discoverable"
   cat > "$SYSTEMD_DIR/oxide-bluetooth-discoverable.service" <<EOF
 [Unit]
 Description=Make Oxide Player discoverable for phone audio
@@ -913,10 +931,7 @@ Wants=bluetooth.service
 
 [Service]
 Type=oneshot
-ExecStart=$bluetoothctl_bin power on
-ExecStart=$bluetoothctl_bin pairable on
-ExecStart=$bluetoothctl_bin discoverable on
-ExecStart=$bluetoothctl_bin discoverable-timeout 0
+ExecStart=$BIN_DIR/oxide-bt-discoverable
 RemainAfterExit=yes
 
 [Install]
@@ -1492,15 +1507,15 @@ MOTD_EOF
   run chmod 755 /etc/update-motd.d/99-oxide-player
 }
 
-# Wall display kiosk: a single-app Wayland session (cage) running surf (webkit2gtk)
+# Wall display kiosk: a single-app Wayland session (cage) running snap Chromium
 # pointed at the backend's /kiosk view on the attached HDMI touchscreen.
 # Blank/wake policy: playing or paused keeps the panel lit; continuous stopped
 # playback past KIOSK_IDLE_SECONDS blanks it; touch wakes it (swayidle resume).
 write_kiosk() {
-  log "Installing wall display kiosk (cage + surf)"
+  log "Installing wall display kiosk (cage + snap Chromium)"
   # Fault isolation: a host where a kiosk package is unavailable (e.g. the
   # snap-transitional chromium-browser without snapd) must not abort the whole
-  # Wall display is opt-in: surf only launches on the HDMI panel when
+  # Wall display is opt-in: Chromium only launches on the HDMI panel when
   # KIOSK_ENABLED=1. Default off keeps headless installs on the login TTY.
   if [ "${KIOSK_ENABLED:-0}" != "1" ]; then
     log "Wall display kiosk disabled (set KIOSK_ENABLED=1 to provision it) — playback is unaffected"
@@ -1511,12 +1526,18 @@ write_kiosk() {
     full|viz) ;;
     *) KIOSK_MODE=viz ;;
   esac
-  # install — playback and every other feature stay unaffected.
-  if ! apt_install cage swayidle wlopm surf; then
+  # Chromium kiosk: snap chromium-browser is the only maintained option
+  # (surf on Ubuntu links GTK3's X11 backend only — gdk_set_allowed_backends
+  # "x11" — and can never open a cage Wayland display). The snap transitional
+  # apt package is resolved via snapd below; setup fails soft if absent.
+  if ! apt_install cage swayidle wlopm; then
     warn "Kiosk packages unavailable — skipping wall display setup (playback is unaffected)"
     return 0
   fi
-  # surf is resolved by apt above; no manual binary discovery needed.
+  if ! snap install chromium >/dev/null 2>&1; then
+    warn "snap chromium unavailable — skipping wall display setup (playback is unaffected)"
+    return 0
+  fi
 
   # The snap-packaged browser needs a writable home for its data directory,
   # and logind tears down /run/user/<uid> between sessions without linger -
@@ -1604,7 +1625,7 @@ WATCHER_EOF
   run chmod 755 "$BIN_DIR/oxide-kiosk-idle-watcher"
 
   # Session launcher. Order matters:
-  #   1. Wait for the backend's HTTP endpoint before starting surf —
+  #   1. Wait for the backend's HTTP endpoint before starting Chromium —
   #      After= only orders exec start, not port bind; without this wait a slow
   #      boot leaves a browser error page on the panel forever (nothing retries).
   #   2. Start cage, then poll for its Wayland socket — but bail out if cage
@@ -1622,7 +1643,7 @@ WATCHER_EOF
 # oxide-kiosk-session — single-app Wayland kiosk session for the wall display.
 export XDG_SESSION_TYPE=wayland
 export GDK_BACKEND=wayland
-# PAM does not always export this into the unit environment; surf (webkit2gtk)
+# PAM does not always export this into the unit environment; Chromium (snap)
 # needs it to locate the Wayland compositor socket.
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # Wait for the backend before launching the browser (After= orders exec, not bind).
@@ -1633,7 +1654,7 @@ until curl -sf --max-time 2 "http://127.0.0.1__PORT_SUFFIX__/api/version" >/dev/
     i=$((i + 1))
 done
 
-cage -d -s -- sh -c 'unset DISPLAY; i=0; while :; do for f in "$XDG_RUNTIME_DIR"/wayland-*; do [ -S "$f" ] && export WAYLAND_DISPLAY="$(basename "$f")" && exec surf -F __KIOSK_URL__; done; i=$((i+1)); [ "$i" -ge 150 ] && break; sleep 0.2; done; exit 1' &
+cage -d -s -- sh -c 'unset DISPLAY; i=0; while :; do for f in "$XDG_RUNTIME_DIR"/wayland-*; do [ -S "$f" ] && export WAYLAND_DISPLAY="$(basename "$f")" && exec /snap/bin/chromium --enable-features=UseOzonePlatform --ozone-platform=wayland --kiosk --noerrdialogs --disable-dev-shm-usage --password-store=basic __KIOSK_URL__; done; i=$((i+1)); [ "$i" -ge 150 ] && break; sleep 0.2; done; exit 1' &
 CAGE_PID=$!
 
 i=0
@@ -1681,10 +1702,10 @@ SESSION_EOF
   else
     cat > "$SYSTEMD_DIR/oxide-kiosk.service" <<EOF
 # Oxide Player wall display kiosk: a single-app Wayland session (cage) that
-# runs surf (webkit2gtk) pointed at the backend's /kiosk view on the HDMI panel.
+# runs snap Chromium pointed at the backend's /kiosk view on the HDMI panel.
 # Keep this copy in sync with contrib/systemd/oxide-kiosk.service.
 [Unit]
-Description=Oxide Player wall display kiosk (cage + surf)
+Description=Oxide Player wall display kiosk (cage + snap Chromium)
 Documentation=https://github.com/OxideAI/oxide-player
 After=systemd-logind.service dbus.socket oxide-player.service
 Wants=oxide-player.service
@@ -1825,6 +1846,7 @@ do_uninstall() {
   remove_path "$BIN_DIR/camilladsp"
   remove_path "$BIN_DIR/oxide-kiosk-idle-watcher"
   remove_path "$BIN_DIR/oxide-kiosk-session"
+  remove_path "$BIN_DIR/oxide-bt-discoverable"
   remove_path /etc/pam.d/oxide-kiosk
   # Linger keeps /run/user/<uid> alive for the kiosk session; without the
   # kiosk it only wastes a runtime dir. Home dir and browser profile are
