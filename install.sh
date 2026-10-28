@@ -334,6 +334,13 @@ install_prebuilt_backend() {
   fi
   warn "Prebuilt binary cannot run on this CPU (codegen newer than the machine supports)"
   warn "Falling back to building from source with generic x86-64 baseline codegen"
+  # The release package carries a binary, not source: cloning the real checkout
+  # here would otherwise `cargo build` in a Cargo.toml-less directory.
+  if [ ! -f "$SRC_DIR/Cargo.toml" ]; then
+    SRC_DIR="$BUILD_DIR"
+    rm -rf "$SRC_DIR"
+    run git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$SRC_DIR"
+  fi
   ensure_rust
   # x86-64-v2 (SSE4.2/POPCNT) still SIGILLs on pre-2009 CPUs (Penryn/Core 2 Duo).
   # Default `-C target-cpu=x86-64` never emits those; runtime dispatch handles
