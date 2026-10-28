@@ -15,7 +15,7 @@ serde_yaml = "0.9"
 mpd_client = "1.4"
 mpd_protocol = "1.0"
 lofty = "0.25"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
