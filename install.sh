@@ -1325,6 +1325,37 @@ ensure_mpd_include() {
   log "Added managed output include to $conf"
 }
 
+# Debian/Ubuntu's packaged mpd.service sets ProtectSystem=yes, which leaves the
+# whole filesystem read-only except /etc — so MPD cannot write its db/state/
+# playlist files under DATA_DIR or a log file outside it. Grant write access to
+# the Oxide data dir (and its log dir). Harmless when distro unit lacks
+# sandboxing. Idempotent: the marker file makes repeat installs a no-op.
+setup_mpd_systemd() {
+  local unitdir="${OXIDE_MPD_SYSTEMD_UNITDIR:-/usr/lib/systemd/system}"
+  local confdir="${OXIDE_MPD_SYSTEMD_CONFDIR:-/etc/systemd/system/mpd.service.d}"
+  local datadir="$DATA_DIR"
+  if [ ! -f "$unitdir/mpd.service" ]; then
+    return 0
+  fi
+  if grep -rqs "oxide-player: managed mpd ReadWritePaths" "$confdir/" 2>/dev/null; then
+    return 0
+  fi
+  log "Provisioning MPD systemd overrides ($confdir/oxide.conf)"
+  run mkdir -p "$confdir"
+  if [ "$(id -u)" -eq 0 ] && [ "$confdir" = "/etc/systemd/system/mpd.service.d" ]; then
+    run mkdir -p /var/log/oxide-player
+    run chown mpd:audio /var/log/oxide-player
+  fi
+  {
+    echo "# oxide-player: managed mpd ReadWritePaths"
+    echo "[Service]"
+    echo "ReadWritePaths=$datadir /var/log/oxide-player"
+  } > "$confdir/oxide.conf"
+  if [ "$confdir" = "/etc/systemd/system/mpd.service.d" ]; then
+    run systemctl daemon-reload
+  fi
+}
+
 # Older installs have a managed CamillaDSP loopback output without an
 # explicit mixer. MPD then probes the ALSA PCM mixer ("PCM"), which snd-aloop
 # does not provide, so setvol fails while DSP is active. Repair only Oxide's
@@ -2029,6 +2060,13 @@ do_uninstall() {
   else
     warn "No Oxide MPD backup found; leaving $MPD_CONFIG unchanged."
   fi
+  # Oxide-managed mpd.service override (ReadWritePaths); restore stock daemon-reload.
+  if [ -f /etc/systemd/system/mpd.service.d/oxide.conf ] &&
+     grep -Fq '# oxide-player: managed mpd ReadWritePaths' /etc/systemd/system/mpd.service.d/oxide.conf; then
+    remove_path /etc/systemd/system/mpd.service.d/oxide.conf
+    rmdir /etc/systemd/system/mpd.service.d 2>/dev/null || true
+    run systemctl daemon-reload || true
+  fi
 
   if [ -f "$SAMBA_CONFIG.pre-oxide" ]; then
     run mv "$SAMBA_CONFIG.pre-oxide" "$SAMBA_CONFIG"
@@ -2061,6 +2099,7 @@ do_update() {
   build_frontend
   fix_vfat_music_mounts || true
   ensure_mpd_include || true
+  setup_mpd_systemd
   ensure_mpd_loopback_mixer || true
   write_camilladsp_config
   ensure_samba_shares || true
@@ -2132,6 +2171,7 @@ main() {
   setup_sata_lpm
   setup_music_bind
   write_mpd_config
+  setup_mpd_systemd
   write_camilladsp_config
   write_visualizer_fifo
   write_oxide_config

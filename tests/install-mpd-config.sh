@@ -130,3 +130,35 @@ test -s "$MPD_CONFIG"
 grep -Fq "$DATA_DIR/mpd-outputs.d/*.conf" "$MPD_CONFIG"
 
 printf 'installer MPD config include test passed\n'
+
+# setup_mpd_systemd: provisions a drop-in granting MPD write access to the
+# Oxide data dir + log dir (distro mpd.service has ProtectSystem=yes).
+# The test redirects the unit/source dir and the drop-in target via
+# OXIDE_MPD_SYSTEMD_UNITDIR / OXIDE_MPD_SYSTEMD_CONFDIR (install-time only;
+# real installs use /usr/lib/systemd/system and /etc/systemd/system).
+cat > "$tmp_dir/vendor-unit" <<'EOF'
+[Unit]
+Description=Music Player Daemon
+[Service]
+Type=notify
+ProtectSystem=yes
+EOF
+mkdir -p "$tmp_dir/vendor/systemd/system"
+cp "$tmp_dir/vendor-unit" "$tmp_dir/vendor/systemd/system/mpd.service"
+
+OXIDE_MPD_SYSTEMD_UNITDIR="$tmp_dir/vendor/systemd/system" \
+OXIDE_MPD_SYSTEMD_CONFDIR="$tmp_dir/etc-systemd/mpd.service.d" \
+  setup_mpd_systemd
+grep -Fq "ReadWritePaths=$DATA_DIR /var/log/oxide-player" \
+  "$tmp_dir/etc-systemd/mpd.service.d/oxide.conf"
+grep -Fq 'oxide-player: managed mpd ReadWritePaths' \
+  "$tmp_dir/etc-systemd/mpd.service.d/oxide.conf"
+
+# Idempotency: second call leaves exactly one file
+OXIDE_MPD_SYSTEMD_UNITDIR="$tmp_dir/vendor/systemd/system" \
+OXIDE_MPD_SYSTEMD_CONFDIR="$tmp_dir/etc-systemd/mpd.service.d" \
+  setup_mpd_systemd
+test "$(ls "$tmp_dir/etc-systemd/mpd.service.d" | wc -l)" -eq 1
+
+printf 'installer MPD systemd drop-in test passed\n'
+

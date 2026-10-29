@@ -29,8 +29,8 @@ backend itself.
 | `types.rs`           | Wire types: `PlayerStatus`, `Track`, `TrackRef`, `QueueEntry`, `QueueResponse`, `QueueItem` (frontend), `DspProfile`, `OutputDevice`, etc.                                                                      |
 | `library/scanner.rs` | Walk the music root, read tags with `lofty`, upsert into SQLite, extract covers.                                                                                                                                |
 | `library/db.rs`      | SQLite schema, FTS5 search, CUE addressing.                                                                                                                                                                     |
-| `shared_folders.rs`  | Render `<data_dir>/smb-shares.conf` (one `[share]` per `library_dirs` entry) and `smbcontrol smbd reload-config`. Called by the `/api/config/library-dirs` add/remove handlers before config persistence.        |
-| `radio.rs`           | `RadioManager`: CRUD over HTTP(S) stations persisted to `<data_dir>/radio_stations.json`.                                                                                                                        |
+| `shared_folders.rs`  | Render `<data_dir>/smb-shares.conf` (one `[share]` per `library_dirs` entry) and `smbcontrol smbd reload-config`. Called by the `/api/config/library-dirs` add/remove handlers before config persistence.       |
+| `radio.rs`           | `RadioManager`: CRUD over HTTP(S) stations persisted to `<data_dir>/radio_stations.json`.                                                                                                                       |
 | `visualizer/`        | cpal capture + `rustfft` (72 log-spaced bins), broadcast over `/api/visualizer` WS.                                                                                                                             |
 | `bluetooth/`         | Linux-only bluer manager (`linux.rs`); `stub.rs` mirror elsewhere.                                                                                                                                              |
 | `devices/`           | Per-output MPD config fragments (`mpd-outputs.d/`) + include injection.                                                                                                                                         |
@@ -120,6 +120,11 @@ Styling is **CSS Modules** (`*.module.css`) — no Tailwind. Each component gets
 - `QueueEntry.id` is the MPD **SongId**; it does **not** equal `PlayerStatus.current_song.id` (the
   DB track id). Never compare the two.
 - CUE albums share one `uri`; highlight by track `id`.
+- **MPD 0.24 rejects local-file URIs over TCP** (`add file://...` → ACK 4 "Access to local files
+  via TCP is not allowed"): the peer uid is only knowable on an AF_UNIX socket. The backend
+  therefore prefers `/run/mpd/socket` (`Mpd::client` falls back to TCP only when the socket is
+  absent), and the installer binds it in the managed `mpd.conf` — next to the TCP
+  `127.0.0.1:6600` bind — plus repairs existing configs via `ensure_mpd_include`.
 
 ## Installer & system integration (`install.sh`)
 
