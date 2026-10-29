@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.20.9](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.8...oxide-player-v0.20.9) (2026-10-29)
+
+
+### Bug Fixes
+
+* build ([4e5b490](https://github.com/OxideAI/oxide-player/commit/4e5b49053138a90ec47cc0b429a4f51b07e6427f))
+* UI improvements on settings page ([641c7de](https://github.com/OxideAI/oxide-player/commit/641c7de69263a384af9d1ea23cf5005ed37fd466))
+
 ## [0.20.8](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.7...oxide-player-v0.20.8) (2026-10-29)
 
 
