@@ -42,3 +42,9 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: frontend-test
+        name: Test frontend
+        entry: npm --prefix frontend test
+        language: system
+        pass_filenames: false
+        always_run: true

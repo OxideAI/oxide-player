@@ -72,7 +72,7 @@ describe("radio station artwork", () => {
         onSeek={noop}
         onVolume={noop}
         onOpenAlbum={noop}
-      />,
+      />
     );
     const img = screen.getByAltText("") as HTMLImageElement;
     expect(img.getAttribute("src")).toBe("https://station.example.org/logo.png");
@@ -91,13 +91,11 @@ describe("radio station artwork", () => {
         onSeek={noop}
         onVolume={noop}
         onOpenAlbum={noop}
-      />,
+      />
     );
     const artLayer = container.querySelector('[style*="logo.png"]') as HTMLElement | null;
     expect(artLayer).not.toBeNull();
-    expect(artLayer!.getAttribute("style")).toContain(
-      "https://station.example.org/logo.png",
-    );
+    expect(artLayer!.getAttribute("style")).toContain("https://station.example.org/logo.png");
   });
 
   it("falls back to the placeholder when the station has no artwork", () => {
@@ -112,13 +110,11 @@ describe("radio station artwork", () => {
         onSeek={noop}
         onVolume={noop}
         onOpenAlbum={noop}
-      />,
+      />
     );
     expect(screen.queryByAltText("")).toBeNull();
     // The EQ placeholder renders instead (three animated bars).
-    const placeholder = document.querySelector(
-      '[class*="coverPlaceholder"]',
-    ) as HTMLElement | null;
+    const placeholder = document.querySelector('[class*="eq"]') as HTMLElement | null;
     expect(placeholder).not.toBeNull();
     expect(placeholder!.querySelectorAll("i").length).toBe(3);
   });
