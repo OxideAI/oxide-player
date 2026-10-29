@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.11](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.10...oxide-player-v0.20.11) (2026-10-29)
+
+
+### Bug Fixes
+
+* intaller [#3](https://github.com/OxideAI/oxide-player/issues/3) ([c129771](https://github.com/OxideAI/oxide-player/commit/c129771972d077da0c7b40380ba104068669740b))
+
 ## [0.20.10](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.9...oxide-player-v0.20.10) (2026-10-29)
 
 
