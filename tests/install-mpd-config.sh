@@ -27,6 +27,30 @@ grep -Fq "include" "$MPD_CONFIG"
 grep -Fq "$DATA_DIR/mpd-outputs.d/*.conf" "$MPD_CONFIG"
 grep -Fq 'name          "camilladsp-loopback"' "$MPD_CONFIG"
 grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
+test "$(grep -Fc 'bind_to_address     "/run/mpd/socket"' "$MPD_CONFIG")" -eq 1
+
+# Repair path: existing config without the unix socket bind gets it added
+# before the port line; run it twice to prove idempotency.
+cat > "$MPD_CONFIG" <<'EOF'
+music_directory "/music"
+port                "6600"
+port                "6600"
+include "/var/lib/oxide-player/mpd-outputs.d/*.conf"
+
+audio_output {
+    type "alsa"
+    name "camilladsp-loopback"
+}
+EOF
+ensure_mpd_include >/dev/null 2>&1 || true
+ensure_mpd_include >/dev/null 2>&1 || true
+test "$(grep -Fc 'bind_to_address     "/run/mpd/socket"' "$MPD_CONFIG")" -eq 1
+# Bind goes before the first port line.
+test "$(grep -n 'bind_to_address     "/run/mpd/socket"' "$MPD_CONFIG" | head -1 | cut -d: -f1)" -lt \
+     "$(grep -n 'port                "6600"' "$MPD_CONFIG" | head -1 | cut -d: -f1)"
+grep -Fq 'include ' "$MPD_CONFIG"
+grep -Fq 'mpd-outputs.d/*.conf' "$MPD_CONFIG"
+grep -Fq 'name "camilladsp-loopback"' "$MPD_CONFIG"
 
 cat > "$MPD_CONFIG" <<'EOF'
 music_directory "/music"

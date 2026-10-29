@@ -1201,6 +1201,7 @@ db_file             "$DATA_DIR/mpd.db"
 log_file            "$DATA_DIR/mpd.log"
 pid_file            "$DATA_DIR/mpd.pid"
 state_file          "$DATA_DIR/mpd.state"
+bind_to_address     "/run/mpd/socket"
 bind_to_address     "127.0.0.1"
 port                "6600"
 auto_update         "yes"
@@ -1248,6 +1249,7 @@ EOF
 ensure_mpd_include() {
   local conf="$MPD_CONFIG"
   local managed_include="include \"$DATA_DIR/mpd-outputs.d/*.conf\""
+  local socket_bind='bind_to_address     "/run/mpd/socket"'
 
   if [ ! -f "$conf" ]; then
     warn "MPD config $conf does not exist — skipping managed output include repair."
@@ -1258,6 +1260,28 @@ ensure_mpd_include() {
     write_mpd_config
     return 0
   fi
+
+  # MPD 0.24 rejects `add` of local files over TCP ("Access to local files
+  # via TCP is not allowed") because the peer uid is only knowable on a
+  # Unix socket. The backend prefers /run/mpd/socket; make sure the managed
+  # config binds it.
+  if ! grep -Fq 'bind_to_address     "/run/mpd/socket"' "$conf"; then
+    local tmp="${conf}.oxide-socket.tmp"
+    awk -v socket_bind="$socket_bind" '
+      BEGIN { done = 0 }
+      {
+        if (!done && $0 ~ /^[[:space:]]*port[[:space:]]*"/) {
+          print socket_bind
+          done = 1
+        }
+        print
+      }
+    ' "$conf" > "$tmp" \
+      && cat "$tmp" > "$conf" \
+      && rm -f "$tmp"
+    log "Added unix socket bind to $conf"
+  fi
+
   if grep -Fqx "$managed_include" "$conf"; then
     log "MPD config already includes managed outputs: $conf"
     return 1
