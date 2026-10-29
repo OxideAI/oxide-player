@@ -89,8 +89,13 @@ pub enum FilterParameters {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 pub enum PipelineStep {
-    Filter { channels: Vec<u32>, names: Vec<String> },
-    Mixer { name: String },
+    Filter {
+        channels: Vec<u32>,
+        names: Vec<String>,
+    },
+    Mixer {
+        name: String,
+    },
 }
 
 /// Render a CamillaDSP v4.1.3 YAML config for the effective profile.
@@ -423,7 +428,11 @@ mod tests {
 
     #[test]
     fn every_eq_band_type_renders() {
-        for band_type in [EqBandType::Peaking, EqBandType::LowShelf, EqBandType::HighShelf] {
+        for band_type in [
+            EqBandType::Peaking,
+            EqBandType::LowShelf,
+            EqBandType::HighShelf,
+        ] {
             let mut p = base_profile();
             p.eq_bands = vec![EqBand {
                 band_type,
@@ -472,12 +481,27 @@ mod tests {
         // Re-deserialise and verify it's structurally valid
         let _: CamillaConfig = serde_yaml::from_str(&yaml).expect("deserialize");
         // Quick sanity checks on the YAML output
-        assert!(yaml.contains("type: Alsa"), "should use Alsa not Raw:\n{yaml}");
+        assert!(
+            yaml.contains("type: Alsa"),
+            "should use Alsa not Raw:\n{yaml}"
+        );
         assert!(yaml.contains("S16_LE"), "should use S16_LE:\n{yaml}");
         assert!(yaml.contains("AsyncSinc"), "should use AsyncSinc:\n{yaml}");
-        assert!(yaml.contains("type: Gain"), "should render preamp Gain:\n{yaml}");
-        assert!(yaml.contains("gain: -6.0"), "should include preamp gain:\n{yaml}");
-        assert!(yaml.contains("chunksize: 1024"), "should have chunksize:\n{yaml}");
-        assert!(yaml.contains("queuelimit:"), "should have queuelimit:\n{yaml}");
+        assert!(
+            yaml.contains("type: Gain"),
+            "should render preamp Gain:\n{yaml}"
+        );
+        assert!(
+            yaml.contains("gain: -6.0"),
+            "should include preamp gain:\n{yaml}"
+        );
+        assert!(
+            yaml.contains("chunksize: 1024"),
+            "should have chunksize:\n{yaml}"
+        );
+        assert!(
+            yaml.contains("queuelimit:"),
+            "should have queuelimit:\n{yaml}"
+        );
     }
 }

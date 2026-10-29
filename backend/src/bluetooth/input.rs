@@ -22,9 +22,9 @@
 //! `snd-aloop` kernel module. On other platforms this module compiles as a
 //! stub that always returns "not supported".
 
-use anyhow::Result;
 #[cfg(target_os = "linux")]
 use anyhow::Context;
+use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "linux")]
@@ -138,7 +138,9 @@ impl BluetoothInputManager {
     /// Stub for non-Linux.
     #[cfg(not(target_os = "linux"))]
     pub async fn enable(&self) -> Result<()> {
-        anyhow::bail!("A2DP sink input is not supported on this platform (requires Linux + BlueZ + BlueALSA)")
+        anyhow::bail!(
+            "A2DP sink input is not supported on this platform (requires Linux + BlueZ + BlueALSA)"
+        )
     }
 
     /// Disable the A2DP Sink input pipeline.
@@ -157,7 +159,9 @@ impl BluetoothInputManager {
     /// Stub for non-Linux.
     #[cfg(not(target_os = "linux"))]
     pub async fn disable(&self) -> Result<()> {
-        anyhow::bail!("A2DP sink input is not supported on this platform (requires Linux + BlueZ + BlueALSA)")
+        anyhow::bail!(
+            "A2DP sink input is not supported on this platform (requires Linux + BlueZ + BlueALSA)"
+        )
     }
 
     /// Returns whether the A2DP Sink input pipeline is currently enabled.

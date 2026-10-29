@@ -7,14 +7,7 @@ import { DspView } from "./DspView";
 import { VisualizationSettings } from "./VisualizationSettings";
 import styles from "./ConfigView.module.css";
 
-type Section =
-  | "library"
-  | "mpd"
-  | "server"
-  | "bluetooth"
-  | "dsp"
-  | "storage"
-  | "visualizer";
+type Section = "library" | "mpd" | "server" | "bluetooth" | "dsp" | "storage" | "visualizer";
 
 export interface ConfigViewProps {
   status?: PlayerStatus | null;
@@ -38,9 +31,7 @@ export function ConfigView({
   const [deviceOutputs, setDeviceOutputs] = useState<DeviceOutput[]>([]);
   const [deviceLoading, setDeviceLoading] = useState(true);
   const [deviceError, setDeviceError] = useState<string | null>(null);
-  const [selectedOutputKey, setSelectedOutputKey] = useState<string | null>(
-    null,
-  );
+  const [selectedOutputKey, setSelectedOutputKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [newDir, setNewDir] = useState("");
@@ -48,9 +39,7 @@ export function ConfigView({
   const [saving, setSaving] = useState<Section | null>(null);
   const [shuttingDown, setShuttingDown] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<
-    "restart" | "shutdown" | null
-  >(null);
+  const [confirmAction, setConfirmAction] = useState<"restart" | "shutdown" | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,18 +73,13 @@ export function ConfigView({
   }, [loadDevices]);
 
   const eligibleOutputs = useMemo(
-    () =>
-      deviceOutputs.filter(
-        (output) => output.role === "playback" && output.selectable,
-      ),
-    [deviceOutputs],
+    () => deviceOutputs.filter((output) => output.role === "playback" && output.selectable),
+    [deviceOutputs]
   );
   const selectedOutput = useMemo(
     () =>
-      eligibleOutputs.find(
-        (output) => stableOutputIdentity(output) === selectedOutputKey,
-      ) ?? null,
-    [eligibleOutputs, selectedOutputKey],
+      eligibleOutputs.find((output) => stableOutputIdentity(output) === selectedOutputKey) ?? null,
+    [eligibleOutputs, selectedOutputKey]
   );
 
   useEffect(() => {
@@ -104,11 +88,7 @@ export function ConfigView({
       if (active) setSelectedOutputKey(stableOutputIdentity(active));
       return;
     }
-    if (
-      !eligibleOutputs.some(
-        (output) => stableOutputIdentity(output) === selectedOutputKey,
-      )
-    ) {
+    if (!eligibleOutputs.some((output) => stableOutputIdentity(output) === selectedOutputKey)) {
       setSelectedOutputKey(null);
     }
   }, [eligibleOutputs, selectedOutputKey]);
@@ -120,12 +100,11 @@ export function ConfigView({
       .catch(() => setVersion(null));
   }, []);
 
-  const patch = (p: Partial<Config>) =>
-    setConfig((c) => (c ? { ...c, ...p } : c));
+  const patch = (p: Partial<Config>) => setConfig((c) => (c ? { ...c, ...p } : c));
   const save = async (
     which: Section,
     restart: boolean,
-    overrideConfig?: Config,
+    overrideConfig?: Config
   ): Promise<Config | null> => {
     const nextConfig = overrideConfig ?? config;
     if (!nextConfig) return null;
@@ -162,12 +141,10 @@ export function ConfigView({
       await api.disableDevice(output.id);
       await api.enableDevice(output.id);
       await loadDevices();
-      setNotice(
-        `${output.name} was re-enabled in MPD. Check whether sound has returned.`,
-      );
+      setNotice(`${output.name} was re-enabled in MPD. Check whether sound has returned.`);
     } catch (e) {
       setActionError(
-        `Could not reconnect ${output.name}: ${e instanceof Error ? e.message : String(e)}`,
+        `Could not reconnect ${output.name}: ${e instanceof Error ? e.message : String(e)}`
       );
       throw e;
     }
@@ -192,7 +169,7 @@ export function ConfigView({
       for (const output of active.slice(1)) await api.disableDevice(output.id);
       await loadDevices();
       setNotice(
-        "Extra playback outputs disabled. Waiting for live player status to confirm one route.",
+        "Extra playback outputs disabled. Waiting for live player status to confirm one route."
       );
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
@@ -210,7 +187,7 @@ export function ConfigView({
       setNotice(
         res.duplicate
           ? "Folder is already a source."
-          : `Added shared folder and rescanned ${res.scanned} track(s).`,
+          : `Added shared folder and rescanned ${res.scanned} track(s).`
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -275,14 +252,17 @@ export function ConfigView({
   return (
     <div className={styles.wrap}>
       <div>
-        <span className={styles.eyebrow}>Server</span>
+        <span className={styles.eyebrow}>Playback · Server</span>
         <h2 className={styles.h}>Settings</h2>
+        <p className={styles.intro}>
+          Check your playback route first. Server and device configuration is grouped under advanced
+          settings.
+        </p>
       </div>
 
       {restartNeeded && (
         <div className={styles.restart}>
-          Some changes only take effect after a server restart. The file on disk
-          is already updated.
+          Some changes only take effect after a server restart. The file on disk is already updated.
         </div>
       )}
       {error && <div className={styles.error}>{error}</div>}
@@ -307,14 +287,10 @@ export function ConfigView({
       {config && (
         <VisualizationSettings
           config={config}
-          onSave={(enabled) =>
-            save("visualizer", true, { ...config, visualizer_fft: enabled })
-          }
+          onSave={(enabled) => save("visualizer", true, { ...config, visualizer_fft: enabled })}
         />
       )}
-      {!config && loading && (
-        <p className={styles.dim}>Loading administration settings…</p>
-      )}
+      {!config && loading && <p className={styles.dim}>Loading administration settings…</p>}
       {config && (
         <details
           className={styles.admin}
@@ -322,7 +298,10 @@ export function ConfigView({
           onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
         >
           <summary className={styles.adminSummary}>
-            Administration and advanced controls
+            <span>Advanced settings</span>
+            <span className={styles.adminDescription}>
+              Library, network, Bluetooth, DSP, storage and power
+            </span>
           </summary>
 
           <section className={styles.card}>
@@ -355,25 +334,17 @@ export function ConfigView({
                 onChange={(e) => setNewDir(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && addDir()}
               />
-              <button
-                className={styles.save}
-                onClick={addDir}
-                disabled={!newDir.trim()}
-              >
+              <button className={styles.save} onClick={addDir} disabled={!newDir.trim()}>
                 Add folder
               </button>
-              <button
-                className={styles.iconBtn}
-                onClick={rescan}
-                disabled={scanning}
-              >
+              <button className={styles.iconBtn} onClick={rescan} disabled={scanning}>
                 {scanning ? "Rescanning..." : "Rescan library"}
               </button>
             </div>
             <p className={styles.hint}>
-              Folders must be under MPD's music_directory to be playable. After
-              adding, a rescan syncs MPD's index; if a track still won't play,
-              check the folder is inside MPD's music_directory.
+              Folders must be under MPD's music_directory to be playable. After adding, a rescan
+              syncs MPD's index; if a track still won't play, check the folder is inside MPD's
+              music_directory.
             </p>
           </section>
 
@@ -424,8 +395,8 @@ export function ConfigView({
               />
             </label>
             <p className={styles.hint}>
-              Binding to a non-loopback address exposes the (currently
-              unauthenticated) API beyond this machine.
+              Binding to a non-loopback address exposes the (currently unauthenticated) API beyond
+              this machine.
             </p>
             <button
               className={styles.save}
@@ -446,16 +417,13 @@ export function ConfigView({
                 className={styles.checkbox}
                 type="checkbox"
                 checked={config!.bluetooth_reconnect_on_startup}
-                onChange={(e) =>
-                  patch({ bluetooth_reconnect_on_startup: e.target.checked })
-                }
+                onChange={(e) => patch({ bluetooth_reconnect_on_startup: e.target.checked })}
               />
               <span>Reconnect paired speakers on startup</span>
             </label>
             <p className={styles.hint}>
-              On launch, Oxide reconnects paired speakers with managed BlueALSA
-              outputs. Disable this if another service owns Bluetooth connection
-              policy.
+              On launch, Oxide reconnects paired speakers with managed BlueALSA outputs. Disable
+              this if another service owns Bluetooth connection policy.
             </p>
             <button
               className={styles.save}
@@ -477,9 +445,7 @@ export function ConfigView({
                 <input
                   className={styles.input}
                   value={config!.camilladsp_config_path}
-                  onChange={(e) =>
-                    patch({ camilladsp_config_path: e.target.value })
-                  }
+                  onChange={(e) => patch({ camilladsp_config_path: e.target.value })}
                 />
               </label>
               <label className={styles.field}>
@@ -513,28 +479,19 @@ export function ConfigView({
             <div className={styles.grid}>
               <label className={styles.field}>
                 <span>Data directory</span>
-                <input
-                  className={styles.input}
-                  value={config!.data_dir}
-                  readOnly
-                />
+                <input className={styles.input} value={config!.data_dir} readOnly />
               </label>
               <label className={styles.field}>
                 <span>Static (UI) directory</span>
-                <input
-                  className={styles.input}
-                  value={config!.static_dir}
-                  readOnly
-                />
+                <input className={styles.input} value={config!.static_dir} readOnly />
               </label>
             </div>
             <p className={styles.hint}>
-              These are set at startup. Edit the config file and restart to
-              change them.
+              These are set at startup. Edit the config file and restart to change them.
             </p>
             <p className={styles.dim}>
-              Fields flagged restart required above are written to the config
-              file now and applied on next launch.
+              Fields flagged restart required above are written to the config file now and applied
+              on next launch.
             </p>
           </section>
 
@@ -574,9 +531,9 @@ export function ConfigView({
               <span className={styles.restartTag}>stops playback</span>
             </div>
             <p className={styles.hint}>
-              Power off or reboot the machine running oxide-player. Reboot
-              requires a supervising systemd unit to bring the server back up;
-              power off leaves the machine off until started again.
+              Power off or reboot the machine running oxide-player. Reboot requires a supervising
+              systemd unit to bring the server back up; power off leaves the machine off until
+              started again.
             </p>
             <div className={styles.saveRow}>
               <button
@@ -598,24 +555,15 @@ export function ConfigView({
         </details>
       )}
       {confirmAction && (
-        <div
-          className={styles.confirmOverlay}
-          onClick={() => setConfirmAction(null)}
-        >
-          <div
-            className={styles.confirmBox}
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className={styles.confirmOverlay} onClick={() => setConfirmAction(null)}>
+          <div className={styles.confirmBox} onClick={(e) => e.stopPropagation()}>
             <p className={styles.confirmText}>
               {confirmAction === "restart"
                 ? "Reboot the machine running the Oxide server? Playback will pause and the machine will restart."
                 : "Power off the machine running the Oxide server? This stops playback and the machine will shut down."}
             </p>
             <div className={styles.confirmActions}>
-              <button
-                className={styles.iconBtn}
-                onClick={() => setConfirmAction(null)}
-              >
+              <button className={styles.iconBtn} onClick={() => setConfirmAction(null)}>
                 Cancel
               </button>
               <button

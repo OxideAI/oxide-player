@@ -36,7 +36,12 @@ pub fn classify_output_role(name: &str, configs: &[DeviceConfig]) -> DeviceOutpu
 
 /// Build a stable identity for selection and joining. Bluetooth addresses are
 /// preferred over friendly names because a managed config can be renamed.
-pub fn output_selection_key(name: &str, output_type: &str, device: Option<&str>, id: u32) -> String {
+pub fn output_selection_key(
+    name: &str,
+    output_type: &str,
+    device: Option<&str>,
+    id: u32,
+) -> String {
     if let Some(address) = device
         .and_then(|value| value.strip_prefix("bluealsa:DEV="))
         .and_then(|value| value.split(',').next())
@@ -64,7 +69,9 @@ pub struct OutputDiagnosticFacts {
 /// Select exactly one stable diagnostic code. More specific/authoritative
 /// failures win over state hints so the frontend can render deterministic
 /// corrective guidance without parsing technical strings.
-pub fn diagnostic_code(facts: OutputDiagnosticFacts) -> Option<crate::types::DeviceOutputDiagnosticCode> {
+pub fn diagnostic_code(
+    facts: OutputDiagnosticFacts,
+) -> Option<crate::types::DeviceOutputDiagnosticCode> {
     use crate::types::DeviceOutputDiagnosticCode as Code;
 
     if facts.role == DeviceOutputRole::System {
@@ -90,7 +97,6 @@ pub fn diagnostic_code(facts: OutputDiagnosticFacts) -> Option<crate::types::Dev
     }
     None
 }
-
 
 /// Field-level validation result.
 #[derive(Debug, Clone, Default)]
@@ -124,19 +130,23 @@ pub fn sanitize_device_name(name: &str) -> String {
     let sanitized: String = name
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     // Collapse runs of '-'
-    let collapsed: String = sanitized
-        .chars()
-        .fold(String::new(), |mut acc, c| {
-            if c == '-' && acc.ends_with('-') {
-                // skip duplicate
-            } else {
-                acc.push(c);
-            }
-            acc
-        });
+    let collapsed: String = sanitized.chars().fold(String::new(), |mut acc, c| {
+        if c == '-' && acc.ends_with('-') {
+            // skip duplicate
+        } else {
+            acc.push(c);
+        }
+        acc
+    });
     collapsed.trim_matches('-').to_string()
 }
 
@@ -154,20 +164,30 @@ pub fn validate_config(
 
     let name = name.trim();
     if name.is_empty() {
-        result.errors.insert("name".to_string(), "must not be empty".to_string());
+        result
+            .errors
+            .insert("name".to_string(), "must not be empty".to_string());
     } else if name.contains('\n') || name.contains('\0') {
-        result.errors.insert("name".to_string(), "must not contain newlines or null bytes".to_string());
+        result.errors.insert(
+            "name".to_string(),
+            "must not contain newlines or null bytes".to_string(),
+        );
     }
 
     let output_type = output_type.trim();
     if output_type.is_empty() {
-        result.errors.insert("type".to_string(), "must not be empty".to_string());
+        result
+            .errors
+            .insert("type".to_string(), "must not be empty".to_string());
     }
     // Unknown types are accepted for forward-compat, but warn through validation pass-through
 
     if let Some(d) = device {
         if d.contains('\n') || d.contains('\0') {
-            result.errors.insert("device".to_string(), "must not contain newlines or null bytes".to_string());
+            result.errors.insert(
+                "device".to_string(),
+                "must not contain newlines or null bytes".to_string(),
+            );
         }
     }
 
@@ -176,8 +196,15 @@ pub fn validate_config(
         if !f.is_empty() {
             // MPD format: BITS:RATE:CHANNELS (e.g. "44100:16:2")
             let parts: Vec<&str> = f.split(':').collect();
-            if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit())) {
-                result.errors.insert("format".to_string(), "must match BITS:RATE:CHANNELS (e.g. '44100:16:2')".to_string());
+            if parts.len() != 3
+                || parts
+                    .iter()
+                    .any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()))
+            {
+                result.errors.insert(
+                    "format".to_string(),
+                    "must match BITS:RATE:CHANNELS (e.g. '44100:16:2')".to_string(),
+                );
             }
         }
     }
@@ -185,13 +212,19 @@ pub fn validate_config(
     if let Some(mt) = mixer_type {
         let mt = mt.trim();
         if !mt.is_empty() && !matches!(mt, "hardware" | "software" | "none") {
-            result.errors.insert("mixer_type".to_string(), "must be 'hardware', 'software', or 'none'".to_string());
+            result.errors.insert(
+                "mixer_type".to_string(),
+                "must be 'hardware', 'software', or 'none'".to_string(),
+            );
         }
     }
 
     if let Some(md) = mixer_device {
         if md.contains('\n') || md.contains('\0') {
-            result.errors.insert("mixer_device".to_string(), "must not contain newlines or null bytes".to_string());
+            result.errors.insert(
+                "mixer_device".to_string(),
+                "must not contain newlines or null bytes".to_string(),
+            );
         }
     }
 
@@ -413,13 +446,15 @@ mod tests {
     fn temp_dir(test_name: &str) -> PathBuf {
         let pid = std::process::id();
         let tid = std::thread::current().id();
-        std::env::temp_dir().join(format!("oxide_test_fragments_{}_{:?}_{}", pid, tid, test_name))
+        std::env::temp_dir().join(format!(
+            "oxide_test_fragments_{}_{:?}_{}",
+            pid, tid, test_name
+        ))
     }
 
     fn cleanup(dir: &Path) {
         let _ = fs::remove_dir_all(dir);
     }
-
 
     #[test]
     fn test_sanitize_device_name() {
@@ -433,7 +468,15 @@ mod tests {
 
     #[test]
     fn test_validate_config_valid() {
-        let r = validate_config("My Device", "alsa", Some("hw:0,0"), Some("44100:16:2"), Some("hardware"), None, false);
+        let r = validate_config(
+            "My Device",
+            "alsa",
+            Some("hw:0,0"),
+            Some("44100:16:2"),
+            Some("hardware"),
+            None,
+            false,
+        );
         assert!(r.is_valid(), "valid config should pass: {:?}", r.errors);
     }
 
@@ -481,7 +524,10 @@ mod tests {
     #[test]
     fn test_validate_config_unknown_type_forward_compat() {
         let r = validate_config("Dev", "custom_output", None, None, None, None, false);
-        assert!(r.is_valid(), "unknown type should pass through for forward compat");
+        assert!(
+            r.is_valid(),
+            "unknown type should pass through for forward compat"
+        );
     }
 
     #[test]
@@ -712,7 +758,10 @@ mod tests {
         let parsed = &list[0];
         assert_eq!(parsed.name, "Round Trip");
         assert_eq!(parsed.output_type, "pulse");
-        assert_eq!(parsed.device.as_deref(), Some("alsa_output.pci-0000_00_1f.3.analog-stereo"));
+        assert_eq!(
+            parsed.device.as_deref(),
+            Some("alsa_output.pci-0000_00_1f.3.analog-stereo")
+        );
         assert_eq!(parsed.format.as_deref(), Some("48000:24:2"));
         assert_eq!(parsed.mixer_type.as_deref(), Some("software"));
         assert_eq!(parsed.mixer_device.as_deref(), Some("Master"));
@@ -723,27 +772,45 @@ mod tests {
     }
     #[test]
     fn output_roles_and_selection_keys_are_deterministic() {
-        let configs = vec![
-            DeviceConfig {
-                name: "USB DAC".to_string(),
-                output_type: "alsa".to_string(),
-                device: Some("hw:USB,0".to_string()),
-                format: None,
-                mixer_type: None,
-                mixer_device: None,
-                mixer_control: None,
-                dop: false,
-            },
-        ];
-        assert_eq!(classify_output_role("visualizer", &configs), DeviceOutputRole::System);
-        assert_eq!(classify_output_role(MANAGED_DSP_LOOPBACK_OUTPUT, &configs), DeviceOutputRole::System);
-        assert_eq!(classify_output_role("USB DAC", &configs), DeviceOutputRole::Playback);
-        assert_eq!(classify_output_role("External", &configs), DeviceOutputRole::Unknown);
+        let configs = vec![DeviceConfig {
+            name: "USB DAC".to_string(),
+            output_type: "alsa".to_string(),
+            device: Some("hw:USB,0".to_string()),
+            format: None,
+            mixer_type: None,
+            mixer_device: None,
+            mixer_control: None,
+            dop: false,
+        }];
         assert_eq!(
-            output_selection_key("Speaker", "alsa", Some("bluealsa:DEV=aa:bb,PROFILE=a2dp"), 8),
+            classify_output_role("visualizer", &configs),
+            DeviceOutputRole::System
+        );
+        assert_eq!(
+            classify_output_role(MANAGED_DSP_LOOPBACK_OUTPUT, &configs),
+            DeviceOutputRole::System
+        );
+        assert_eq!(
+            classify_output_role("USB DAC", &configs),
+            DeviceOutputRole::Playback
+        );
+        assert_eq!(
+            classify_output_role("External", &configs),
+            DeviceOutputRole::Unknown
+        );
+        assert_eq!(
+            output_selection_key(
+                "Speaker",
+                "alsa",
+                Some("bluealsa:DEV=aa:bb,PROFILE=a2dp"),
+                8
+            ),
             "bluetooth:AA:BB"
         );
-        assert_eq!(output_selection_key("USB DAC", "alsa", Some("hw:USB,0"), 99), "alsa:USB DAC");
+        assert_eq!(
+            output_selection_key("USB DAC", "alsa", Some("hw:USB,0"), 99),
+            "alsa:USB DAC"
+        );
     }
 
     #[test]
@@ -757,13 +824,22 @@ mod tests {
             profile_configured: false,
             reload_error: false,
         };
-        assert_eq!(diagnostic_code(disconnected), Some(crate::types::DeviceOutputDiagnosticCode::Disconnected));
         assert_eq!(
-            diagnostic_code(OutputDiagnosticFacts { reload_error: true, ..disconnected }),
+            diagnostic_code(disconnected),
+            Some(crate::types::DeviceOutputDiagnosticCode::Disconnected)
+        );
+        assert_eq!(
+            diagnostic_code(OutputDiagnosticFacts {
+                reload_error: true,
+                ..disconnected
+            }),
             Some(crate::types::DeviceOutputDiagnosticCode::ReloadError)
         );
         assert_eq!(
-            diagnostic_code(OutputDiagnosticFacts { role: DeviceOutputRole::Unknown, ..disconnected }),
+            diagnostic_code(OutputDiagnosticFacts {
+                role: DeviceOutputRole::Unknown,
+                ..disconnected
+            }),
             Some(crate::types::DeviceOutputDiagnosticCode::UnknownOutput)
         );
     }

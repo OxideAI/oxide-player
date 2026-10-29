@@ -92,11 +92,15 @@ fn usb_cards_from_sysfs() -> HashSet<u32> {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let Some(card) = name.strip_prefix("card").and_then(|value| value.parse::<u32>().ok()) else {
+        let Some(card) = name
+            .strip_prefix("card")
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
             continue;
         };
         let id = std::fs::read_to_string(entry.path().join("id")).unwrap_or_default();
-        let uevent = std::fs::read_to_string(entry.path().join("device/uevent")).unwrap_or_default();
+        let uevent =
+            std::fs::read_to_string(entry.path().join("device/uevent")).unwrap_or_default();
         if id.to_ascii_lowercase().contains("usb")
             || uevent.to_ascii_lowercase().contains("snd_usb_audio")
             || Path::new(&entry.path().join("device").join("usb")).exists()

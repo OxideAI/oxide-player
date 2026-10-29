@@ -194,8 +194,18 @@ impl Mpd {
             TcpStream::connect((self.inner.host.as_str(), self.inner.port)),
         )
         .await
-        .map_err(|_| AppError::Mpd(format!("connect {}:{} timed out", self.inner.host, self.inner.port)))?
-        .map_err(|e| AppError::Mpd(format!("connect {}:{}: {e}", self.inner.host, self.inner.port)))?;
+        .map_err(|_| {
+            AppError::Mpd(format!(
+                "connect {}:{} timed out",
+                self.inner.host, self.inner.port
+            ))
+        })?
+        .map_err(|e| {
+            AppError::Mpd(format!(
+                "connect {}:{}: {e}",
+                self.inner.host, self.inner.port
+            ))
+        })?;
         let (client, handle) = Client::connect(stream)
             .await
             .map_err(|e| AppError::Mpd(format!("mpd handshake: {e}")))?;
@@ -235,9 +245,7 @@ impl Mpd {
             .await
             .map_err(|e| AppError::Mpd(format!("status: {e}")))?;
 
-        let volume: Option<u8> = frame
-            .get("volume")
-            .and_then(|v| v.parse::<u8>().ok());
+        let volume: Option<u8> = frame.get("volume").and_then(|v| v.parse::<u8>().ok());
 
         let state = match frame.get("state").as_deref() {
             Some("play") => PlaybackState::Playing,
@@ -278,7 +286,11 @@ impl Mpd {
                 (None, None, None, None)
             }
         };
-        tracing::debug!(has_current = current_uri.is_some(), ?current_uri, "mpd status");
+        tracing::debug!(
+            has_current = current_uri.is_some(),
+            ?current_uri,
+            "mpd status"
+        );
 
         Ok(MpdStatus {
             state,
@@ -306,7 +318,10 @@ impl Mpd {
         let mut cur_name = String::new();
         let mut cur_enabled = false;
 
-        let flush = |id: &mut Option<u32>, name: &mut String, enabled: &mut bool, out: &mut Vec<OutputDevice>| {
+        let flush = |id: &mut Option<u32>,
+                     name: &mut String,
+                     enabled: &mut bool,
+                     out: &mut Vec<OutputDevice>| {
             if let Some(id) = id.take() {
                 out.push(OutputDevice {
                     id,
@@ -347,9 +362,7 @@ impl Mpd {
                 // Give MPD a moment to finish the rescan before retrying.
                 tokio::time::sleep(Duration::from_millis(800)).await;
                 self.try_add(uri).await.map_err(|e| {
-                    AppError::Mpd(format!(
-                        "{e} (is this folder under MPD's music_directory?)"
-                    ))
+                    AppError::Mpd(format!("{e} (is this folder under MPD's music_directory?)"))
                 })
             }
             Err(e) => Err(e),
@@ -406,12 +419,7 @@ impl Mpd {
 
     /// Insert `uri` immediately after the currently playing song, or at the
     /// front of the queue when nothing is playing. Returns the new queue id.
-    pub async fn play_next(
-        &self,
-        uri: &str,
-        start: f64,
-        end: Option<f64>,
-    ) -> AppResult<u64> {
+    pub async fn play_next(&self, uri: &str, start: f64, end: Option<f64>) -> AppResult<u64> {
         use mpd_client::commands::definitions::Add;
         let client = self.client().await?;
         let id = client
@@ -473,12 +481,7 @@ impl Mpd {
     /// advance to whatever is next in the queue. Used for CUE-sheet tracks so
     /// playback stops precisely at the track boundary instead of bleeding into
     /// the next track's audio. `end` of `None` plays through to end-of-file.
-    pub async fn play_uri_range(
-        &self,
-        uri: &str,
-        start: f64,
-        end: Option<f64>,
-    ) -> AppResult<()> {
+    pub async fn play_uri_range(&self, uri: &str, start: f64, end: Option<f64>) -> AppResult<()> {
         let id = self.add_uri(uri).await?;
         let pos = self
             .queue()
@@ -561,18 +564,15 @@ impl Mpd {
     }
 
     pub async fn set_volume(&self, volume: u8) -> AppResult<()> {
-        self.raw(Command::new("setvol").argument(volume))
-            .await
+        self.raw(Command::new("setvol").argument(volume)).await
     }
 
     pub async fn enable_output(&self, id: u32) -> AppResult<()> {
-        self.raw(Command::new("enableoutput").argument(id))
-            .await
+        self.raw(Command::new("enableoutput").argument(id)).await
     }
 
     pub async fn disable_output(&self, id: u32) -> AppResult<()> {
-        self.raw(Command::new("disableoutput").argument(id))
-            .await
+        self.raw(Command::new("disableoutput").argument(id)).await
     }
 
     pub async fn clear_error(&self) -> AppResult<()> {
@@ -650,7 +650,11 @@ impl Mpd {
             return Ok(());
         }
         client
-            .command_list((ClearQueue, LoadPlaylist::name(name), Play::song(SongPosition(0))))
+            .command_list((
+                ClearQueue,
+                LoadPlaylist::name(name),
+                Play::song(SongPosition(0)),
+            ))
             .await
             .map_err(|e| AppError::Mpd(format!("play playlist {name}: {e}")))?;
         Ok(())

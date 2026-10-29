@@ -18,6 +18,23 @@ function status(volume: number | null): PlayerStatus {
 
 describe("NowPlaying controls", () => {
   afterEach(() => cleanup());
+  it("animates the cover placeholder only during playback", () => {
+    const props = {
+      queue: null,
+      onTogglePlay: vi.fn(),
+      onNext: vi.fn(),
+      onPrev: vi.fn(),
+      onSeek: vi.fn(),
+      onVolume: vi.fn(),
+      onOpenAlbum: vi.fn(),
+    };
+    const { container, rerender } = render(<NowPlaying {...props} status={status(69)} />);
+    const equalizer = container.querySelector("[class*='eq']");
+    expect(equalizer?.className).not.toContain("eqPlaying");
+
+    rerender(<NowPlaying {...props} status={{ ...status(69), state: "playing" }} />);
+    expect(equalizer?.className).toContain("eqPlaying");
+  });
 
   it("shows the volume slider when a switched output reports volume support", () => {
     const props = {
@@ -30,7 +47,7 @@ describe("NowPlaying controls", () => {
       onOpenAlbum: vi.fn(),
     };
     const { queryByLabelText, getByLabelText, rerender } = render(
-      <NowPlaying {...props} status={status(null)} />,
+      <NowPlaying {...props} status={status(null)} />
     );
 
     expect(queryByLabelText("Volume")).toBeNull();
@@ -50,9 +67,7 @@ describe("NowPlaying controls", () => {
       onVolume: vi.fn(),
       onOpenAlbum: vi.fn(),
     };
-    const { getByLabelText } = render(
-      <NowPlaying {...props} status={status(69)} />,
-    );
+    const { getByLabelText } = render(<NowPlaying {...props} status={status(69)} />);
 
     for (const label of ["shuffle queue", "view queue"]) {
       const button = getByLabelText(label);

@@ -5,8 +5,8 @@ use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::{Json, Router};
 use axum::routing::{get, post};
+use axum::{Json, Router};
 use serde::Deserialize;
 
 /// Wire the Bluetooth API routes into the application router.
@@ -22,11 +22,17 @@ pub fn router() -> Router<AppState> {
         .route("/api/bluetooth/wake-connect", post(bluetooth_wake_connect))
         .route("/api/bluetooth/disconnect", post(bluetooth_disconnect))
         .route("/api/bluetooth/forget", post(bluetooth_forget))
-        .route("/api/bluetooth/remove-output", post(bluetooth_remove_output))
+        .route(
+            "/api/bluetooth/remove-output",
+            post(bluetooth_remove_output),
+        )
         .route("/api/bluetooth/rename", post(bluetooth_rename))
         .route("/api/bluetooth/test-connect", post(bluetooth_test_connect))
         .route("/api/bluetooth/input/enable", post(bluetooth_input_enable))
-        .route("/api/bluetooth/input/disable", post(bluetooth_input_disable))
+        .route(
+            "/api/bluetooth/input/disable",
+            post(bluetooth_input_disable),
+        )
         .route("/api/bluetooth/input/status", get(bluetooth_input_status))
 }
 
@@ -34,7 +40,10 @@ pub fn router() -> Router<AppState> {
 fn bt_available<T>(r: anyhow::Result<T>) -> AppResult<T> {
     r.map_err(|e| {
         let msg = e.to_string();
-        if msg.contains("not supported") || msg.contains("not initialised") || msg.contains("no Bluetooth") {
+        if msg.contains("not supported")
+            || msg.contains("not initialised")
+            || msg.contains("no Bluetooth")
+        {
             AppError::BluetoothUnavailable
         } else {
             AppError::Bluetooth(msg)
@@ -182,15 +191,11 @@ async fn bluetooth_connect(
     // Create (or update) the MPD output config fragment for this BT speaker.
     let devices = s.bluetooth().list_devices().await;
     if let Some(device) = devices.iter().find(|d| d.address == body.address) {
-        mpd_integration::create_fragment(
-            device,
-            s.device_configs(),
-            |pending| {
-                if pending {
-                    s.set_config_restart_pending(true);
-                }
-            },
-        )
+        mpd_integration::create_fragment(device, s.device_configs(), |pending| {
+            if pending {
+                s.set_config_restart_pending(true);
+            }
+        })
         .map_err(|e| AppError::Bluetooth(e.to_string()))?;
         ensure_output_include(&s).await?;
         super::restart_mpd_if_pending(&s).await?;
@@ -218,15 +223,11 @@ async fn bluetooth_wake_connect(
     // Create (or update) the MPD output config fragment for this BT speaker.
     let devices = s.bluetooth().list_devices().await;
     if let Some(device) = devices.iter().find(|d| d.address == body.address) {
-        mpd_integration::create_fragment(
-            device,
-            s.device_configs(),
-            |pending| {
-                if pending {
-                    s.set_config_restart_pending(true);
-                }
-            },
-        )
+        mpd_integration::create_fragment(device, s.device_configs(), |pending| {
+            if pending {
+                s.set_config_restart_pending(true);
+            }
+        })
         .map_err(|e| AppError::Bluetooth(e.to_string()))?;
         ensure_output_include(&s).await?;
         super::restart_mpd_if_pending(&s).await?;
@@ -257,11 +258,9 @@ async fn bluetooth_forget(
     // Remove the MPD config fragment before unpairing.
     let devices = s.bluetooth().list_devices().await;
     if let Some(device) = devices.iter().find(|d| d.address == body.address) {
-        let _ = mpd_integration::remove_fragment(
-            device,
-            s.device_configs(),
-            |pending| s.set_config_restart_pending(pending),
-        );
+        let _ = mpd_integration::remove_fragment(device, s.device_configs(), |pending| {
+            s.set_config_restart_pending(pending)
+        });
     }
 
     bt_available(s.bluetooth().forget(&body.address).await)?;
@@ -283,11 +282,9 @@ async fn bluetooth_remove_output(
         .find(|d| d.address == body.address)
         .ok_or_else(|| AppError::NotFound(format!("BT device {}", body.address)))?;
 
-    mpd_integration::remove_fragment(
-        device,
-        s.device_configs(),
-        |pending| s.set_config_restart_pending(pending),
-    )
+    mpd_integration::remove_fragment(device, s.device_configs(), |pending| {
+        s.set_config_restart_pending(pending)
+    })
     .map_err(|e| AppError::Bluetooth(e.to_string()))?;
     super::restart_mpd_if_pending(&s).await?;
 
@@ -299,14 +296,20 @@ async fn bluetooth_remove_output(
 /// `POST /api/bluetooth/input/enable` — enable A2DP sink input.
 async fn bluetooth_input_enable(State(s): State<AppState>) -> AppResult<StatusCode> {
     let input = s.bluetooth().input();
-    input.enable().await.map_err(|e| AppError::Bluetooth(e.to_string()))?;
+    input
+        .enable()
+        .await
+        .map_err(|e| AppError::Bluetooth(e.to_string()))?;
     Ok(StatusCode::OK)
 }
 
 /// `POST /api/bluetooth/input/disable` — disable A2DP sink input.
 async fn bluetooth_input_disable(State(s): State<AppState>) -> AppResult<StatusCode> {
     let input = s.bluetooth().input();
-    input.disable().await.map_err(|e| AppError::Bluetooth(e.to_string()))?;
+    input
+        .disable()
+        .await
+        .map_err(|e| AppError::Bluetooth(e.to_string()))?;
     Ok(StatusCode::OK)
 }
 

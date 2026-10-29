@@ -20,7 +20,6 @@ pub enum ResamplePreset {
     Extreme,
 }
 
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EqBandType {
@@ -68,9 +67,7 @@ impl DspProfile {
     ///
     /// Returns a clear, user-facing message on the first problem found.
     pub fn validate(&self) -> Result<()> {
-        if self.device.trim().is_empty()
-            || self.device.contains('\n')
-            || self.device.contains('\0')
+        if self.device.trim().is_empty() || self.device.contains('\n') || self.device.contains('\0')
         {
             bail!("invalid dsp device name: {:?}", self.device);
         }
@@ -235,9 +232,24 @@ mod tests {
         p.mode = DspMode::Resample;
         p.target_rate = Some(48000);
         p.eq_bands = vec![
-            EqBand { band_type: EqBandType::Peaking, freq: 8000.0, gain: 2.0, q: 1.0 },
-            EqBand { band_type: EqBandType::LowShelf, freq: 80.0, gain: 3.0, q: 0.9 },
-            EqBand { band_type: EqBandType::Peaking, freq: 1000.0, gain: -2.0, q: 1.4 },
+            EqBand {
+                band_type: EqBandType::Peaking,
+                freq: 8000.0,
+                gain: 2.0,
+                q: 1.0,
+            },
+            EqBand {
+                band_type: EqBandType::LowShelf,
+                freq: 80.0,
+                gain: 3.0,
+                q: 0.9,
+            },
+            EqBand {
+                band_type: EqBandType::Peaking,
+                freq: 1000.0,
+                gain: -2.0,
+                q: 1.4,
+            },
         ];
         let eff = p.effective();
         let freqs: Vec<f64> = eff.eq_bands.iter().map(|b| b.freq).collect();

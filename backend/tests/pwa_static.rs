@@ -37,10 +37,7 @@ fn require_dist() -> std::path::PathBuf {
 async fn serve(path: &str) -> Option<(StatusCode, String, String)> {
     let dir = dist_dir()?;
     let svc = ServeDir::new(&dir).append_index_html_on_directories(false);
-    let req = Request::builder()
-        .uri(path)
-        .body(Body::empty())
-        .unwrap();
+    let req = Request::builder().uri(path).body(Body::empty()).unwrap();
     let resp = svc.oneshot(req).await.ok()?;
     let ct = resp
         .headers()
@@ -79,7 +76,10 @@ async fn service_worker_served_as_javascript() {
     };
     assert_eq!(status, StatusCode::OK);
     assert!(
-        ct == "text/javascript" || ct == "application/javascript" || ct.starts_with("text/javascript") || ct.starts_with("application/javascript"),
+        ct == "text/javascript"
+            || ct == "application/javascript"
+            || ct.starts_with("text/javascript")
+            || ct.starts_with("application/javascript"),
         "service worker content-type was {ct}"
     );
 }
@@ -98,9 +98,17 @@ async fn manifest_points_at_existing_icons() {
     assert!(!icons.is_empty());
     for icon in icons {
         let src = icon["src"].as_str().expect("icon src");
-        let path = if src.starts_with('/') { src.to_string() } else { format!("/{src}") };
+        let path = if src.starts_with('/') {
+            src.to_string()
+        } else {
+            format!("/{src}")
+        };
         let (status, _, icon_body) = serve(&path).await.expect("icon reachable");
-        assert_eq!(status, StatusCode::OK, "icon {src} not served (status {status})");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "icon {src} not served (status {status})"
+        );
         assert!(!icon_body.is_empty(), "icon {src} is empty");
     }
 }
@@ -112,7 +120,5 @@ fn mime_guess_maps_pwa_extensions() {
         "application/manifest+json"
     );
     let js = mime_guess::from_path("x.js").first_or_octet_stream();
-    assert!(
-        js.as_ref() == "text/javascript" || js.as_ref() == "application/javascript"
-    );
+    assert!(js.as_ref() == "text/javascript" || js.as_ref() == "application/javascript");
 }

@@ -34,27 +34,27 @@ function preferredLibraryView(): LibraryViewMode {
   return "albums";
 }
 
- type Tab = "library" | "playlists" | "settings" | "radio";
- 
- const TABS: { id: Tab; label: string }[] = [
-   { id: "library", label: "Library" },
-   { id: "playlists", label: "Playlists" },
-   { id: "radio", label: "Radio" },
-   { id: "settings", label: "Settings" },
- ];
- 
- interface Route {
-   tab: Tab;
-   album: string | null;
+type Tab = "library" | "playlists" | "settings" | "radio";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "library", label: "Library" },
+  { id: "playlists", label: "Playlists" },
+  { id: "radio", label: "Radio" },
+  { id: "settings", label: "Settings" },
+];
+
+interface Route {
+  tab: Tab;
+  album: string | null;
   libraryView: LibraryViewMode;
   folderPath: string | null;
- }
- 
- export function parsePath(): Route {
-   const raw = window.location.pathname.replace(/^\/+/, "");
-   const parts = raw.split("/").filter(Boolean);
-   const head = parts[0] as Tab | undefined;
-   if (head && TABS.some((t) => t.id === head)) {
+}
+
+export function parsePath(): Route {
+  const raw = window.location.pathname.replace(/^\/+/, "");
+  const parts = raw.split("/").filter(Boolean);
+  const head = parts[0] as Tab | undefined;
+  if (head && TABS.some((t) => t.id === head)) {
     // Library tab has two sub-routes:
     // /library                -> albums (default, or stored preference on bare /library is applied by opener not parsePath)
     // /library/<album>        -> albums with album
@@ -64,7 +64,12 @@ function preferredLibraryView(): LibraryViewMode {
       if (parts[1] === "folders") {
         if (parts[2]) {
           try {
-            return { tab: head, album: null, libraryView: "folders", folderPath: decodeURIComponent(parts[2]) };
+            return {
+              tab: head,
+              album: null,
+              libraryView: "folders",
+              folderPath: decodeURIComponent(parts[2]),
+            };
           } catch {
             return { tab: head, album: null, libraryView: "folders", folderPath: parts[2] };
           }
@@ -73,7 +78,12 @@ function preferredLibraryView(): LibraryViewMode {
       }
       if (parts[1]) {
         try {
-          return { tab: head, album: decodeURIComponent(parts[1]), libraryView: "albums", folderPath: null };
+          return {
+            tab: head,
+            album: decodeURIComponent(parts[1]),
+            libraryView: "albums",
+            folderPath: null,
+          };
         } catch {
           return { tab: head, album: parts[1], libraryView: "albums", folderPath: null };
         }
@@ -81,11 +91,11 @@ function preferredLibraryView(): LibraryViewMode {
       return { tab: head, album: null, libraryView: "albums", folderPath: null };
     }
     return { tab: head, album: null, libraryView: "albums", folderPath: null };
-   }
+  }
   return { tab: "library", album: null, libraryView: "albums", folderPath: null };
- }
- 
- export function buildPath(route: Route): string {
+}
+
+export function buildPath(route: Route): string {
   if (route.tab === "library") {
     if (route.libraryView === "folders") {
       if (route.folderPath) return `/library/folders/${encodeURIComponent(route.folderPath)}`;
@@ -93,8 +103,8 @@ function preferredLibraryView(): LibraryViewMode {
     }
     if (route.album) return `/library/${encodeURIComponent(route.album)}`;
   }
-   return `/${route.tab}`;
- }
+  return `/${route.tab}`;
+}
 
 export function App() {
   const [error, setError] = useState<string | null>(null);
@@ -116,8 +126,7 @@ export function App() {
     lastSnapshotAt,
   } = usePlayerStatus();
   const connectionError =
-    statusError ??
-    (status === null && !connected ? "Connecting to player…" : null);
+    statusError ?? (status === null && !connected ? "Connecting to player…" : null);
   const banner = error ?? connectionError;
   // Panel sessions only: auto-return to /kiosk after continuous stopped
   // playback (plan U1/KTD4). Outside the kiosk branch so a Back-button trip
@@ -138,7 +147,13 @@ export function App() {
   // /library/<album> or /library/folders keep their URL.
   useEffect(() => {
     if (window.location.pathname !== "/library") return;
-    if (route.tab !== "library" || route.album || route.folderPath || route.libraryView !== "albums") return;
+    if (
+      route.tab !== "library" ||
+      route.album ||
+      route.folderPath ||
+      route.libraryView !== "albums"
+    )
+      return;
     const pref = preferredLibraryView();
     if (pref === "folders") {
       const next: Route = { tab: "library", album: null, libraryView: "folders", folderPath: null };
@@ -216,9 +231,7 @@ export function App() {
     }
   }, []);
 
-  const prevVolume = useRef<number>(
-    status?.volume && status.volume > 0 ? status.volume : 80,
-  );
+  const prevVolume = useRef<number>(status?.volume && status.volume > 0 ? status.volume : 80);
   useEffect(() => {
     if (status?.volume && status.volume > 0) prevVolume.current = status.volume;
   }, [status?.volume]);
@@ -253,8 +266,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
   useEffect(() => {
     if (!notice) return;
-    const reason =
-      notice.reason === "missing" ? "missing" : "permanently unplayable";
+    const reason = notice.reason === "missing" ? "missing" : "permanently unplayable";
     setToast(`Skipped ${notice.label}: ${reason}.`);
     void removeTrackFromLibraryCache(notice.track_id);
     setRefreshToken((n) => n + 1);
@@ -358,11 +370,7 @@ export function App() {
   return (
     <div className={styles.app}>
       <header className={styles.nav}>
-        <button
-          className={styles.brand}
-          onClick={() => go("library")}
-          aria-label="Oxide home"
-        >
+        <button className={styles.brand} onClick={() => go("library")} aria-label="Oxide home">
           <span className={styles.brandMark} aria-hidden>
             <span className={styles.brandCore} />
           </span>
@@ -511,11 +519,7 @@ export function App() {
       <OfflineBanner />
       <ShortcutToast text={toast} onClear={() => setToast(null)} />
       <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <SearchBar
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        onSearch={openSearch}
-      />
+      <SearchBar open={searchOpen} onClose={() => setSearchOpen(false)} onSearch={openSearch} />
     </div>
   );
 }

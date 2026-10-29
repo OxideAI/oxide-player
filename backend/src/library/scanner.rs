@@ -2,8 +2,8 @@ use crate::error::{AppError, AppResult};
 use crate::library::db::LibraryDb;
 use lofty::file::{AudioFile, TaggedFile, TaggedFileExt};
 use lofty::picture::MimeType;
-use lofty::tag::{Accessor, ItemKey};
 use lofty::read_from_path;
+use lofty::tag::{Accessor, ItemKey};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -30,7 +30,9 @@ fn format_of(path: &Path) -> Option<String> {
 }
 
 fn parse_year(s: &str) -> Option<i32> {
-    s.split(['-', '/', '.']).next().and_then(|p| p.parse::<i32>().ok())
+    s.split(['-', '/', '.'])
+        .next()
+        .and_then(|p| p.parse::<i32>().ok())
 }
 
 fn is_cue(path: &Path) -> bool {
@@ -158,7 +160,10 @@ fn walk(
     };
     for entry in entries.flatten() {
         let p = entry.path();
-        let name = p.file_name().and_then(|n| n.to_str()).map(|n| n.to_string());
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.to_string());
         // Warn when a filename is not valid UTF-8 — the URI stored in the DB
         // will be mangled (replacement characters), and the play API may fail
         // to resolve it later. Suggest a fix (the most common culprit is files
@@ -363,7 +368,12 @@ pub(crate) fn find_local_cover(dir: &Path) -> Option<PathBuf> {
     // release rather than `cover`/`folder`).
     let mut images: Vec<PathBuf> = found
         .values()
-        .filter(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("jpg" | "jpeg" | "png")))
+        .filter(|p| {
+            matches!(
+                p.extension().and_then(|e| e.to_str()),
+                Some("jpg" | "jpeg" | "png")
+            )
+        })
         .cloned()
         .collect();
     if images.len() == 1 {
@@ -515,7 +525,15 @@ pub fn scan(
     Ok(scanned)
 }
 
-fn ingest(uri: &str, path: &Path, source: &Path, db: &LibraryDb, cover_dir: &Path, mtime: i64, opt: crate::config::CoverOptimization) -> AppResult<()> {
+fn ingest(
+    uri: &str,
+    path: &Path,
+    source: &Path,
+    db: &LibraryDb,
+    cover_dir: &Path,
+    mtime: i64,
+    opt: crate::config::CoverOptimization,
+) -> AppResult<()> {
     let tagged = read_from_path(path).map_err(|e| AppError::Library(e.to_string()))?;
     let props = tagged.properties();
 
@@ -759,7 +777,10 @@ fn optimize_cover(path: &Path, opt: Option<crate::config::CoverOptimization>) {
     {
         let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, opt.quality);
         if let Err(e) = enc.encode_image(&flatten_white(&resized)) {
-            tracing::warn!("cover optimization: encode failed for {}: {e}", path.display());
+            tracing::warn!(
+                "cover optimization: encode failed for {}: {e}",
+                path.display()
+            );
             return;
         }
     }
@@ -774,7 +795,10 @@ fn optimize_cover(path: &Path, opt: Option<crate::config::CoverOptimization>) {
         .unwrap_or_default();
     if src_ext == "jpg" || src_ext == "jpeg" {
         if let Err(e) = std::fs::write(path, &buf) {
-            tracing::warn!("cover optimization: write failed for {}: {e}", path.display());
+            tracing::warn!(
+                "cover optimization: write failed for {}: {e}",
+                path.display()
+            );
         }
     } else {
         // Non-JPEG source (e.g. PNG) gets converted to JPEG; rename the file so
@@ -782,7 +806,10 @@ fn optimize_cover(path: &Path, opt: Option<crate::config::CoverOptimization>) {
         // serves the right content-type.
         let jpg = path.with_extension("jpg");
         if let Err(e) = std::fs::write(&jpg, &buf) {
-            tracing::warn!("cover optimization: write failed for {}: {e}", jpg.display());
+            tracing::warn!(
+                "cover optimization: write failed for {}: {e}",
+                jpg.display()
+            );
             return;
         }
         if jpg != path {
@@ -814,7 +841,11 @@ fn flatten_white(img: &image::DynamicImage) -> image::RgbaImage {
 /// metadata. Clears the cover cache first so removed/renamed local art is
 /// dropped. Covers are keyed by album, so a multi-track album writes and reads
 /// a single image (issue #31).
-pub fn rescan_art(db: &LibraryDb, cover_dir: &Path, opt: crate::config::CoverOptimization) -> AppResult<u64> {
+pub fn rescan_art(
+    db: &LibraryDb,
+    cover_dir: &Path,
+    opt: crate::config::CoverOptimization,
+) -> AppResult<u64> {
     if let Ok(entries) = std::fs::read_dir(cover_dir) {
         for entry in entries.flatten() {
             let _ = std::fs::remove_file(entry.path());
@@ -847,7 +878,11 @@ pub fn rescan_art(db: &LibraryDb, cover_dir: &Path, opt: crate::config::CoverOpt
 /// and relocate its existing `{id}.{ext}` cover file to `{cover_key}.{ext}`.
 /// The first track of each album wins (all share the same image), so audio is
 /// never re-read. Returns the number of tracks backfilled.
-pub fn backfill_covers(db: &LibraryDb, cover_dir: &Path, opt: crate::config::CoverOptimization) -> AppResult<u64> {
+pub fn backfill_covers(
+    db: &LibraryDb,
+    cover_dir: &Path,
+    opt: crate::config::CoverOptimization,
+) -> AppResult<u64> {
     let rows = db.tracks_missing_cover_key()?;
     if rows.is_empty() {
         return Ok(0);

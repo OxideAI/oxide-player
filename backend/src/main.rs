@@ -4,13 +4,13 @@ mod config;
 pub mod devices;
 pub mod dsp;
 mod error;
-mod visualizer;
 mod library;
 mod mpd;
 mod radio;
 mod shared_folders;
 mod state;
 mod types;
+mod visualizer;
 
 use crate::dsp::camilladsp::{DEFAULT_CAPTURE_DEVICE, DEFAULT_CAPTURE_RATE};
 use crate::state::AppState;
@@ -38,7 +38,6 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-
     std::fs::create_dir_all(&config.data_dir).context("create data dir")?;
     std::fs::create_dir_all(&config.cover_cache_dir()).context("create cover cache dir")?;
 
@@ -52,7 +51,9 @@ async fn main() -> anyhow::Result<()> {
             .camilladsp_capture_device
             .clone()
             .unwrap_or_else(|| DEFAULT_CAPTURE_DEVICE.to_string()),
-        config.camilladsp_capture_rate.unwrap_or(DEFAULT_CAPTURE_RATE),
+        config
+            .camilladsp_capture_rate
+            .unwrap_or(DEFAULT_CAPTURE_RATE),
         config.camilladsp_autostart,
         config.camilladsp_binary.clone(),
     );

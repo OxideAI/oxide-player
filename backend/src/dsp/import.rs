@@ -96,9 +96,7 @@ fn parse_filter_values(values: &str, line_number: usize) -> Result<EqBand> {
     let first = tokens
         .next()
         .ok_or_else(|| anyhow::anyhow!("line {line_number}: Filter has no values"))?;
-    let filter_type = if first.eq_ignore_ascii_case("on")
-        || first.eq_ignore_ascii_case("off")
-    {
+    let filter_type = if first.eq_ignore_ascii_case("on") || first.eq_ignore_ascii_case("off") {
         tokens
             .next()
             .ok_or_else(|| anyhow::anyhow!("line {line_number}: Filter is missing its type"))?
@@ -146,9 +144,9 @@ fn parse_number(value: &str, name: &str, line_number: usize) -> Result<f64> {
         .split_whitespace()
         .next()
         .ok_or_else(|| anyhow::anyhow!("line {line_number}: {name} is missing a numeric value"))?;
-    token.parse::<f64>().with_context(|| {
-        format!("line {line_number}: {name} value {token:?} is not numeric")
-    })
+    token
+        .parse::<f64>()
+        .with_context(|| format!("line {line_number}: {name} value {token:?} is not numeric"))
 }
 
 fn validate_settings(settings: &DspSettings) -> Result<()> {
@@ -213,7 +211,8 @@ mod tests {
 
     #[test]
     fn duplicate_filter_number_is_rejected() {
-        let text = "Filter 1: ON PK Fc 20 Hz Gain 0 dB Q 1\nFilter 1: ON PK Fc 30 Hz Gain 0 dB Q 1\n";
+        let text =
+            "Filter 1: ON PK Fc 20 Hz Gain 0 dB Q 1\nFilter 1: ON PK Fc 30 Hz Gain 0 dB Q 1\n";
         let error = parse_dsp_text(text).unwrap_err().to_string();
         assert!(error.contains("duplicate Filter 1"), "got: {error}");
     }

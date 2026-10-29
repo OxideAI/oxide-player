@@ -1,16 +1,16 @@
 use crate::dsp::config::{render_camilladsp_config, CamillaConfig};
 use crate::dsp::profile::DspProfile;
 use anyhow::{Context, Result};
+use futures_util::SinkExt;
+use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio::io::AsyncReadExt;
-use futures_util::SinkExt;
-use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::Message;
 
 pub const DEFAULT_CAPTURE_DEVICE: &str = "hw:Loopback,1";
@@ -126,7 +126,11 @@ impl DspManager {
     /// configured host/port. The child is kept by the caller during startup
     /// so an early exit can be reported with its stderr.
     async fn start_daemon(&self, host: &str, port: u16) -> Result<tokio::process::Child> {
-        let binary = self.inner.binary.clone().unwrap_or_else(|| "camilladsp".to_string());
+        let binary = self
+            .inner
+            .binary
+            .clone()
+            .unwrap_or_else(|| "camilladsp".to_string());
         let mut cmd = tokio::process::Command::new(&binary);
         cmd.arg("--address")
             .arg(host)
@@ -232,7 +236,6 @@ impl DspManager {
         *self.inner.active_device.lock().await = None;
     }
 
-
     /// Persist the profile as a CamillaDSP config and signal a reload.
     /// Persist the profile as a CamillaDSP config and report whether the
     /// active route was confirmed by a successful reload acknowledgement.
@@ -299,11 +302,11 @@ impl DspManager {
                 )
             };
             if !confirmed {
-                let busy = error
-                    .as_deref()
-                    .is_some_and(|e| is_alsa_busy_error(e));
+                let busy = error.as_deref().is_some_and(|e| is_alsa_busy_error(e));
                 if busy {
-                    tracing::warn!("CamillaDSP reload rejected as ALSA busy; retrying after settle delay");
+                    tracing::warn!(
+                        "CamillaDSP reload rejected as ALSA busy; retrying after settle delay"
+                    );
                     tokio::time::sleep(Duration::from_millis(350)).await;
                     if let Some(url) = &self.inner.ws_url {
                         match self.send_reload(url).await {
@@ -352,7 +355,6 @@ impl DspManager {
         Ok(())
     }
 
-
     async fn send_reload(&self, url: &str) -> Result<bool> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut last_connect_error: Option<String> = None;
@@ -384,35 +386,36 @@ impl DspManager {
 
         let (mut write, mut read) = ws.split();
         write
-            .send(Message::Text(serde_json::json!("Reload").to_string().into()))
+            .send(Message::Text(
+                serde_json::json!("Reload").to_string().into(),
+            ))
             .await
             .context("send reload to camilladsp")?;
 
-        let confirmed = match tokio::time::timeout(std::time::Duration::from_secs(5), read.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => {
-                let v: serde_json::Value = serde_json::from_str(&text)
-                    .with_context(|| format!("parse camilladsp reload response: {text}"))?;
-                let result = v
-                    .get("Reload")
-                    .and_then(|reload| reload.get("result"));
-                if result == Some(&serde_json::Value::String("Ok".to_string())) {
-                    true
-                } else {
-                    anyhow::bail!(
-                        "camilladsp rejected config reload: {}",
-                        result.unwrap_or(&v)
-                    );
+        let confirmed =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), read.next()).await {
+                Ok(Some(Ok(Message::Text(text)))) => {
+                    let v: serde_json::Value = serde_json::from_str(&text)
+                        .with_context(|| format!("parse camilladsp reload response: {text}"))?;
+                    let result = v.get("Reload").and_then(|reload| reload.get("result"));
+                    if result == Some(&serde_json::Value::String("Ok".to_string())) {
+                        true
+                    } else {
+                        anyhow::bail!(
+                            "camilladsp rejected config reload: {}",
+                            result.unwrap_or(&v)
+                        );
+                    }
                 }
-            }
-            Ok(Some(Ok(message))) => {
-                anyhow::bail!("camilladsp returned non-text reload response: {message:?}");
-            }
-            Ok(Some(Err(error))) => {
-                anyhow::bail!("camilladsp reload websocket error: {error}");
-            }
-            Ok(None) => anyhow::bail!("camilladsp closed websocket before confirming reload"),
-            Err(_) => anyhow::bail!("timed out waiting for camilladsp reload confirmation"),
-        };
+                Ok(Some(Ok(message))) => {
+                    anyhow::bail!("camilladsp returned non-text reload response: {message:?}");
+                }
+                Ok(Some(Err(error))) => {
+                    anyhow::bail!("camilladsp reload websocket error: {error}");
+                }
+                Ok(None) => anyhow::bail!("camilladsp closed websocket before confirming reload"),
+                Err(_) => anyhow::bail!("timed out waiting for camilladsp reload confirmation"),
+            };
         write.close().await.ok();
         Ok(confirmed)
     }
@@ -434,12 +437,17 @@ fn parse_ws(url: &str) -> Option<(String, u16)> {
     Some((host, port))
 }
 fn is_localhost(host: &str) -> bool {
-    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]" | "0.0.0.0")
+    matches!(
+        host,
+        "127.0.0.1" | "localhost" | "::1" | "[::1]" | "0.0.0.0"
+    )
 }
 
 fn is_alsa_busy_error(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
-    m.contains("device or resource busy") || m.contains("resource busy") || m.contains("alsa") && m.contains("busy")
+    m.contains("device or resource busy")
+        || m.contains("resource busy")
+        || m.contains("alsa") && m.contains("busy")
 }
 
 async fn tcp_reachable(host: &str, port: u16) -> bool {
@@ -596,14 +604,23 @@ mod tests {
     #[tokio::test]
     async fn apply_sends_camilladsp_reload_command() {
         let tmp = tempfile::tempdir().unwrap();
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         let config_path = tmp.path().join("config.yml");
         let expected = serde_json::json!("Reload").to_string();
         let received = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let message = ws.next().await.unwrap().unwrap().into_text().unwrap().to_string();
+            let message = ws
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .into_text()
+                .unwrap()
+                .to_string();
             ws.send(Message::Text(r#"{"Reload":{"result":"Ok"}}"#.into()))
                 .await
                 .unwrap();
@@ -629,7 +646,9 @@ mod tests {
     #[tokio::test]
     async fn apply_reports_daemon_launch_failure_without_websocket_timeout() {
         let tmp = tempfile::tempdir().unwrap();
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
@@ -651,8 +670,7 @@ mod tests {
         assert!(outcome.persisted);
         assert!(!outcome.reload_confirmed);
         assert!(outcome.reload_error.as_deref().is_some_and(|error| {
-            error.contains("failed to launch")
-                && error.contains("definitely/missing/camilladsp")
+            error.contains("failed to launch") && error.contains("definitely/missing/camilladsp")
         }));
     }
 
@@ -665,7 +683,9 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
@@ -683,9 +703,10 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(outcome.persisted);
         assert!(!outcome.reload_confirmed);
-        assert!(outcome.reload_error.as_deref().is_some_and(|error| {
-            error.contains("exited with status")
-        }));
+        assert!(outcome
+            .reload_error
+            .as_deref()
+            .is_some_and(|error| { error.contains("exited with status") }));
     }
 
     #[tokio::test]
@@ -697,7 +718,9 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
@@ -711,14 +734,17 @@ mod tests {
         );
         let outcome = m.apply_profile(base("DAC")).await.unwrap();
 
-        assert!(outcome.reload_error.as_deref().is_some_and(|error| {
-            error.contains("ALSA open failed")
-        }));
+        assert!(outcome
+            .reload_error
+            .as_deref()
+            .is_some_and(|error| { error.contains("ALSA open failed") }));
     }
     #[tokio::test]
     async fn reload_retries_when_camilladsp_is_starting() {
         let tmp = tempfile::tempdir().unwrap();
-        let reserved = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let reserved = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = reserved.local_addr().unwrap();
         drop(reserved);
 
@@ -744,22 +770,33 @@ mod tests {
             false,
             None,
         );
-        assert!(m.send_reload(m.inner.ws_url.as_deref().unwrap()).await.unwrap());
+        assert!(m
+            .send_reload(m.inner.ws_url.as_deref().unwrap())
+            .await
+            .unwrap());
         server.await.unwrap();
     }
-
 
     #[tokio::test]
     async fn restore_active_dsp_route_reapplies_active_profile() {
         let tmp = tempfile::tempdir().unwrap();
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         let received = tokio::spawn(async move {
             let mut messages = Vec::new();
             for _ in 0..2 {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-                let message = ws.next().await.unwrap().unwrap().into_text().unwrap().to_string();
+                let message = ws
+                    .next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .into_text()
+                    .unwrap()
+                    .to_string();
                 ws.send(Message::Text(r#"{"Reload":{"result":"Ok"}}"#.into()))
                     .await
                     .unwrap();
@@ -794,7 +831,9 @@ mod tests {
     #[tokio::test]
     async fn reload_failure_reports_saved_but_not_active() {
         let tmp = tempfile::tempdir().unwrap();
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -803,8 +842,8 @@ mod tests {
             ws.send(Message::Text(
                 r#"{"Reload":{"result":{"ConfigValidationError":"invalid config"}}}"#.into(),
             ))
-                .await
-                .unwrap();
+            .await
+            .unwrap();
         });
         let m = DspManager::new(
             tmp.path().join("config.yml"),
@@ -817,7 +856,10 @@ mod tests {
         *m.inner.active_device.lock().await = Some("DAC".to_string());
         let outcome = m.apply_profile(base("DAC")).await.unwrap();
         assert!(outcome.persisted);
-        assert!(outcome.reload_error.as_deref().is_some_and(|error| error.contains("rejected")));
+        assert!(outcome
+            .reload_error
+            .as_deref()
+            .is_some_and(|error| error.contains("rejected")));
         assert!(!outcome.reload_confirmed);
         assert!(!outcome.active);
         assert_eq!(m.active_device().await, None);
@@ -846,7 +888,9 @@ mod tests {
     // "DSP applied" with no DSP running.
     #[tokio::test]
     async fn tcp_reachable_is_false_when_port_is_closed() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener); // nothing accepts now -> connection refused
         assert!(!tcp_reachable("127.0.0.1", port).await);
@@ -854,7 +898,9 @@ mod tests {
 
     #[tokio::test]
     async fn tcp_reachable_is_true_when_port_is_open() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let port = listener.local_addr().unwrap().port();
         assert!(tcp_reachable("127.0.0.1", port).await);
     }

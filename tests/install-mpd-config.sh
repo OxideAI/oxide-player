@@ -106,4 +106,3 @@ test -s "$MPD_CONFIG"
 grep -Fq "$DATA_DIR/mpd-outputs.d/*.conf" "$MPD_CONFIG"
 
 printf 'installer MPD config include test passed\n'
-

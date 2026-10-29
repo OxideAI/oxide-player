@@ -261,10 +261,7 @@ impl Config {
     ///
     /// This prevents scanning the same files twice when a parent folder is added
     /// after a child, or a child after a parent (issue #46).
-    pub fn add_library_dir(
-        &mut self,
-        path: PathBuf,
-    ) -> Option<Vec<PathBuf>> {
+    pub fn add_library_dir(&mut self, path: PathBuf) -> Option<Vec<PathBuf>> {
         if self
             .library_dirs
             .iter()
@@ -290,17 +287,14 @@ impl Config {
     /// half-written (and therefore unparseable) config.
     pub fn write_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("creating config dir {}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating config dir {}", parent.display()))?;
         }
-        let text =
-            serde_json::to_string_pretty(self).context("serializing config to json")?;
+        let text = serde_json::to_string_pretty(self).context("serializing config to json")?;
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, text).with_context(|| format!("writing config {}", tmp.display()))?;
-        std::fs::rename(&tmp, path).with_context(|| {
-            format!("renaming config {} -> {}", tmp.display(), path.display())
-        })?;
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("renaming config {} -> {}", tmp.display(), path.display()))?;
         Ok(())
     }
 }
@@ -378,10 +372,12 @@ mod tests {
     fn load_without_file_returns_defaults_and_none_resolved() {
         let dir = tempfile::tempdir().unwrap();
 
-        let (got, resolved) =
-            Config::load_from_dir(None, &default_cli(), dir.path()).unwrap();
+        let (got, resolved) = Config::load_from_dir(None, &default_cli(), dir.path()).unwrap();
 
-        assert!(resolved.is_none(), "expected no resolved path without persisted config");
+        assert!(
+            resolved.is_none(),
+            "expected no resolved path without persisted config"
+        );
         assert_eq!(got.listen, "127.0.0.1:8000");
         assert_eq!(got.data_dir, dir.path().join("data"));
     }
@@ -459,7 +455,9 @@ mod tests {
     fn add_library_dir_rejects_exact_duplicate() {
         let mut cfg = Config::default_config();
         cfg.library_dirs = vec![std::path::PathBuf::from("/music")];
-        assert!(cfg.add_library_dir(std::path::PathBuf::from("/music")).is_none());
+        assert!(cfg
+            .add_library_dir(std::path::PathBuf::from("/music"))
+            .is_none());
     }
 
     #[test]

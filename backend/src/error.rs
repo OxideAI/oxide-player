@@ -39,9 +39,10 @@ impl IntoResponse for AppError {
             AppError::Unprocessable(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
             AppError::Bluetooth(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AppError::AudioUnavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
-            AppError::BluetoothUnavailable => {
-                (StatusCode::SERVICE_UNAVAILABLE, "Bluetooth is not available on this platform or no adapter was found".to_string())
-            }
+            AppError::BluetoothUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Bluetooth is not available on this platform or no adapter was found".to_string(),
+            ),
         };
         (status, Json(json!({ "error": msg }))).into_response()
     }

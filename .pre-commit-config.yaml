@@ -1,0 +1,44 @@
+fail_fast: true
+minimum_pre_commit_version: "2.6.0"
+
+default_language_version:
+  python: python3.14
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: Format Rust
+        entry: rustfmt --edition 2021
+        language: system
+        types: [rust]
+
+      - id: prettier
+        name: Format frontend and documentation
+        entry: frontend/node_modules/.bin/prettier --write
+        language: system
+        types: [file]
+        files: '\\.(css|html|js|json|md|ts|tsx|yaml|yml)$'
+
+      - id: cargo-clippy
+        name: Lint Rust
+        entry: cargo clippy --workspace --all-targets
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: frontend-build
+        name: Type-check and build frontend
+        entry: npm --prefix frontend run build
+        language: system
+        pass_filenames: false
+        always_run: true

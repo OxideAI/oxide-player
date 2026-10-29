@@ -9,10 +9,10 @@ use crate::bluetooth::input::BluetoothInputManager;
 use crate::bluetooth::types::BtDevice;
 use anyhow::{Context, Result};
 use bluer::{Adapter, AdapterEvent, Address, Device};
+use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use futures_util::StreamExt;
 use tokio::sync::{Mutex, RwLock};
 
 /// Manages the Bluetooth device lifecycle via BlueZ D‑Bus.
@@ -43,7 +43,6 @@ async fn ensure_trusted(device: &Device, address: &str) -> Result<()> {
         .with_context(|| format!("trust Bluetooth device {address}"))
 }
 
-
 impl BluetoothManager {
     /// Create a new `BluetoothManager`.  Best‑effort: if BlueZ is unavailable
     /// the manager stays usable — all device operations return clear errors.
@@ -69,8 +68,9 @@ impl BluetoothManager {
     // ── internal helpers ──────────────────────────────────────────────
 
     async fn init(&self) -> Result<()> {
-        let session =
-            bluer::Session::new().await.context("create bluer D‑Bus session")?;
+        let session = bluer::Session::new()
+            .await
+            .context("create bluer D‑Bus session")?;
 
         let names = session.adapter_names().await?;
         let adapter_name = names
@@ -78,11 +78,15 @@ impl BluetoothManager {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no Bluetooth adapter found"))?;
 
-        let adapter = session.adapter(&adapter_name)
+        let adapter = session
+            .adapter(&adapter_name)
             .with_context(|| format!("get adapter '{adapter_name}'"))?;
 
         if !adapter.is_powered().await.unwrap_or(false) {
-            adapter.set_powered(true).await.context("power on Bluetooth adapter")?;
+            adapter
+                .set_powered(true)
+                .await
+                .context("power on Bluetooth adapter")?;
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
@@ -144,26 +148,29 @@ impl BluetoothManager {
             let connected = device.is_connected().await.unwrap_or(false);
             let trusted = device.is_trusted().await.unwrap_or(false);
 
-            cache.entry(addr_str).and_modify(|d| {
-                d.name = name.clone();
-                d.alias = alias.clone();
-                d.class = class;
-                d.icon = icon.clone();
-                d.rssi = rssi;
-                d.paired = paired;
-                d.connected = connected;
-                d.trusted = trusted;
-            }).or_insert(BtDevice {
-                address: addr.to_string(),
-                name,
-                alias,
-                class,
-                icon,
-                rssi,
-                connected,
-                paired,
-                trusted,
-            });
+            cache
+                .entry(addr_str)
+                .and_modify(|d| {
+                    d.name = name.clone();
+                    d.alias = alias.clone();
+                    d.class = class;
+                    d.icon = icon.clone();
+                    d.rssi = rssi;
+                    d.paired = paired;
+                    d.connected = connected;
+                    d.trusted = trusted;
+                })
+                .or_insert(BtDevice {
+                    address: addr.to_string(),
+                    name,
+                    alias,
+                    class,
+                    icon,
+                    rssi,
+                    connected,
+                    paired,
+                    trusted,
+                });
         }
     }
 
@@ -173,9 +180,15 @@ impl BluetoothManager {
         let session = guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Bluetooth session not initialised"))?;
-        let name = self.inner.adapter_name.read().await.clone()
+        let name = self
+            .inner
+            .adapter_name
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("no Bluetooth adapter configured"))?;
-        session.adapter(&name)
+        session
+            .adapter(&name)
             .with_context(|| format!("get adapter '{name}'"))
     }
 
@@ -189,7 +202,6 @@ impl BluetoothManager {
             .device(addr)
             .with_context(|| format!("device '{address}' not found on adapter"))
     }
-
 
     // ── background tasks ─────────────────────────────────────────────
 
@@ -263,7 +275,10 @@ impl BluetoothManager {
 
     pub async fn pair(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
-        device.pair().await.with_context(|| format!("pair with {address}"))?;
+        device
+            .pair()
+            .await
+            .with_context(|| format!("pair with {address}"))?;
         ensure_trusted(&device, address).await?;
 
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
@@ -278,7 +293,10 @@ impl BluetoothManager {
     pub async fn connect(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
         ensure_trusted(&device, address).await?;
-        device.connect().await.with_context(|| format!("connect to {address}"))?;
+        device
+            .connect()
+            .await
+            .with_context(|| format!("connect to {address}"))?;
 
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
             entry.connected = true;
@@ -288,10 +306,12 @@ impl BluetoothManager {
         Ok(())
     }
 
-
     pub async fn disconnect(&self, address: &str) -> Result<()> {
         let device = self.get_device(address).await?;
-        device.disconnect().await.with_context(|| format!("disconnect {address}"))?;
+        device
+            .disconnect()
+            .await
+            .with_context(|| format!("disconnect {address}"))?;
 
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
             entry.connected = false;
@@ -302,9 +322,12 @@ impl BluetoothManager {
 
     pub async fn forget(&self, address: &str) -> Result<()> {
         let adapter = self.adapter().await?;
-        let addr: Address = address.parse()
+        let addr: Address = address
+            .parse()
             .map_err(|e| anyhow::anyhow!("invalid Bluetooth address '{address}': {e}"))?;
-        adapter.remove_device(addr).await
+        adapter
+            .remove_device(addr)
+            .await
             .with_context(|| format!("forget (remove) {address}"))?;
 
         self.inner.devices.write().await.remove(address);
@@ -316,7 +339,9 @@ impl BluetoothManager {
     /// Set a user-friendly alias (name) for a paired device.
     pub async fn set_alias(&self, address: &str, name: &str) -> Result<()> {
         let device = self.get_device(address).await?;
-        device.set_alias(name.to_string()).await
+        device
+            .set_alias(name.to_string())
+            .await
             .with_context(|| format!("set alias for {address}"))?;
 
         // Update cache
@@ -332,7 +357,9 @@ impl BluetoothManager {
         let device = self.get_device(address).await?;
         ensure_trusted(&device, address).await?;
 
-        device.connect().await
+        device
+            .connect()
+            .await
             .with_context(|| format!("test connect to {address}"))?;
 
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
@@ -342,7 +369,9 @@ impl BluetoothManager {
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        device.disconnect().await
+        device
+            .disconnect()
+            .await
             .with_context(|| format!("test disconnect from {address}"))?;
 
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
@@ -394,10 +423,14 @@ impl BluetoothManager {
             Err(e) => e,
         };
 
-        tracing::info!("Wake attempt 2 failed for {address}, waiting 5s before final retry: {last_err}");
+        tracing::info!(
+            "Wake attempt 2 failed for {address}, waiting 5s before final retry: {last_err}"
+        );
         tokio::time::sleep(Duration::from_secs(5)).await;
 
-        device.connect().await
+        device
+            .connect()
+            .await
             .with_context(|| format!("wake and connect to {address} after retries"))?;
 
         if let Some(entry) = self.inner.devices.write().await.get_mut(address) {
@@ -423,19 +456,14 @@ impl BluetoothManager {
         if let Ok(adapter) = self.adapter().await {
             self.sync_device_cache(&adapter).await;
         }
-        self.inner.devices.read().await
-            .values()
-            .cloned()
-            .collect()
+        self.inner.devices.read().await.values().cloned().collect()
     }
-
 
     pub fn input(&self) -> BluetoothInputManager {
         self.inner.input.clone()
     }
 
     // -- helper --
-
 
     // -- event callbacks (called from the discovery task) --
 
@@ -448,17 +476,20 @@ impl BluetoothManager {
                 let device = match adapter.device(addr) {
                     Ok(d) => d,
                     Err(_) => {
-                        cache.insert(addr_str.clone(), BtDevice {
-                            address: addr_str.clone(),
-                            name: None,
-                            alias: None,
-                            class: None,
-                            icon: None,
-                            rssi: None,
-                            connected: false,
-                            paired: false,
-                            trusted: false,
-                        });
+                        cache.insert(
+                            addr_str.clone(),
+                            BtDevice {
+                                address: addr_str.clone(),
+                                name: None,
+                                alias: None,
+                                class: None,
+                                icon: None,
+                                rssi: None,
+                                connected: false,
+                                paired: false,
+                                trusted: false,
+                            },
+                        );
                         return;
                     }
                 };
@@ -469,20 +500,22 @@ impl BluetoothManager {
                 let icon = device.icon().await.ok().flatten();
                 let rssi = device.rssi().await.ok().flatten();
 
-                cache.insert(addr_str.clone(), BtDevice {
-                    address: addr_str.clone(),
-                    name,
-                    alias,
-                    class,
-                    icon,
-                    rssi,
-                    connected: false,
-                    paired: false,
-                    trusted: false,
-                });
+                cache.insert(
+                    addr_str.clone(),
+                    BtDevice {
+                        address: addr_str.clone(),
+                        name,
+                        alias,
+                        class,
+                        icon,
+                        rssi,
+                        connected: false,
+                        paired: false,
+                        trusted: false,
+                    },
+                );
             }
         }
-
     }
 
     async fn on_device_lost(&self, addr: Address) {
@@ -511,6 +544,9 @@ mod tests {
         mark_paired(&mut device);
 
         assert!(device.paired);
-        assert!(device.trusted, "paired devices must be trusted before reconnecting");
+        assert!(
+            device.trusted,
+            "paired devices must be trusted before reconnecting"
+        );
     }
 }

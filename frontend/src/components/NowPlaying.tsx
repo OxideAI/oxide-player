@@ -32,14 +32,10 @@ export function NowPlaying({
   const duration = status?.duration ?? 0;
   const playing = status?.state === "playing";
 
-  const { elapsed: smoothElapsed, reset: resetElapsed } = useSmoothElapsed(
-    status,
-    duration,
-  );
+  const { elapsed: smoothElapsed, reset: resetElapsed } = useSmoothElapsed(status, duration);
   const seek = useDragValue(smoothElapsed, onSeek);
   const vol = useDragValue(status?.volume ?? 0, onVolume);
-  const volumeAvailable =
-    status?.volume !== null && status?.volume !== undefined;
+  const volumeAvailable = status?.volume !== null && status?.volume !== undefined;
   const displayElapsed = seek.isDragging() ? seek.local : smoothElapsed;
   const fraction = duration > 0 ? Math.min(1, seek.local / duration) : 0;
 
@@ -100,26 +96,18 @@ export function NowPlaying({
             {artUrlFor(song) ? (
               <img className={styles.cover} src={artUrlFor(song)!} alt="" />
             ) : (
-              <span className={styles.coverPlaceholder}>
-                <span className={styles.eq} aria-hidden>
-                  <i />
-                  <i />
-                  <i />
-                </span>
+              <span className={`${styles.eq} ${playing ? styles.eqPlaying : ""}`} aria-hidden>
+                <i />
+                <i />
+                <i />
               </span>
             )}
-            {artUrlFor(song) && playing && (
-              <span className={styles.coverGlow} aria-hidden />
-            )}
+            {artUrlFor(song) && playing && <span className={styles.coverGlow} aria-hidden />}
           </span>
         </a>
         <div className={styles.text}>
           <div className={styles.title}>
-            {loading
-              ? "Loading…"
-              : song
-                ? displayTitle(song)
-                : "Nothing playing"}
+            {loading ? "Loading…" : song ? displayTitle(song) : "Nothing playing"}
           </div>
           {song ? (
             <button
@@ -140,18 +128,10 @@ export function NowPlaying({
 
       <div className={styles.center}>
         <div className={styles.controls}>
-          <button
-            className={styles.iconBtn}
-            onClick={onPrev}
-            aria-label="previous"
-          >
+          <button className={styles.iconBtn} onClick={onPrev} aria-label="previous">
             <Glyph name="prev" />
           </button>
-          <button
-            className={styles.playBtn}
-            onClick={onTogglePlay}
-            aria-label="play/pause"
-          >
+          <button className={styles.playBtn} onClick={onTogglePlay} aria-label="play/pause">
             <span className={styles.playCore}>
               {playing ? <Glyph name="pause" /> : <Glyph name="play" />}
             </span>
@@ -179,10 +159,8 @@ export function NowPlaying({
               // Streams (duration 0) can't seek; sending seekcur against one
               // raises an MPD error that surfaces as a status banner.
               if (duration <= 0) return;
-              if (e.key === "ArrowRight")
-                onSeek(Math.min(duration, displayElapsed + 5));
-              if (e.key === "ArrowLeft")
-                onSeek(Math.max(0, displayElapsed - 5));
+              if (e.key === "ArrowRight") onSeek(Math.min(duration, displayElapsed + 5));
+              if (e.key === "ArrowLeft") onSeek(Math.max(0, displayElapsed - 5));
             }}
           >
             <div className={styles.progressFill} />
@@ -251,14 +229,7 @@ export function NowPlaying({
   );
 }
 
-type GlyphName =
-  | "prev"
-  | "play"
-  | "pause"
-  | "next"
-  | "shuffle"
-  | "queue"
-  | "vol";
+type GlyphName = "prev" | "play" | "pause" | "next" | "shuffle" | "queue" | "vol";
 function Glyph({ name }: { name: GlyphName }) {
   const c = "var(--text)";
   const a = "var(--accent)";

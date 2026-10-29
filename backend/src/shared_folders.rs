@@ -44,7 +44,10 @@ fn render(folders: &[PathBuf]) -> Result<String> {
             )
         })?;
         if path.contains(['\n', '\r']) {
-            anyhow::bail!("shared folder path contains a newline: {}", folder.display());
+            anyhow::bail!(
+                "shared folder path contains a newline: {}",
+                folder.display()
+            );
         }
 
         let base = folder
@@ -128,10 +131,8 @@ mod tests {
     }
     #[test]
     fn sync_removes_deleted_folder_shares() {
-        let data_dir = std::env::temp_dir().join(format!(
-            "oxide-shared-folders-{}",
-            std::process::id()
-        ));
+        let data_dir =
+            std::env::temp_dir().join(format!("oxide-shared-folders-{}", std::process::id()));
         let first = PathBuf::from("/mnt/first");
         let second = PathBuf::from("/mnt/second");
 
@@ -162,7 +163,10 @@ mod tests {
 
     #[test]
     fn share_names_are_safe_for_samba_sections() {
-        assert_eq!(sanitize_name("jazz collection/2026"), "jazz_collection_2026");
+        assert_eq!(
+            sanitize_name("jazz collection/2026"),
+            "jazz_collection_2026"
+        );
         assert_eq!(sanitize_name(""), "Library");
     }
 }

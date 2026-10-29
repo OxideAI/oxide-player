@@ -1,0 +1,4 @@
+{
+  "*.rs": "rustfmt --edition 2021",
+  "*.{css,html,js,json,md,ts,tsx,yaml,yml}": "frontend/node_modules/.bin/prettier --write"
+}

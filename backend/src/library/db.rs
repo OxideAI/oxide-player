@@ -44,7 +44,6 @@ fn process_nonce() -> u64 {
     now ^ ((std::process::id() as u64) << 32) ^ NEXT_NONCE.fetch_add(1, Ordering::Relaxed)
 }
 
-
 fn if_none_match_matches(header: &str, current: &str) -> bool {
     let current = current.strip_prefix("W/").unwrap_or(current).trim();
     header.trim() == "*"
@@ -80,10 +79,7 @@ impl LibraryDb {
         self.revision.fetch_add(1, Ordering::Release);
     }
 
-    pub fn unfiltered_snapshot(
-        &self,
-        if_none_match: Option<&str>,
-    ) -> AppResult<LibrarySnapshot> {
+    pub fn unfiltered_snapshot(&self, if_none_match: Option<&str>) -> AppResult<LibrarySnapshot> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let revision = self.revision.load(Ordering::Acquire);
         let etag = self.etag(revision);
@@ -168,10 +164,8 @@ impl LibraryDb {
             .query_row("SELECT count(*) FROM tracks", [], |r| r.get(0))
             .unwrap_or(0);
         if fts_count != tracks_count {
-            conn.execute_batch(
-                "INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');",
-            )
-            .map_err(|e| AppError::Library(e.to_string()))?;
+            conn.execute_batch("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');")
+                .map_err(|e| AppError::Library(e.to_string()))?;
         }
         // Idempotent schema upgrades (only on pre-existing tables).
         for (col, col_ty) in [
@@ -190,10 +184,7 @@ impl LibraryDb {
                 )
                 .map_err(|e| AppError::Library(e.to_string()))?;
             if exists == 0 {
-                let _ = conn.execute(
-                    &format!("ALTER TABLE tracks ADD COLUMN {col} {col_ty}"),
-                    [],
-                );
+                let _ = conn.execute(&format!("ALTER TABLE tracks ADD COLUMN {col} {col_ty}"), []);
             }
         }
         Ok(())
@@ -354,10 +345,7 @@ impl LibraryDb {
             .query([cue_index])
             .map_err(|e| AppError::Library(e.to_string()))?;
         let mut matched = None;
-        while let Some(row) = rows
-            .next()
-            .map_err(|e| AppError::Library(e.to_string()))?
-        {
+        while let Some(row) = rows.next().map_err(|e| AppError::Library(e.to_string()))? {
             let track = row_to_track(row);
             let track_stem = track
                 .uri
@@ -563,10 +551,7 @@ impl LibraryDb {
             .map_err(|e| AppError::Library(e.to_string()))?;
         // Drop tracks whose source folder is no longer among the active
         // library sources (e.g. the source was removed in settings).
-        let active: HashSet<&str> = sources
-            .iter()
-            .filter_map(|p| p.to_str())
-            .collect();
+        let active: HashSet<&str> = sources.iter().filter_map(|p| p.to_str()).collect();
         let mut ids = Vec::new();
         for row in rows {
             let (id, path, source) = row.map_err(|e| AppError::Library(e.to_string()))?;
@@ -651,7 +636,6 @@ impl LibraryDb {
         Ok(deleted > 0)
     }
 
-
     fn search_with_conn(
         &self,
         conn: &Connection,
@@ -663,7 +647,11 @@ impl LibraryDb {
         let mut sql = String::from("SELECT {TRACK_COLS_PLACEHOLDER} FROM tracks");
         sql = sql.replace(
             "{TRACK_COLS_PLACEHOLDER}",
-            if q.is_some() { TRACK_COLS_Q } else { TRACK_COLS },
+            if q.is_some() {
+                TRACK_COLS_Q
+            } else {
+                TRACK_COLS
+            },
         );
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(q) = q {
@@ -713,7 +701,9 @@ impl LibraryDb {
             .prepare(&sql)
             .map_err(|e| AppError::Library(e.to_string()))?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(args.iter()), |r| Ok(row_to_track(r)))
+            .query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                Ok(row_to_track(r))
+            })
             .map_err(|e| AppError::Library(e.to_string()))?;
         rows.map(|row| row.map_err(|e| AppError::Library(e.to_string())))
             .collect()
@@ -839,9 +829,26 @@ mod search_tests {
 
     fn put(db: &LibraryDb, path: &str, title: &str, artist: &str, album: &str) {
         db.insert_track(
-            path, path, Some(title), Some(artist), Some(album), None, None, None,
-            Some(1), Some(180.0), Some("flac"), Some(44100), Some(16), Some(2),
-            None, None, None, None, Some(1), None,
+            path,
+            path,
+            Some(title),
+            Some(artist),
+            Some(album),
+            None,
+            None,
+            None,
+            Some(1),
+            Some(180.0),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            None,
         )
         .unwrap();
     }
@@ -867,7 +874,9 @@ mod search_tests {
 
         // Mid-word substring from the old LIKE '%q%' must no longer match.
         assert!(
-            db.search(Some("eatl"), None, None, None).unwrap().is_empty(),
+            db.search(Some("eatl"), None, None, None)
+                .unwrap()
+                .is_empty(),
             "'eatl' is not a prefix of any token"
         );
 
@@ -891,7 +900,9 @@ mod search_tests {
         let db = fresh();
         put(&db, "/a/1.flac", "Help", "The Beatles", "Help!");
         put(&db, "/a/2.flac", "Hotel California", "Eagles", "Hotel Cal");
-        let r = db.search(Some("hotel"), Some("Eagles"), None, None).unwrap();
+        let r = db
+            .search(Some("hotel"), Some("Eagles"), None, None)
+            .unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].artist.as_deref(), Some("Eagles"));
     }
@@ -907,9 +918,26 @@ mod search_tests {
         duration: f64,
     ) {
         db.insert_track(
-            uri, uri, Some("Cue Track"), Some("Artist"), Some("Album"), None, None, None,
-            Some(cue_index), Some(duration), Some("flac"), Some(44100), Some(16), Some(2),
-            None, Some(cue_index), Some(start), end, Some(1), None,
+            uri,
+            uri,
+            Some("Cue Track"),
+            Some("Artist"),
+            Some("Album"),
+            None,
+            None,
+            None,
+            Some(cue_index),
+            Some(duration),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            Some(cue_index),
+            Some(start),
+            end,
+            Some(1),
+            None,
         )
         .unwrap();
     }
@@ -919,9 +947,26 @@ mod search_tests {
         let db = fresh();
         // A CUE-backed file: one plain (non-CUE) row plus two split rows.
         db.insert_track(
-            "Album.flac", "Album.flac", Some("Whole"), Some("Artist"), Some("Album"),
-            None, None, None, Some(0), Some(180.0), Some("flac"), Some(44100), Some(16),
-            Some(2), None, None, None, None, Some(1), None,
+            "Album.flac",
+            "Album.flac",
+            Some("Whole"),
+            Some("Artist"),
+            Some("Album"),
+            None,
+            None,
+            None,
+            Some(0),
+            Some(180.0),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            None,
         )
         .unwrap();
         put_cue(&db, "Album.flac", 1, 0.0, Some(100.0), 180.0);
@@ -940,17 +985,40 @@ mod search_tests {
             Some("Whole"),
             "plain row with title 'Whole' should have been deleted"
         );
-        assert!(db.track_by_uri_cue("Album.flac", Some(1)).unwrap().is_some());
-        assert!(db.track_by_uri_cue("Album.flac", Some(2)).unwrap().is_some());
+        assert!(db
+            .track_by_uri_cue("Album.flac", Some(1))
+            .unwrap()
+            .is_some());
+        assert!(db
+            .track_by_uri_cue("Album.flac", Some(2))
+            .unwrap()
+            .is_some());
     }
 
     #[test]
     fn delete_non_cue_is_noop_without_cue_sibling() {
         let db = fresh();
         db.insert_track(
-            "Solo.flac", "Solo.flac", Some("Solo"), Some("Artist"), Some("Album"),
-            None, None, None, Some(0), Some(180.0), Some("flac"), Some(44100), Some(16),
-            Some(2), None, None, None, None, Some(1), None,
+            "Solo.flac",
+            "Solo.flac",
+            Some("Solo"),
+            Some("Artist"),
+            Some("Album"),
+            None,
+            None,
+            None,
+            Some(0),
+            Some(180.0),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            None,
         )
         .unwrap();
         let removed = db.delete_non_cue("Solo.flac").unwrap();
@@ -989,7 +1057,10 @@ mod search_tests {
         let db = fresh();
         put_cue(&db, "Album.flac", 1, 10.0, Some(100.0), 180.0);
         // 5s is before the first split's window.
-        assert!(db.track_by_uri_and_elapsed("Album.flac", 5.0).unwrap().is_none());
+        assert!(db
+            .track_by_uri_and_elapsed("Album.flac", 5.0)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -997,16 +1068,50 @@ mod search_tests {
         let db = fresh();
         let id1 = db
             .insert_track(
-                "Music/Album.flac", "Music/Album.flac", Some("Cue Track"), Some("Artist"),
-                Some("Album"), None, None, None, Some(1), Some(180.0), Some("flac"),
-                Some(44100), Some(16), Some(2), None, Some(1), Some(0.0), Some(100.0), Some(1), None,
+                "Music/Album.flac",
+                "Music/Album.flac",
+                Some("Cue Track"),
+                Some("Artist"),
+                Some("Album"),
+                None,
+                None,
+                None,
+                Some(1),
+                Some(180.0),
+                Some("flac"),
+                Some(44100),
+                Some(16),
+                Some(2),
+                None,
+                Some(1),
+                Some(0.0),
+                Some(100.0),
+                Some(1),
+                None,
             )
             .unwrap();
         let id2 = db
             .insert_track(
-                "Music/Album.flac", "Music/Album.flac", Some("Cue Track"), Some("Artist"),
-                Some("Album"), None, None, None, Some(2), Some(180.0), Some("flac"),
-                Some(44100), Some(16), Some(2), None, Some(2), Some(100.0), Some(180.0), Some(1), None,
+                "Music/Album.flac",
+                "Music/Album.flac",
+                Some("Cue Track"),
+                Some("Artist"),
+                Some("Album"),
+                None,
+                None,
+                None,
+                Some(2),
+                Some(180.0),
+                Some("flac"),
+                Some(44100),
+                Some(16),
+                Some(2),
+                None,
+                Some(2),
+                Some(100.0),
+                Some(180.0),
+                Some(1),
+                None,
             )
             .unwrap();
         db.set_cover(id1, true, Some("al_coverkey")).unwrap();
@@ -1036,7 +1141,10 @@ mod search_tests {
         // A plain (non-CUE) audio file URI must not be misread as a CUE address.
         assert!(db.track_by_cue_address("Album.flac").unwrap().is_none());
         // An out-of-range / malformed track number yields nothing.
-        assert!(db.track_by_cue_address("Album.cue/track0000").unwrap().is_none());
+        assert!(db
+            .track_by_cue_address("Album.cue/track0000")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1069,15 +1177,35 @@ mod search_tests {
     fn track_by_uri_suffix_none_when_no_overlap() {
         let db = fresh();
         put(&db, "/a/1.flac", "Help", "The Beatles", "Help!");
-        assert!(db.track_by_uri_suffix("Totally/Different/Path.flac").unwrap().is_none());
+        assert!(db
+            .track_by_uri_suffix("Totally/Different/Path.flac")
+            .unwrap()
+            .is_none());
     }
 
     /// Insert a track tagged with the library `source` that produced it.
     fn put_src(db: &LibraryDb, path: &str, title: &str, artist: &str, album: &str, source: &str) {
         db.insert_track(
-            path, path, Some(title), Some(artist), Some(album), None, None, None,
-            Some(1), Some(180.0), Some("flac"), Some(44100), Some(16), Some(2),
-            None, None, None, None, Some(1), Some(source),
+            path,
+            path,
+            Some(title),
+            Some(artist),
+            Some(album),
+            None,
+            None,
+            None,
+            Some(1),
+            Some(180.0),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            Some(source),
         )
         .unwrap();
     }
@@ -1109,8 +1237,7 @@ mod search_tests {
         put_src(&db, "/music/B/1.flac", "B1", "Artist", "AlbumB", "/music/B");
 
         // Only /music/B is still configured; /music/A has been removed.
-        let seen: HashSet<PathBuf> =
-            [PathBuf::from("/music/B/1.flac")].into_iter().collect();
+        let seen: HashSet<PathBuf> = [PathBuf::from("/music/B/1.flac")].into_iter().collect();
         let sources = vec![PathBuf::from("/music/B")];
         let pruned = db.prune_missing(&seen, &sources).unwrap();
         assert_eq!(pruned, 1, "A-source track pruned by source, not by file");

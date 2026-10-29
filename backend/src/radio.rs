@@ -170,12 +170,7 @@ impl RadioManager {
     }
 
     /// Update a station's display name and artwork without changing its stream.
-    pub fn update(
-        &self,
-        id: &str,
-        name: &str,
-        artwork: Option<String>,
-    ) -> AppResult<RadioStation> {
+    pub fn update(&self, id: &str, name: &str, artwork: Option<String>) -> AppResult<RadioStation> {
         let name = name.trim().to_string();
         if name.is_empty() {
             return Err(AppError::BadRequest("station name is empty".into()));
@@ -215,8 +210,9 @@ impl RadioManager {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| anyhow::anyhow!("create data dir: {e}"))?;
         }
-        let text = serde_json::to_string_pretty(&*self.stations.read().expect("radio lock poisoned"))
-            .map_err(|e| anyhow::anyhow!("serialize radio stations: {e}"))?;
+        let text =
+            serde_json::to_string_pretty(&*self.stations.read().expect("radio lock poisoned"))
+                .map_err(|e| anyhow::anyhow!("serialize radio stations: {e}"))?;
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, text).map_err(|e| anyhow::anyhow!("write radio stations: {e}"))?;
         std::fs::rename(&tmp, &self.path)
@@ -243,7 +239,10 @@ mod tests {
         let jfk = stations.iter().find(|s| s.name == "JFK Ibiza").unwrap();
         assert_eq!(jfk.url, "https://stream.aiir.com/7dsjltmny8cvv");
         assert_eq!(jfk.homepage.as_deref(), Some("https://jfkibiza.es/"));
-        let acid_jazz = stations.iter().find(|s| s.name == "100% ACID JAZZ").unwrap();
+        let acid_jazz = stations
+            .iter()
+            .find(|s| s.name == "100% ACID JAZZ")
+            .unwrap();
         assert_eq!(acid_jazz.url, "https://mpc1.mediacp.eu:8356/stream");
         assert_eq!(
             acid_jazz.homepage.as_deref(),
@@ -311,7 +310,10 @@ mod tests {
             .expect("update");
         assert_eq!(updated.name, "Late Night FM");
         assert_eq!(updated.url, original.url);
-        assert_eq!(updated.artwork.as_deref(), Some("https://example.com/art.jpg"));
+        assert_eq!(
+            updated.artwork.as_deref(),
+            Some("https://example.com/art.jpg")
+        );
 
         let reloaded = RadioManager::load(dir.path());
         assert_eq!(reloaded.get(&original.id), Some(updated));
@@ -328,7 +330,11 @@ mod tests {
             Err(AppError::BadRequest(_))
         ));
         assert!(matches!(
-            manager.update(&id, "Station", Some("ftp://example.com/art.jpg".to_string())),
+            manager.update(
+                &id,
+                "Station",
+                Some("ftp://example.com/art.jpg".to_string())
+            ),
             Err(AppError::BadRequest(_))
         ));
     }
@@ -364,10 +370,7 @@ mod tests {
     fn remove_unknown_id_is_not_found() {
         let dir = temp_dir();
         let manager = RadioManager::load(dir.path());
-        assert!(matches!(
-            manager.remove("nope"),
-            Err(AppError::NotFound(_))
-        ));
+        assert!(matches!(manager.remove("nope"), Err(AppError::NotFound(_))));
     }
 
     #[test]

@@ -209,8 +209,7 @@ impl VizParams {
     /// Persist params to `<data_dir>/vizparams.json` (atomic temp+rename).
     pub fn save(&self, data_dir: &std::path::Path) -> Result<()> {
         let params = self.clone().clamp();
-        std::fs::create_dir_all(data_dir)
-            .map_err(|e| anyhow::anyhow!("create data dir: {e}"))?;
+        std::fs::create_dir_all(data_dir).map_err(|e| anyhow::anyhow!("create data dir: {e}"))?;
         let path = data_dir.join("vizparams.json");
         let text = serde_json::to_string_pretty(&params)
             .map_err(|e| anyhow::anyhow!("serialize viz params: {e}"))?;
@@ -240,7 +239,12 @@ impl VisualizerAnalyzer {
     /// Config changes are persisted before a process restart, so a mismatch
     /// between configured and applied values is explicitly pending.
     pub fn status(&self, config: &Config) -> VisualizerStatus {
-        let mut status = self.inner.status.lock().expect("visualizer status lock").clone();
+        let mut status = self
+            .inner
+            .status
+            .lock()
+            .expect("visualizer status lock")
+            .clone();
         status.configured_enabled = config.visualizer_fft;
         status.configured_source = configured_source(config);
         status.configured_rate = configured_rate(config);
@@ -256,7 +260,6 @@ impl VisualizerAnalyzer {
         status
     }
 }
-
 
 impl VisualizerAnalyzer {
     /// Build the analyzer and start capturing if `enabled`. When disabled, the
@@ -278,7 +281,6 @@ impl VisualizerAnalyzer {
         }
         analyzer
     }
-
 
     /// Subscribe a client to spectrum frames.
     pub fn subscribe(&self) -> broadcast::Receiver<SpectrumFrame> {
@@ -370,7 +372,9 @@ impl VisualizerAnalyzer {
             status,
         )?;
 
-        stream.play().map_err(|e| anyhow::anyhow!("play stream: {e}"))?;
+        stream
+            .play()
+            .map_err(|e| anyhow::anyhow!("play stream: {e}"))?;
         // Keep the stream alive for the process lifetime without holding a
         // `!Send` `cpal::Stream` inside the `Send` `AppState`. Leaking is safe:
         // capture runs until the process exits, which is exactly what we want.
@@ -404,7 +408,9 @@ impl VisualizerAnalyzer {
                     Ok(n) => {
                         published += 1;
                         if published % 200 == 0 {
-                            tracing::debug!("visualizer published {published} frames, receivers={n}");
+                            tracing::debug!(
+                                "visualizer published {published} frames, receivers={n}"
+                            );
                         }
                     }
                     Err(_) => {
@@ -438,14 +444,24 @@ impl VisualizerAnalyzer {
                 loop {
                     match std::fs::File::open(&path_owned) {
                         Ok(file) => {
-                            tracing::info!("visualizer fifo '{path_owned}' open, reading S16_LE stereo");
-                            transition_status(&status_reader, VisualizerStatusEvent::CaptureStarted);
+                            tracing::info!(
+                                "visualizer fifo '{path_owned}' open, reading S16_LE stereo"
+                            );
+                            transition_status(
+                                &status_reader,
+                                VisualizerStatusEvent::CaptureStarted,
+                            );
                             match read_fifo(file, &shared_reader, CHANNELS) {
                                 Ok(()) => {
-                                    transition_status(&status_reader, VisualizerStatusEvent::CaptureWaiting);
+                                    transition_status(
+                                        &status_reader,
+                                        VisualizerStatusEvent::CaptureWaiting,
+                                    );
                                 }
                                 Err(e) => {
-                                    tracing::warn!("visualizer fifo '{path_owned}' read error: {e}");
+                                    tracing::warn!(
+                                        "visualizer fifo '{path_owned}' read error: {e}"
+                                    );
                                     transition_status(
                                         &status_reader,
                                         VisualizerStatusEvent::RuntimeError(e.to_string()),
@@ -456,8 +472,13 @@ impl VisualizerAnalyzer {
                             std::thread::sleep(std::time::Duration::from_secs(1));
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            tracing::debug!("visualizer fifo '{path_owned}' not present yet, retrying");
-                            transition_status(&status_reader, VisualizerStatusEvent::CaptureWaiting);
+                            tracing::debug!(
+                                "visualizer fifo '{path_owned}' not present yet, retrying"
+                            );
+                            transition_status(
+                                &status_reader,
+                                VisualizerStatusEvent::CaptureWaiting,
+                            );
                             std::thread::sleep(std::time::Duration::from_secs(2));
                         }
                         Err(e) => {
@@ -527,10 +548,7 @@ fn device_text_matches(requested: &str, candidate: &str) -> bool {
     !requested.is_empty() && (candidate == requested || candidate.contains(requested))
 }
 
-fn pick_device(
-    host: &cpal::Host,
-    name: &str,
-) -> Result<cpal::Device> {
+fn pick_device(host: &cpal::Host, name: &str) -> Result<cpal::Device> {
     // An empty name can't be an intentional match — skip straight to the
     // platform default rather than letting `contains("")` grab the first
     // enumerated device.
@@ -793,7 +811,9 @@ mod tests {
         {
             let mut samples = shared.samples.lock().unwrap();
             for index in 0..2048 {
-                samples.push((index as f32 * 2.0 * std::f32::consts::PI * 440.0 / 44_100.0).sin() * 0.8);
+                samples.push(
+                    (index as f32 * 2.0 * std::f32::consts::PI * 440.0 / 44_100.0).sin() * 0.8,
+                );
             }
         }
         let mut planner = FftPlanner::<f32>::new();
@@ -811,7 +831,9 @@ mod tests {
         {
             let mut samples = shared.samples.lock().unwrap();
             for index in 0..4096 {
-                samples.push((index as f32 * 2.0 * std::f32::consts::PI * 12_000.0 / 44_100.0).sin() * 0.8);
+                samples.push(
+                    (index as f32 * 2.0 * std::f32::consts::PI * 12_000.0 / 44_100.0).sin() * 0.8,
+                );
             }
         }
         let mut planner = FftPlanner::<f32>::new();

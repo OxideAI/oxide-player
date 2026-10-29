@@ -18,11 +18,7 @@ use std::path::Path;
 /// Sanitised name for the MPD output config fragment. Given the user‑visible
 /// device name (e.g. `"Sony WH-1000XM4"`), produce a filesystem‑safe name.
 fn fragment_name(device: &BtDevice) -> String {
-    let base = device
-        .name
-        .as_deref()
-        .unwrap_or("bluetooth-speaker")
-        .trim();
+    let base = device.name.as_deref().unwrap_or("bluetooth-speaker").trim();
     format!("bluetooth-{}", base)
 }
 
@@ -30,10 +26,7 @@ fn fragment_name(device: &BtDevice) -> String {
 fn build_device_config(device: &BtDevice) -> DeviceConfig {
     // BlueALSA PCM addressing: disable its software attenuation so MPD's
     // hardware mixer controls the speaker's A2DP volume directly.
-    let bt_device = format!(
-        "bluealsa:DEV={},PROFILE=a2dp,SOFTVOL=no",
-        device.address
-    );
+    let bt_device = format!("bluealsa:DEV={},PROFILE=a2dp,SOFTVOL=no", device.address);
 
     DeviceConfig {
         name: device
@@ -94,7 +87,9 @@ pub fn create_fragment(
     });
     let mut removed = false;
     for existing in &existing_configs {
-        if is_bluetooth_pcm(existing.device.as_deref(), &device.address) && existing.name != cfg.name {
+        if is_bluetooth_pcm(existing.device.as_deref(), &device.address)
+            && existing.name != cfg.name
+        {
             if config_manager.delete(&existing.name).is_ok() {
                 removed = true;
                 tracing::info!(
@@ -154,9 +149,12 @@ pub fn remove_fragment(
         return Ok(());
     }
     for name in &matches {
-        config_manager
-            .delete(name)
-            .with_context(|| format!("remove MPD config fragment for BT device {}", device.address))?;
+        config_manager.delete(name).with_context(|| {
+            format!(
+                "remove MPD config fragment for BT device {}",
+                device.address
+            )
+        })?;
     }
 
     set_restart_pending(true);
@@ -249,7 +247,10 @@ mod tests {
 
         let cfg = mgr.get("HT-S400").unwrap();
         assert_eq!(cfg.mixer_type.as_deref(), Some("hardware"));
-        assert_eq!(cfg.mixer_device.as_deref(), Some("bluealsa:F8:AB:E5:A4:F2:16"));
+        assert_eq!(
+            cfg.mixer_device.as_deref(),
+            Some("bluealsa:F8:AB:E5:A4:F2:16")
+        );
         assert_eq!(cfg.mixer_control.as_deref(), Some("A2DP"));
         assert_eq!(
             cfg.device.as_deref(),
@@ -279,9 +280,11 @@ mod tests {
         .unwrap();
 
         assert!(pending.load(std::sync::atomic::Ordering::Relaxed));
-        assert_eq!(mgr.get("HT-S400").unwrap().mixer_type.as_deref(), Some("hardware"));
+        assert_eq!(
+            mgr.get("HT-S400").unwrap().mixer_type.as_deref(),
+            Some("hardware")
+        );
     }
-
 
     #[test]
     fn create_fragment_marks_restart_pending_for_new_output() {
@@ -325,6 +328,9 @@ mod tests {
 
         remove_fragment(&device(Some("HT-S400"), addr), &mgr, |_| {}).unwrap();
 
-        assert!(mgr.list().is_empty(), "forget must remove every fragment for the MAC");
+        assert!(
+            mgr.list().is_empty(),
+            "forget must remove every fragment for the MAC"
+        );
     }
 }

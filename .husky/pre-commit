@@ -1,0 +1,3 @@
+npx --prefix frontend lint-staged
+cargo clippy --workspace --all-targets
+npm --prefix frontend run build

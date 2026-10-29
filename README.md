@@ -243,6 +243,7 @@ Pass a particular file with `./target/debug/oxide-player -c path/to/config.json`
 
 - Run `cargo build` or `cargo test` from the repository root. The binary lands at `target/debug/oxide-player`.
 - Run `cd frontend && npm run build` for TypeScript checking and the Vite production build. Run `npm test` for the Vitest suite.
+- Git pre-commit hooks are installed by `npm --prefix frontend ci`. Staged Rust, TypeScript/JavaScript, CSS, HTML, JSON, YAML, and Markdown files are formatted automatically; commits also run Clippy and the frontend type-check/build. Clippy warnings currently remain visible but do not block commits.
 - Frontend styling uses CSS Modules. Tailwind is not used.
 - For a bug fix, first write a test that reproduces the bug, then fix it. Keep the regression test in the suite that runs before pushing to `main`.
 - MPD 0.24 has no `playid`. Playback uses 0-based queue positions, shuffle is MPD `random` mode, queue removal uses `delete <pos>`, and CUE albums share one URI.

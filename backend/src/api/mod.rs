@@ -1,27 +1,24 @@
 use crate::devices::config_fragment::{
     classify_output_role, diagnostic_code, output_selection_key, validate_config,
-    DeviceConfig as DeviceConfigDto, MANAGED_DSP_LOOPBACK_OUTPUT,
-    OutputDiagnosticFacts,
+    DeviceConfig as DeviceConfigDto, OutputDiagnosticFacts, MANAGED_DSP_LOOPBACK_OUTPUT,
 };
 use crate::devices::usb;
-use crate::radio::RadioStation;
-use crate::dsp::{parse_dsp_text, DspSettings};
 use crate::dsp::camilladsp::DspApplyResult;
 use crate::dsp::profile::DspProfile;
+use crate::dsp::{parse_dsp_text, DspSettings};
 use crate::error::{AppError, AppResult};
 use crate::library::db::LibrarySnapshot;
-use crate::types::{
-    DeviceOutput, DeviceOutputDiagnosticCode, DeviceOutputRole, PlaybackState,
-};
+use crate::radio::RadioStation;
 use crate::state::AppState;
-use axum::extract::{Path, Query, Request, State, ws::WebSocketUpgrade};
+use crate::types::{DeviceOutput, DeviceOutputDiagnosticCode, DeviceOutputRole, PlaybackState};
+use axum::extract::{ws::WebSocketUpgrade, Path, Query, Request, State};
 use axum::handler::HandlerWithoutStateExt;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
-use tower_http::services::ServeDir;
-use serde::Deserialize;
 use axum::{Json, Router};
+use serde::Deserialize;
+use tower_http::services::ServeDir;
 
 mod bluetooth;
 
@@ -123,10 +120,7 @@ async fn status(State(s): State<AppState>) -> AppResult<Json<crate::types::Playe
 /// On connect the client receives the current snapshot (one `Status`, one
 /// `Queue`, and the latest `Notice` when present), then subsequent events.
 /// Lagging clients drop old messages but receive the retained notice on reconnect.
-async fn ws(
-    ws: WebSocketUpgrade,
-    State(s): State<AppState>,
-) -> Response {
+async fn ws(ws: WebSocketUpgrade, State(s): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| async move {
         use futures_util::{SinkExt, StreamExt};
         use tokio::sync::broadcast::error::RecvError;
@@ -223,10 +217,7 @@ async fn visualizer_params_put(
 /// client only receives frames while audio is playing through the captured
 /// device; an idle/stopped stream sends a single zeroed frame on connect so the
 /// visualizer can render a calm baseline. Best-effort like `/api/ws`.
-async fn visualizer_ws(
-    ws: WebSocketUpgrade,
-    State(s): State<AppState>,
-) -> Response {
+async fn visualizer_ws(ws: WebSocketUpgrade, State(s): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| async move {
         use futures_util::{SinkExt, StreamExt};
         use tokio::sync::broadcast::error::RecvError;
@@ -292,7 +283,8 @@ async fn library_list(
             q.artist.as_deref(),
             q.album.as_deref(),
             None,
-        )?).into_response());
+        )?)
+        .into_response());
     }
 
     let if_none_match = headers
@@ -358,7 +350,10 @@ async fn cover(State(s): State<AppState>, Path(key): Path<String>) -> AppResult<
             return Ok((
                 [
                     (header::CONTENT_TYPE, ct),
-                    (header::CACHE_CONTROL, "public, max-age=31536000, stale-while-revalidate=86400"),
+                    (
+                        header::CACHE_CONTROL,
+                        "public, max-age=31536000, stale-while-revalidate=86400",
+                    ),
                 ],
                 bytes,
             )
@@ -396,9 +391,9 @@ async fn folder_cover(
     let Some(local) = crate::library::scanner::find_local_cover(dir) else {
         return Err(AppError::NotFound(format!("cover folder {folder}")));
     };
-    let bytes = tokio::fs::read(&local).await.map_err(|e| {
-        AppError::NotFound(format!("cover folder {folder}: {e}"))
-    })?;
+    let bytes = tokio::fs::read(&local)
+        .await
+        .map_err(|e| AppError::NotFound(format!("cover folder {folder}: {e}")))?;
     let ct = match local
         .extension()
         .and_then(|e| e.to_str())
@@ -430,7 +425,12 @@ async fn run_scan(s: &AppState, incremental: bool) -> AppResult<u64> {
     let cover_dir = cfg.cover_cache_dir();
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
     let count = tokio::task::spawn_blocking(move || {
-        crate::library::scan(&dirs, &db, &cover_dir, crate::config::CoverOptimization::from_config(&cfg))
+        crate::library::scan(
+            &dirs,
+            &db,
+            &cover_dir,
+            crate::config::CoverOptimization::from_config(&cfg),
+        )
     })
     .await
     .map_err(|e| AppError::Library(e.to_string()))??;
@@ -497,7 +497,11 @@ async fn run_systemctl(verb: &str) -> AppResult<()> {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(AppError::Library(format!(
             "systemctl {verb} failed: {}",
-            if stderr.is_empty() { "permission denied" } else { &stderr }
+            if stderr.is_empty() {
+                "permission denied"
+            } else {
+                &stderr
+            }
         )));
     }
     Ok(())
@@ -513,7 +517,8 @@ async fn config_put(
 ) -> AppResult<Json<crate::config::Config>> {
     body.validate()
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
-    s.set_config(body).await
+    s.set_config(body)
+        .await
         .map_err(|e| AppError::Library(e.to_string()))?;
     Ok(Json(s.config().await))
 }
@@ -578,11 +583,15 @@ async fn config_add_dir(
     if !subsumed.is_empty() {
         let db = s.db().clone();
         for d in &subsumed {
-            removed_tracks += db.delete_by_source(d).map_err(|e| AppError::Library(e.to_string()))?;
+            removed_tracks += db
+                .delete_by_source(d)
+                .map_err(|e| AppError::Library(e.to_string()))?;
         }
     }
     let count = run_scan(&s, true).await?;
-    Ok(Json(serde_json::json!({ "scanned": count, "removed": removed_tracks })))
+    Ok(Json(
+        serde_json::json!({ "scanned": count, "removed": removed_tracks }),
+    ))
 }
 
 /// Remove a music library source folder by absolute path. Drops every track
@@ -610,7 +619,10 @@ async fn config_remove_dir(
     let previous_dirs = cfg.library_dirs.clone();
     cfg.library_dirs.retain(|d| d != &path);
     if cfg.library_dirs.len() == before {
-        return Err(AppError::NotFound(format!("library dir {}", path.display())));
+        return Err(AppError::NotFound(format!(
+            "library dir {}",
+            path.display()
+        )));
     }
     // Remove the share before deleting tracks or resyncing MPD. Restore it if
     // config persistence fails so the share and source list remain consistent.
@@ -623,8 +635,14 @@ async fn config_remove_dir(
     }
     // Remove tracks produced by this source and resync MPD's index.
     let db = s.db().clone();
-    let removed = db.delete_by_source(&path).map_err(|e| AppError::Library(e.to_string()))?;
-    tracing::info!("removed {} tracks from deleted source {}", removed, path.display());
+    let removed = db
+        .delete_by_source(&path)
+        .map_err(|e| AppError::Library(e.to_string()))?;
+    tracing::info!(
+        "removed {} tracks from deleted source {}",
+        removed,
+        path.display()
+    );
     let _ = s.mpd().rescan().await;
     Ok(StatusCode::OK)
 }
@@ -636,10 +654,11 @@ async fn library_rescan_art(State(s): State<AppState>) -> AppResult<Json<serde_j
     let cover_dir = cfg.cover_cache_dir();
     let opt = crate::config::CoverOptimization::from_config(&cfg);
     std::fs::create_dir_all(&cover_dir).map_err(|e| AppError::Library(e.to_string()))?;
-    let with_cover =
-        tokio::task::spawn_blocking(move || crate::library::scanner::rescan_art(&db, &cover_dir, opt))
-            .await
-            .map_err(|e| AppError::Library(e.to_string()))??;
+    let with_cover = tokio::task::spawn_blocking(move || {
+        crate::library::scanner::rescan_art(&db, &cover_dir, opt)
+    })
+    .await
+    .map_err(|e| AppError::Library(e.to_string()))??;
     Ok(Json(serde_json::json!({ "with_cover": with_cover })))
 }
 
@@ -695,7 +714,9 @@ async fn next(State(s): State<AppState>) -> AppResult<StatusCode> {
     if s.mpd().status().await?.state == PlaybackState::Stopped {
         let pos = s.mpd().queue_position().await?;
         let len = s.mpd().queue().await?.len() as u32;
-        s.mpd().play_position(pos.saturating_add(1).min(len.saturating_sub(1))).await?;
+        s.mpd()
+            .play_position(pos.saturating_add(1).min(len.saturating_sub(1)))
+            .await?;
     } else {
         s.mpd().next().await?;
     }
@@ -785,7 +806,6 @@ async fn usb_devices(State(_s): State<AppState>) -> AppResult<Json<Vec<usb::UsbA
         .map_err(AppError::AudioUnavailable)
 }
 
-
 async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>> {
     let outputs = s.mpd().outputs().await?;
     let configs = s.device_configs().list();
@@ -837,7 +857,8 @@ async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>
                 Some("Bluetooth output is not connected".to_string())
             } else if !configured {
                 Some("output has no configured device preset".to_string())
-            } else if config.is_some_and(|config| !config.output_type.eq_ignore_ascii_case("alsa")) {
+            } else if config.is_some_and(|config| !config.output_type.eq_ignore_ascii_case("alsa"))
+            {
                 Some("only ALSA outputs support CamillaDSP".to_string())
             } else if device.is_none_or(|device| device.trim().is_empty()) {
                 Some("output has no ALSA device configured".to_string())
@@ -859,14 +880,24 @@ async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>
             };
             let diagnostic_code = diagnostic_code(facts);
             let technical_detail = diagnostic_code.map(|code| match code {
-                DeviceOutputDiagnosticCode::ReloadError => "CamillaDSP reload was not confirmed".to_string(),
+                DeviceOutputDiagnosticCode::ReloadError => {
+                    "CamillaDSP reload was not confirmed".to_string()
+                }
                 DeviceOutputDiagnosticCode::UnsupportedOutputType => dsp_reason
                     .clone()
                     .unwrap_or_else(|| "output type is not DSP-capable".to_string()),
-                DeviceOutputDiagnosticCode::Disconnected => "configured Bluetooth endpoint is disconnected".to_string(),
-                DeviceOutputDiagnosticCode::Inactive => "MPD reports this output as disabled".to_string(),
-                DeviceOutputDiagnosticCode::MissingProfile => "no saved DSP profile matches this output".to_string(),
-                DeviceOutputDiagnosticCode::UnknownOutput => "runtime output has no managed Oxide configuration".to_string(),
+                DeviceOutputDiagnosticCode::Disconnected => {
+                    "configured Bluetooth endpoint is disconnected".to_string()
+                }
+                DeviceOutputDiagnosticCode::Inactive => {
+                    "MPD reports this output as disabled".to_string()
+                }
+                DeviceOutputDiagnosticCode::MissingProfile => {
+                    "no saved DSP profile matches this output".to_string()
+                }
+                DeviceOutputDiagnosticCode::UnknownOutput => {
+                    "runtime output has no managed Oxide configuration".to_string()
+                }
             });
             DeviceOutput {
                 id: output.id,
@@ -914,9 +945,9 @@ async fn disable_device(State(s): State<AppState>, Path(id): Path<u32>) -> AppRe
         .into_iter()
         .find(|output| output.id == id);
     let active_device = s.dsp().active_device().await;
-    let target_device = target.as_ref().and_then(|output| {
-        configured_dsp_device(&s.device_configs().list(), output).ok()
-    });
+    let target_device = target
+        .as_ref()
+        .and_then(|output| configured_dsp_device(&s.device_configs().list(), output).ok());
     s.mpd().disable_output(id).await?;
     if target
         .as_ref()
@@ -962,15 +993,19 @@ fn direct_dsp_output_release_delay() -> std::time::Duration {
 async fn dsp_output_target(
     s: &AppState,
     id: u32,
-) -> AppResult<(crate::types::OutputDevice, String, crate::types::OutputDevice)> {
+) -> AppResult<(
+    crate::types::OutputDevice,
+    String,
+    crate::types::OutputDevice,
+)> {
     let outputs = s.mpd().outputs().await?;
     let target = outputs
         .iter()
         .find(|output| output.id == id)
         .cloned()
         .ok_or_else(|| AppError::NotFound(format!("output {id}")))?;
-    let device = configured_dsp_device(&s.device_configs().list(), &target)
-        .map_err(AppError::BadRequest)?;
+    let device =
+        configured_dsp_device(&s.device_configs().list(), &target).map_err(AppError::BadRequest)?;
     if let Some(address) = bluetooth_address(&device) {
         let connected = s
             .bluetooth()
@@ -979,13 +1014,17 @@ async fn dsp_output_target(
             .iter()
             .any(|bt| bt.address == address && bt.connected);
         if !connected {
-            return Err(AppError::BadRequest("Bluetooth output is not connected".to_string()));
+            return Err(AppError::BadRequest(
+                "Bluetooth output is not connected".to_string(),
+            ));
         }
     }
     let loopback = outputs
         .into_iter()
         .find(|output| output.name == DSP_LOOPBACK_NAME)
-        .ok_or_else(|| AppError::BadRequest("CamillaDSP loopback output is not available".to_string()))?;
+        .ok_or_else(|| {
+            AppError::BadRequest("CamillaDSP loopback output is not available".to_string())
+        })?;
     let profile_configured = s.dsp().get_profile(&device).await.is_some()
         || s.dsp().get_profile("default").await.is_some();
     let route_active = dsp_route_is_active(
@@ -1054,16 +1093,16 @@ async fn apply_dsp_route(
     Ok(result)
 }
 
-
-async fn enable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
+async fn enable_device_dsp(
+    State(s): State<AppState>,
+    Path(id): Path<u32>,
+) -> AppResult<StatusCode> {
     let (target, device, loopback) = dsp_output_target(&s, id).await?;
     let result = apply_dsp_route(&s, target, device, loopback, None).await?;
     if !result.reload_confirmed {
-        return Err(AppError::Dsp(
-            result
-                .reload_error
-                .unwrap_or_else(|| "CamillaDSP did not confirm the route reload".to_string()),
-        ));
+        return Err(AppError::Dsp(result.reload_error.unwrap_or_else(|| {
+            "CamillaDSP did not confirm the route reload".to_string()
+        })));
     }
     Ok(StatusCode::OK)
 }
@@ -1071,7 +1110,13 @@ async fn enable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> Ap
 async fn dsp_profile_route_target(
     s: &AppState,
     device: &str,
-) -> AppResult<Option<(crate::types::OutputDevice, String, crate::types::OutputDevice)>> {
+) -> AppResult<
+    Option<(
+        crate::types::OutputDevice,
+        String,
+        crate::types::OutputDevice,
+    )>,
+> {
     let outputs = match s.mpd().outputs().await {
         Ok(outputs) => outputs,
         Err(_) => return Ok(None),
@@ -1083,7 +1128,9 @@ async fn dsp_profile_route_target(
     let loopback = outputs
         .into_iter()
         .find(|output| output.name == DSP_LOOPBACK_NAME)
-        .ok_or_else(|| AppError::BadRequest("CamillaDSP loopback output is not available".to_string()))?;
+        .ok_or_else(|| {
+            AppError::BadRequest("CamillaDSP loopback output is not available".to_string())
+        })?;
     // The profile was persisted immediately before this lookup, so an
     // inactive target with the managed loopback enabled can be inferred as an
     // existing DSP route even before the in-memory profile cache is refreshed.
@@ -1101,7 +1148,10 @@ async fn dsp_profile_route_target(
     Ok(Some((target, device.to_string(), loopback)))
 }
 
-async fn disable_device_dsp(State(s): State<AppState>, Path(id): Path<u32>) -> AppResult<StatusCode> {
+async fn disable_device_dsp(
+    State(s): State<AppState>,
+    Path(id): Path<u32>,
+) -> AppResult<StatusCode> {
     let (target, _device, loopback) = dsp_output_target(&s, id).await?;
     if loopback.enabled {
         s.mpd().disable_output(loopback.id).await?;
@@ -1169,7 +1219,9 @@ struct CreateDeviceConfigBody {
 }
 
 /// List all managed device config fragments.
-async fn list_device_configs(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceConfigResponse>>> {
+async fn list_device_configs(
+    State(s): State<AppState>,
+) -> AppResult<Json<Vec<DeviceConfigResponse>>> {
     let configs = s.device_configs().list();
     let pending = s.config_restart_pending();
     let cfg = s.config().await;
@@ -1197,7 +1249,8 @@ async fn create_device_config(
     Json(b): Json<CreateDeviceConfigBody>,
 ) -> AppResult<Json<DeviceConfigResponse>> {
     let validation = validate_config(
-        &b.name, &b.output_type,
+        &b.name,
+        &b.output_type,
         b.device.as_deref(),
         b.format.as_deref(),
         b.mixer_type.as_deref(),
@@ -1205,7 +1258,9 @@ async fn create_device_config(
         b.dop,
     );
     if !validation.is_valid() {
-        return Err(AppError::Unprocessable(validation.into_error_string().unwrap_or_default()));
+        return Err(AppError::Unprocessable(
+            validation.into_error_string().unwrap_or_default(),
+        ));
     }
 
     let cfg = DeviceConfigDto {
@@ -1218,7 +1273,9 @@ async fn create_device_config(
         mixer_control: None,
         dop: b.dop,
     };
-    s.device_configs().create(&cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
+    s.device_configs()
+        .create(&cfg)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
     s.set_config_restart_pending(true);
     restart_mpd_if_pending(&s).await?;
 
@@ -1246,11 +1303,15 @@ async fn update_device_config(
     Json(b): Json<UpdateDeviceConfigBody>,
 ) -> AppResult<Json<DeviceConfigResponse>> {
     // Read existing config
-    let existing = s.device_configs().get(&name)
+    let existing = s
+        .device_configs()
+        .get(&name)
         .map_err(|_| AppError::NotFound(format!("device config '{name}'")))?;
 
     let new_name = b.name.unwrap_or_else(|| existing.name.clone());
-    let output_type = b.output_type.unwrap_or_else(|| existing.output_type.clone());
+    let output_type = b
+        .output_type
+        .unwrap_or_else(|| existing.output_type.clone());
     let device = b.device.or_else(|| existing.device.clone());
     let format = b.format.or_else(|| existing.format.clone());
     let mixer_type = b.mixer_type.or_else(|| existing.mixer_type.clone());
@@ -1258,7 +1319,8 @@ async fn update_device_config(
     let dop = b.dop.unwrap_or(existing.dop);
 
     let validation = validate_config(
-        &new_name, &output_type,
+        &new_name,
+        &output_type,
         device.as_deref(),
         format.as_deref(),
         mixer_type.as_deref(),
@@ -1266,7 +1328,9 @@ async fn update_device_config(
         dop,
     );
     if !validation.is_valid() {
-        return Err(AppError::Unprocessable(validation.into_error_string().unwrap_or_default()));
+        return Err(AppError::Unprocessable(
+            validation.into_error_string().unwrap_or_default(),
+        ));
     }
 
     let cfg = DeviceConfigDto {
@@ -1279,7 +1343,9 @@ async fn update_device_config(
         mixer_control: existing.mixer_control.clone(),
         dop,
     };
-    s.device_configs().update(&name, &cfg).map_err(|e| AppError::BadRequest(e.to_string()))?;
+    s.device_configs()
+        .update(&name, &cfg)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
     s.set_config_restart_pending(true);
     restart_mpd_if_pending(&s).await?;
 
@@ -1301,9 +1367,9 @@ async fn delete_device_config(
     State(s): State<AppState>,
     Path(name): Path<String>,
 ) -> AppResult<StatusCode> {
-    s.device_configs().delete(&name).map_err(|_| {
-        AppError::NotFound(format!("device config '{name}'"))
-    })?;
+    s.device_configs()
+        .delete(&name)
+        .map_err(|_| AppError::NotFound(format!("device config '{name}'")))?;
     s.set_config_restart_pending(true);
     restart_mpd_if_pending(&s).await?;
     Ok(StatusCode::OK)
@@ -1315,12 +1381,16 @@ async fn restart_mpd_now(s: &AppState) -> AppResult<()> {
     drop(cfg);
     if !is_localhost(&host) {
         return Err(AppError::BadRequest(
-            "cannot restart remote MPD — MPD must be running on the same machine as oxide-player".to_string()
+            "cannot restart remote MPD — MPD must be running on the same machine as oxide-player"
+                .to_string(),
         ));
     }
     // Kill MPD — the connection may close before the response arrives,
     // so ignore that command error and wait for the process to exit.
-    let _ = s.mpd().raw(mpd_protocol::command::Command::new("kill")).await;
+    let _ = s
+        .mpd()
+        .raw(mpd_protocol::command::Command::new("kill"))
+        .await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     s.mpd().ensure_running().await?;
     s.set_config_restart_pending(false);
@@ -1426,23 +1496,26 @@ async fn dsp_get(State(s): State<AppState>) -> AppResult<Json<Vec<DspProfile>>> 
     Ok(Json(s.dsp().list_profiles().await))
 }
 
-async fn dsp_set(State(s): State<AppState>, Json(p): Json<DspProfile>) -> AppResult<Json<DspApplyResult>> {
-    p.validate().map_err(|e| AppError::BadRequest(e.to_string()))?;
+async fn dsp_set(
+    State(s): State<AppState>,
+    Json(p): Json<DspProfile>,
+) -> AppResult<Json<DspApplyResult>> {
+    p.validate()
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
     s.persist_dsp_profile(&p)
         .await
         .map_err(|e| AppError::Library(e.to_string()))?;
 
     let device = p.device.clone();
-    let result = if let Some((target, device, loopback)) =
-        dsp_profile_route_target(&s, &device).await?
-    {
-        apply_dsp_route(&s, target, device, loopback, Some(p)).await?
-    } else {
-        s.dsp()
-            .apply_profile(p)
-            .await
-            .map_err(|e| AppError::Dsp(e.to_string()))?
-    };
+    let result =
+        if let Some((target, device, loopback)) = dsp_profile_route_target(&s, &device).await? {
+            apply_dsp_route(&s, target, device, loopback, Some(p)).await?
+        } else {
+            s.dsp()
+                .apply_profile(p)
+                .await
+                .map_err(|e| AppError::Dsp(e.to_string()))?
+        };
     Ok(Json(result))
 }
 
@@ -1492,7 +1565,6 @@ fn into_tracks(b: serde_json::Value) -> Vec<TrackRef> {
             .collect()
     }
 }
-
 
 /// MPD playback uses the absolute filesystem path stored in the library DB.
 /// This supports library roots that have no common parent. Local MPD must be
@@ -1565,13 +1637,18 @@ async fn enqueue(s: &AppState, t: &TrackRef) -> AppResult<()> {
     if is_cue {
         s.mpd().play_next(&mpd_uri, 0.0, None).await?;
     } else {
-        s.mpd().play_next(&mpd_uri, t.start.unwrap_or(0.0), t.end).await?;
+        s.mpd()
+            .play_next(&mpd_uri, t.start.unwrap_or(0.0), t.end)
+            .await?;
     }
     s.mpd().set_active_track(t.track_id).await;
     Ok(())
 }
 
-async fn play_next(State(s): State<AppState>, Json(b): Json<serde_json::Value>) -> AppResult<StatusCode> {
+async fn play_next(
+    State(s): State<AppState>,
+    Json(b): Json<serde_json::Value>,
+) -> AppResult<StatusCode> {
     let tracks = into_tracks(b);
     if tracks.is_empty() {
         return Ok(StatusCode::OK);
@@ -1586,7 +1663,10 @@ async fn play_next(State(s): State<AppState>, Json(b): Json<serde_json::Value>) 
     Ok(StatusCode::OK)
 }
 
-async fn clear_play(State(s): State<AppState>, Json(b): Json<serde_json::Value>) -> AppResult<StatusCode> {
+async fn clear_play(
+    State(s): State<AppState>,
+    Json(b): Json<serde_json::Value>,
+) -> AppResult<StatusCode> {
     let tracks = into_tracks(b);
     if tracks.is_empty() {
         return Ok(StatusCode::OK);
@@ -1599,7 +1679,9 @@ async fn clear_play(State(s): State<AppState>, Json(b): Json<serde_json::Value>)
     if is_cue {
         s.mpd().play_uri(&mpd_uri).await?;
     } else {
-        s.mpd().play_uri_range(&mpd_uri, first.start.unwrap_or(0.0), first.end).await?;
+        s.mpd()
+            .play_uri_range(&mpd_uri, first.start.unwrap_or(0.0), first.end)
+            .await?;
     }
     s.mpd().set_active_track(first.track_id).await;
     for t in tracks[1..].iter().rev() {
@@ -1644,7 +1726,9 @@ fn validate_playlist_name(name: &str) -> AppResult<()> {
         return Err(AppError::BadRequest("playlist name is empty".into()));
     }
     if trimmed.contains('/') {
-        return Err(AppError::BadRequest("playlist name must not contain '/'".into()));
+        return Err(AppError::BadRequest(
+            "playlist name must not contain '/'".into(),
+        ));
     }
     Ok(())
 }
@@ -1731,7 +1815,10 @@ struct ShuffleBody {
     on: bool,
 }
 
-async fn shuffle_queue(State(s): State<AppState>, Json(b): Json<ShuffleBody>) -> AppResult<StatusCode> {
+async fn shuffle_queue(
+    State(s): State<AppState>,
+    Json(b): Json<ShuffleBody>,
+) -> AppResult<StatusCode> {
     s.mpd().random(b.on).await?;
     s.broadcast_queue_now().await;
     Ok(StatusCode::OK)
@@ -1815,10 +1902,7 @@ async fn radio_update(
 }
 
 /// Remove a radio station by id.
-async fn radio_delete(
-    State(s): State<AppState>,
-    Path(id): Path<String>,
-) -> AppResult<StatusCode> {
+async fn radio_delete(State(s): State<AppState>, Path(id): Path<String>) -> AppResult<StatusCode> {
     s.radio().remove(&id)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1828,7 +1912,6 @@ async fn radio_delete(
 /// URI itself, so `resolve_play_uri` is bypassed.
 async fn radio_play(State(s): State<AppState>, Path(id): Path<String>) -> AppResult<StatusCode> {
     let station = s
-
         .radio()
         .get(&id)
         .ok_or_else(|| AppError::NotFound(format!("radio station {id}")))?;
@@ -1890,10 +1973,7 @@ mod tests {
         config.library_dirs = vec![library.clone()];
         let app = test_app_with_config(config).await;
 
-        let uri = format!(
-            "/api/library/cover/{}",
-            artist.to_string_lossy()
-        );
+        let uri = format!("/api/library/cover/{}", artist.to_string_lossy());
         let response = app
             .clone()
             .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
@@ -1927,10 +2007,7 @@ mod tests {
         config.library_dirs = vec![library.clone()];
         let app = test_app_with_config(config).await;
 
-        let uri = format!(
-            "/api/library/cover/{}",
-            outside.to_string_lossy()
-        );
+        let uri = format!("/api/library/cover/{}", outside.to_string_lossy());
         let response = app
             .clone()
             .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
@@ -1952,10 +2029,7 @@ mod tests {
         config.library_dirs = vec![library.clone()];
         let app = test_app_with_config(config).await;
 
-        let uri = format!(
-            "/api/library/cover/{}",
-            artist.to_string_lossy()
-        );
+        let uri = format!("/api/library/cover/{}", artist.to_string_lossy());
         let response = app
             .clone()
             .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
@@ -1981,14 +2055,21 @@ mod tests {
 
         // The frontend percent-encodes the absolute path (encodeURIComponent),
         // so `/` becomes %2F. The wildcard must still capture and decode it.
-        let encoded = artist.to_string_lossy().chars().map(|c| {
-            if c.is_ascii_alphanumeric() || "-_.~".contains(c) {
-                c.to_string()
-            } else {
-                let mut buf = [0u8; 4];
-                c.encode_utf8(&mut buf).bytes().map(|b| format!("%{b:02X}")).collect::<String>()
-            }
-        }).collect::<String>();
+        let encoded = artist
+            .to_string_lossy()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || "-_.~".contains(c) {
+                    c.to_string()
+                } else {
+                    let mut buf = [0u8; 4];
+                    c.encode_utf8(&mut buf)
+                        .bytes()
+                        .map(|b| format!("%{b:02X}"))
+                        .collect::<String>()
+                }
+            })
+            .collect::<String>();
         let uri = format!("/api/library/cover/{encoded}");
         let response = app
             .clone()
@@ -2013,7 +2094,6 @@ mod tests {
     async fn version_endpoint_returns_single_version() {
         let app = test_app().await;
         let req = Request::builder()
-
             .uri("/api/version")
             .body(Body::empty())
             .unwrap();
@@ -2093,7 +2173,9 @@ mod tests {
     async fn dsp_import_endpoint_fetches_url() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
@@ -2134,10 +2216,8 @@ mod tests {
     }
     #[tokio::test]
     async fn adding_and_removing_source_updates_shared_folders() {
-        let root = std::env::temp_dir().join(format!(
-            "oxide-library-share-api-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("oxide-library-share-api-{}", std::process::id()));
         let first = root.join("first");
         let second = root.join("second");
         let data_dir = root.join("data");
@@ -2156,9 +2236,10 @@ mod tests {
         let add = Request::builder()
             .method("POST")
             .uri("/api/config/library-dirs")
-
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::json!({ "path": second }).to_string()))
+            .body(Body::from(
+                serde_json::json!({ "path": second }).to_string(),
+            ))
             .unwrap();
         let response = app.clone().oneshot(add).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -2171,7 +2252,9 @@ mod tests {
             .method("DELETE")
             .uri("/api/config/library-dirs")
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::json!({ "path": second }).to_string()))
+            .body(Body::from(
+                serde_json::json!({ "path": second }).to_string(),
+            ))
             .unwrap();
         let response = app.oneshot(remove).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -2223,13 +2306,9 @@ mod tests {
         let bt = crate::bluetooth::BluetoothManager::new().await;
         let state = AppState::new(config, db, dsp, mpd, visualizer, bt, None);
 
-        let (uri, is_cue) = super::resolve_play_uri(
-            &state,
-            "Artist/Album.flac",
-            Some(track_id),
-        )
-        .await
-        .unwrap();
+        let (uri, is_cue) = super::resolve_play_uri(&state, "Artist/Album.flac", Some(track_id))
+            .await
+            .unwrap();
 
         assert_eq!(uri, "/music/Artist/Album.flac");
         assert!(!is_cue);
@@ -2371,7 +2450,10 @@ mod tests {
         let target = super::dsp_profile_target(&[output], &configs, "hw:USB,0")
             .expect("USB profile should resolve to its managed output");
         assert_eq!(target.id, 7);
-        assert!(super::should_release_direct_dsp_output(target.enabled, false));
+        assert!(super::should_release_direct_dsp_output(
+            target.enabled,
+            false
+        ));
     }
 
     #[test]
@@ -2406,31 +2488,23 @@ mod tests {
                 .unwrap(),
             "hw:USB,0"
         );
-        assert!(super::configured_dsp_device(&[config("Pipe", "pipe", Some("/tmp/audio"))], &output).is_err());
+        assert!(super::configured_dsp_device(
+            &[config("Pipe", "pipe", Some("/tmp/audio"))],
+            &output
+        )
+        .is_err());
         assert!(super::configured_dsp_device(&[], &output).is_err());
     }
     #[test]
     fn dsp_route_is_inferred_after_restart_from_saved_profile() {
         assert!(super::dsp_route_is_active(
-            true,
-            false,
-            None,
-            "hw:USB,0",
-            true,
+            true, false, None, "hw:USB,0", true,
         ));
         assert!(!super::dsp_route_is_active(
-            true,
-            false,
-            None,
-            "hw:USB,0",
-            false,
+            true, false, None, "hw:USB,0", false,
         ));
         assert!(!super::dsp_route_is_active(
-            false,
-            false,
-            None,
-            "hw:USB,0",
-            true,
+            false, false, None, "hw:USB,0", true,
         ));
     }
 
@@ -2443,5 +2517,4 @@ mod tests {
         };
         assert!(super::configured_dsp_device(&[], &output).is_err());
     }
-
 }

@@ -24,4 +24,3 @@ pub struct BtDevice {
     /// Whether the device is trusted (auto‑connect enabled).
     pub trusted: bool,
 }
-

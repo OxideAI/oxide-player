@@ -20,10 +20,16 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 
 fn bluetooth_address_from_device(device: Option<&str>) -> Option<String> {
     let value = device?.strip_prefix("bluealsa:DEV=")?;
-    value.split(',').next().filter(|address| !address.is_empty()).map(str::to_string)
+    value
+        .split(',')
+        .next()
+        .filter(|address| !address.is_empty())
+        .map(str::to_string)
 }
 
-fn configured_bluetooth_addresses(configs: &[crate::devices::config_fragment::DeviceConfig]) -> std::collections::HashSet<String> {
+fn configured_bluetooth_addresses(
+    configs: &[crate::devices::config_fragment::DeviceConfig],
+) -> std::collections::HashSet<String> {
     configs
         .iter()
         .filter_map(|config| bluetooth_address_from_device(config.device.as_deref()))
@@ -96,8 +102,14 @@ fn notice_seed() -> u64 {
 
 fn bounded_track_label(title: &Option<String>, artist: &Option<String>) -> String {
     let label = match (
-        title.as_deref().map(str::trim).filter(|value| !value.is_empty()),
-        artist.as_deref().map(str::trim).filter(|value| !value.is_empty()),
+        title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        artist
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
     ) {
         (Some(title), Some(artist)) => format!("{artist} — {title}"),
         (Some(title), None) => title.to_string(),
@@ -236,11 +248,15 @@ impl AppState {
     }
 
     pub fn config_restart_pending(&self) -> bool {
-        self.inner.config_restart_pending.load(std::sync::atomic::Ordering::Relaxed)
+        self.inner
+            .config_restart_pending
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn set_config_restart_pending(&self, pending: bool) {
-        self.inner.config_restart_pending.store(pending, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .config_restart_pending
+            .store(pending, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn visualizer(&self) -> &VisualizerAnalyzer {
@@ -250,7 +266,6 @@ impl AppState {
         let config = self.config().await;
         self.inner.visualizer.status(&config)
     }
-
 
     pub fn radio(&self) -> &RadioManager {
         &self.inner.radio
@@ -341,10 +356,9 @@ impl AppState {
                 tracing::warn!("saved DSP device is no longer configured: {device}");
                 return;
             };
-            let Some(loopback) = outputs
-                .iter()
-                .find(|output| output.name == crate::devices::config_fragment::MANAGED_DSP_LOOPBACK_OUTPUT)
-            else {
+            let Some(loopback) = outputs.iter().find(|output| {
+                output.name == crate::devices::config_fragment::MANAGED_DSP_LOOPBACK_OUTPUT
+            }) else {
                 tracing::warn!("cannot restore DSP route: loopback output is unavailable");
                 return;
             };
@@ -504,11 +518,7 @@ impl AppState {
                                 .flatten()
                         })
                     })
-                    .or_else(|| {
-                        db.track_by_uri_suffix_unique(&lookup_path)
-                            .ok()
-                            .flatten()
-                    });
+                    .or_else(|| db.track_by_uri_suffix_unique(&lookup_path).ok().flatten());
                 if !current_is_cue {
                     return candidate;
                 }
@@ -657,7 +667,10 @@ impl AppState {
             Err(_) => Vec::new(),
         };
         // Push the new status to WS clients.
-        let _ = self.inner.event_tx.send(StatusEvent::Status(status.clone()));
+        let _ = self
+            .inner
+            .event_tx
+            .send(StatusEvent::Status(status.clone()));
     }
 
     /// Position of the current song within `entries`, or `None` when nothing is
@@ -697,12 +710,9 @@ impl AppState {
                 return by_cue_address;
             }
             let by_active = active.and_then(|id| {
-                uri_for_blocking.as_ref().and_then(|u| {
-                    db.track_by_id(id)
-                        .ok()
-                        .flatten()
-                        .filter(|t| &t.uri == u)
-                })
+                uri_for_blocking
+                    .as_ref()
+                    .and_then(|u| db.track_by_id(id).ok().flatten().filter(|t| &t.uri == u))
             });
             let by_uri = uri_for_blocking.as_ref().and_then(|u| {
                 db.track_by_uri_cue(u, current_track.map(|t| t as i32))
@@ -746,40 +756,41 @@ impl AppState {
         // Fallback: MPD is playing a song but we couldn't resolve it from the
         // library DB — still return a minimal TrackRef so the UI doesn't show
         // "Nothing playing" for a song that is clearly audible.
-        track.or_else(|| uri.map(|u| {
-            // Streams (http(s) URLs) never resolve from the library DB. Surface
-            // the live icy-metadata title MPD reports and the station name as
-            // artist so NowPlaying shows something meaningful instead of a
-            // bare URL.
-            let station = self.inner.radio.by_url(&u);
-            let (title, artist, art_url) = if u.starts_with("http://")
-                || u.starts_with("https://")
-            {
-                (
-                    ms.current_title.clone(),
-                    station.as_ref().map(|s| s.name.clone()),
-                    station.and_then(|s| s.artwork),
-                )
-            } else {
-                (ms.current_title.clone(), None, None)
-            };
-            crate::types::TrackRef {
-                id: 0,
-                uri: u,
-                title,
-                artist,
-                album: None,
-                has_cover: false,
-                cover_key: None,
-                format: None,
-                sample_rate: None,
-                bit_depth: None,
-                channels: None,
-                duration: None,
-                cue_start: None,
-                art_url,
-            }
-        }))
+        track.or_else(|| {
+            uri.map(|u| {
+                // Streams (http(s) URLs) never resolve from the library DB. Surface
+                // the live icy-metadata title MPD reports and the station name as
+                // artist so NowPlaying shows something meaningful instead of a
+                // bare URL.
+                let station = self.inner.radio.by_url(&u);
+                let (title, artist, art_url) =
+                    if u.starts_with("http://") || u.starts_with("https://") {
+                        (
+                            ms.current_title.clone(),
+                            station.as_ref().map(|s| s.name.clone()),
+                            station.and_then(|s| s.artwork),
+                        )
+                    } else {
+                        (ms.current_title.clone(), None, None)
+                    };
+                crate::types::TrackRef {
+                    id: 0,
+                    uri: u,
+                    title,
+                    artist,
+                    album: None,
+                    has_cover: false,
+                    cover_key: None,
+                    format: None,
+                    sample_rate: None,
+                    bit_depth: None,
+                    channels: None,
+                    duration: None,
+                    cue_start: None,
+                    art_url,
+                }
+            })
+        })
     }
 
     pub fn spawn_status_poller(&self) {
@@ -813,7 +824,6 @@ impl AppState {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -838,7 +848,10 @@ mod tests {
         let mpd = Mpd::with_connection("127.0.0.1", 6600, false, None, None);
         let visualizer = VisualizerAnalyzer::new(&cfg);
         let bt = BluetoothManager::new().await;
-        (AppState::new(cfg, db.clone(), dsp, mpd, visualizer, bt, None), db)
+        (
+            AppState::new(cfg, db.clone(), dsp, mpd, visualizer, bt, None),
+            db,
+        )
     }
 
     /// Regression: after a restart MPD resumes at the CUE address URI
@@ -945,9 +958,7 @@ mod tests {
             elapsed: 10.0,
             duration: 237.0,
             error: None,
-            current_uri: Some(
-                "MyMusic/Cesaria Evora/09 - Historia De Un Amor.m4a".to_string(),
-            ),
+            current_uri: Some("MyMusic/Cesaria Evora/09 - Historia De Un Amor.m4a".to_string()),
             current_track: Some(9),
             current_id: Some(19),
             current_title: None,
@@ -1052,12 +1063,7 @@ mod tests {
         // at a broken image.
         state
             .radio()
-            .add(
-                "Bare FM",
-                "https://kiosk-art-test.example/bare",
-                None,
-                None,
-            )
+            .add("Bare FM", "https://kiosk-art-test.example/bare", None, None)
             .expect("station without artwork must be accepted");
         let ms = MpdStatus {
             current_uri: Some("https://kiosk-art-test.example/bare".to_string()),
@@ -1101,7 +1107,6 @@ mod tests {
             }
         }
         assert!(got_status, "refresh_status must broadcast a Status event");
-
     }
     #[test]
     fn classifies_missing_before_unplayable_errors() {
