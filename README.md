@@ -114,7 +114,9 @@ Bluetooth input is disabled until its toggle is enabled. AirPlay is advertised a
 
 ### Upgrade
 
-Use update mode for a normal upgrade. It downloads the latest package for the host architecture, replaces the backend binary and frontend assets, installs or repairs the Bluetooth/AirPlay receiver services and shared ALSA loopback, then restarts Oxide. It leaves `/etc/oxide-player/config.json`, the library database, radio stations, playlists, and DSP data in place:
+Use update mode for a normal upgrade. It downloads and extracts the prebuilt GitHub package for the host architecture, replaces the backend binary and frontend assets, installs or repairs the Bluetooth/AirPlay receiver services and shared ALSA loopback, then restarts Oxide. Updates do not compile Oxide Player on-device; if the release package is unavailable or its binary fails the startup smoke check, the update stops with an error. It leaves `/etc/oxide-player/config.json`, the library database, radio stations, playlists, and DSP data in place:
+
+The update requires `jq` to read GitHub release metadata; the installer installs it if missing.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/OxideAI/oxide-player/main/install.sh \

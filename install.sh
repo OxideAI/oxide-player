@@ -53,6 +53,7 @@ KIOSK_ENABLED="${KIOSK_ENABLED:-0}"
 update_mode=false
 fix_perms_mode=false
 uninstall_mode=false
+release_only_update=false
 
 show_usage() {
   cat <<'EOF'
@@ -221,7 +222,7 @@ fetch_release_pkg() {
   done
 
   if [ -z "$url" ]; then
-    warn "No matching release asset found after $RELEASE_ASSET_RETRIES attempts — will build from source."
+    warn "No matching release asset found after $RELEASE_ASSET_RETRIES attempts."
     return 1
   fi
   tag="${url%%$'\t'*}"
@@ -234,7 +235,7 @@ fetch_release_pkg() {
   run tar -xzf "$BUILD_DIR/$asset" -C "$BUILD_DIR"
   SRC_DIR="$BUILD_DIR/oxide-player-${arch}"
   if [ ! -d "$SRC_DIR" ]; then
-    warn "Unexpected package layout — will build from source."
+    warn "Unexpected package layout; release package cannot be used."
     return 1
   fi
   log "Using prebuilt release package: $SRC_DIR"
@@ -253,6 +254,17 @@ fetch_source() {
   SRC_DIR="$BUILD_DIR"
   rm -rf "$SRC_DIR"
   run git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$SRC_DIR"
+}
+
+fetch_update_source() {
+  if [ -n "$INSTALL_FROM_DIR" ]; then
+    SRC_DIR="$INSTALL_FROM_DIR"
+    log "Using local source: $SRC_DIR"
+    return
+  fi
+  fetch_release_pkg || die "Could not download a prebuilt GitHub release package; refusing to build on-device."
+  [ -x "$SRC_DIR/target/release/oxide-player" ] || die "GitHub release package is missing its backend binary."
+  [ -f "$SRC_DIR/dist/index.html" ] || die "GitHub release package is missing its frontend assets."
 }
 
 build_backend() {
@@ -331,6 +343,9 @@ install_prebuilt_backend() {
   run install -Dm0755 "$src_bin" "$BIN_DIR/oxide-player"
   if smoke_backend; then
     return 0
+  fi
+  if $release_only_update; then
+    die "Prebuilt release binary failed startup smoke test; refusing to compile on-device."
   fi
   warn "Prebuilt binary cannot run on this CPU (codegen newer than the machine supports)"
   warn "Falling back to building from source with generic x86-64 baseline codegen"
@@ -2013,10 +2028,11 @@ do_uninstall() {
 
 do_update() {
   need_root
-  apt_install curl git build-essential pkg-config libssl-dev libasound2-dev \
+  apt_install curl jq git build-essential pkg-config libssl-dev libasound2-dev \
               bluez-alsa-utils shairport-sync
+  release_only_update=true
   ensure_camilladsp
-  fetch_source
+  fetch_update_source
   build_backend
   build_frontend
   fix_vfat_music_mounts || true
