@@ -53,7 +53,7 @@ KIOSK_ENABLED="${KIOSK_ENABLED:-0}"
 update_mode=false
 fix_perms_mode=false
 uninstall_mode=false
-release_only_update=false
+prebuilt_release_package=false
 
 show_usage() {
   cat <<'EOF'
@@ -238,7 +238,7 @@ fetch_release_pkg() {
     warn "Unexpected package layout; release package cannot be used."
     return 1
   fi
-  log "Using prebuilt release package: $SRC_DIR"
+  prebuilt_release_package=true
   return 0
 }
 
@@ -344,7 +344,7 @@ install_prebuilt_backend() {
   if smoke_backend; then
     return 0
   fi
-  if $release_only_update; then
+  if $release_only_update || $prebuilt_release_package; then
     die "Prebuilt release binary failed startup smoke test; refusing to compile on-device."
   fi
   warn "Prebuilt binary cannot run on this CPU (codegen newer than the machine supports)"

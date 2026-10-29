@@ -102,20 +102,13 @@ jobs:
           echo "rustc: $(rustc --version)"
           echo "target: ${{ matrix.target }}"
           echo "cargo version: $(cargo --version)"
-          # Baseline codegen only: release binaries must run on any consumer CPU.
-          # The default rustc codegen for the host runner's CPU level vectorizes
-          # with AVX/AVX2, which hard-crashes (SIGILL) older x86_64 CPUs (observed
-          # on a Core 2 Duo with 0.20.3+). An earlier attempt used x86-64-v2
-          # (SSE4.2/POPCNT), but the 0.20.5 v2 binary still SIGILLs on Penryn
-          # (Core 2 Duo): Penryn predates SSE4.2/POPCNT (Nehalem+, 2009). Use the
-          # default `-C target-cpu=x86-64` generic baseline (never emits
-          # POPCNT/SSE4.2/AVX); runtime CPU feature detection (rustfft/zune-jpeg
-          # std::is_x86_feature_detected! paths) picks faster code paths only
-          # when the host supports them. This is the x86_64 baseline rustc ships
-          # with, so no explicit flag is needed; the arm64 target already stays
-          # generic.
+          # Build for the x86-64 ABI baseline, not the GitHub runner's CPU.
+          # Constrain Rust and native C/C++ dependencies: RUSTFLAGS does not
+          # control code emitted by cc/clang from dependency build scripts.
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
-            export RUSTFLAGS="-C target-cpu=x86-64"
+            export RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-avx,-avx2,-fma,-sse4.1,-sse4.2,-popcnt"
+            export CFLAGS="-march=x86-64"
+            export CXXFLAGS="-march=x86-64"
           fi
           cargo build --release --target ${{ matrix.target }}
 

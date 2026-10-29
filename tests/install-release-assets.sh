@@ -97,7 +97,7 @@ smoke_backend() { return 0; }
 build_backend
 cmp "$BUILD_DIR/oxide-player-arm64/target/release/oxide-player" "$BIN_DIR/oxide-player"
 test ! -e "$CARGO_STATE"
-release_only_update=true
+release_only_update=false
 smoke_backend() { return 1; }
 if ( install_prebuilt_backend "$BUILD_DIR/oxide-player-arm64/target/release/oxide-player" ); then
   printf 'update continued after a failing release-binary smoke test\n' >&2
