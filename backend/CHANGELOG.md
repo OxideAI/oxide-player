@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.8](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.7...oxide-player-v0.20.8) (2026-10-29)
+
+
+### Bug Fixes
+
+* Settings ([041199c](https://github.com/OxideAI/oxide-player/commit/041199cfbeb4db6be1de6463f63c9c70f094560c))
+
 ## [Unreleased]
 
 ### User experience
