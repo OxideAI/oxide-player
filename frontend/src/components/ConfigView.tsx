@@ -156,6 +156,22 @@ export function ConfigView({
       setActionError(e instanceof Error ? e.message : String(e));
     }
   };
+  const reconnectOutput = async (output: DeviceOutput) => {
+    setActionError(null);
+    try {
+      await api.disableDevice(output.id);
+      await api.enableDevice(output.id);
+      await loadDevices();
+      setNotice(
+        `${output.name} was re-enabled in MPD. Check whether sound has returned.`,
+      );
+    } catch (e) {
+      setActionError(
+        `Could not reconnect ${output.name}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      throw e;
+    }
+  };
 
   const toggleDsp = async (output: DeviceOutput) => {
     setActionError(null);
@@ -282,6 +298,7 @@ export function ConfigView({
         onSelectOutput={setSelectedOutputKey}
         onToggleOutput={toggleOutput}
         onToggleDsp={toggleDsp}
+        onReconnectOutput={reconnectOutput}
         onRetry={() => void loadDevices()}
         onResolveMultiple={resolveMultiple}
         deviceError={deviceError}

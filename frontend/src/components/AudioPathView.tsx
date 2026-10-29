@@ -12,7 +12,8 @@ export type AudioPathState =
   | "stale"
   | "unavailable"
   | "zero-output"
-  | "multiple-output";
+  | "multiple-output"
+  | "output-disconnected";
 
 export interface AudioPathReductionInput {
   status: PlayerStatus | null;
@@ -38,7 +39,7 @@ function liveOutput(
   const live = status?.outputs.find(
     (candidate) => candidate.id === output.id || candidate.name === output.name,
   );
-  return live ? live.enabled : output.enabled;
+  return output.dsp_enabled || (live ? live.enabled : output.enabled);
 }
 
 export function stableOutputIdentity(
@@ -137,12 +138,24 @@ export function reduceAudioPath({
         "Multiple playback outputs are enabled. Choose one route or resolve the extras.",
     };
   }
+  const disconnectedOutput = enabledOutputs.find(
+    (output) => output.connected === false,
+  );
+  if (disconnectedOutput) {
+    return {
+      state: "output-disconnected",
+      enabledOutputs,
+      eligibleOutputs,
+      message: `${disconnectedOutput.name} is enabled in MPD, but its Bluetooth device is disconnected.`,
+    };
+  }
   if (status.state === "playing") {
     return {
       state: "healthy",
       enabledOutputs,
       eligibleOutputs,
-      message: "Audio is playing through the selected output.",
+      message:
+        "MPD reports playback to an enabled output. Sound from the DAC cannot be verified here.",
     };
   }
   if (status.state === "paused") {
@@ -162,7 +175,7 @@ export function reduceAudioPath({
 }
 
 const stateLabels: Record<AudioPathState, string> = {
-  healthy: "Healthy",
+  healthy: "Playing in MPD",
   paused: "Paused",
   stopped: "Stopped",
   "mpd-error": "MPD error",
@@ -170,6 +183,7 @@ const stateLabels: Record<AudioPathState, string> = {
   unavailable: "Player unavailable",
   "zero-output": "No output",
   "multiple-output": "Multiple outputs",
+  "output-disconnected": "Output disconnected",
 };
 
 const diagnosticLabels: Record<string, string> = {
@@ -188,6 +202,7 @@ export interface AudioPathViewProps extends AudioPathReductionInput {
   onSelectOutput: (selectionKey: string) => void;
   onToggleOutput?: (output: DeviceOutput) => Promise<void> | void;
   onToggleDsp?: (output: DeviceOutput) => Promise<void> | void;
+  onReconnectOutput?: (output: DeviceOutput) => Promise<void>;
   onRetry?: () => void;
   onResolveMultiple?: () => Promise<void> | void;
   deviceError?: string | null;
@@ -199,6 +214,7 @@ export function AudioPathView({
   onSelectOutput,
   onToggleOutput,
   onToggleDsp,
+  onReconnectOutput,
   onRetry,
   onResolveMultiple,
   deviceError,
@@ -211,6 +227,7 @@ export function AudioPathView({
       (output) => stableOutputIdentity(output) === selectedOutputKey,
     ) ?? null;
   const [confirmResolve, setConfirmResolve] = useState(false);
+  const [confirmReconnect, setConfirmReconnect] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const invokeResolve = async () => {
@@ -219,6 +236,19 @@ export function AudioPathView({
     try {
       await onResolveMultiple();
       setConfirmResolve(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const invokeReconnect = async () => {
+    if (!onReconnectOutput || !selected) return;
+    setBusy(true);
+    try {
+      await onReconnectOutput(selected);
+      setConfirmReconnect(false);
+    } catch {
+      // The parent surfaces the failed operation; keep the confirmation open.
     } finally {
       setBusy(false);
     }
@@ -248,8 +278,11 @@ export function AudioPathView({
         </p>
         {reduction.enabledOutputs.length === 1 ? (
           <p className={styles.destination}>
-            Listening destination:{" "}
-            <strong>{reduction.enabledOutputs[0].name}</strong>
+            MPD output: <strong>{reduction.enabledOutputs[0].name}</strong>
+            {" · "}
+            {reduction.enabledOutputs[0].dsp_enabled
+              ? "DSP route active"
+              : "enabled"}
           </p>
         ) : reduction.enabledOutputs.length > 1 ? (
           <p className={styles.destination}>
@@ -259,6 +292,12 @@ export function AudioPathView({
         ) : (
           <p className={styles.destination}>No active listening destination.</p>
         )}
+        {reduction.state === "healthy" && (
+          <p className={styles.warning}>
+            MPD reports playback to an enabled output. Oxide cannot confirm
+            sound from the DAC itself.
+          </p>
+        )}
         {reduction.state === "multiple-output" && onResolveMultiple && (
           <button
             className={styles.primary}
@@ -267,6 +306,16 @@ export function AudioPathView({
             Resolve extra outputs
           </button>
         )}
+        {selected?.enabled &&
+          selected.selection_key.toLowerCase().startsWith("alsa:") &&
+          onReconnectOutput && (
+            <button
+              className={styles.secondary}
+              onClick={() => setConfirmReconnect(true)}
+            >
+              Reconnect USB / DAC output
+            </button>
+          )}
         {reduction.state === "unavailable" && onRetry && (
           <button className={styles.secondary} onClick={onRetry}>
             Retry player status
@@ -274,8 +323,8 @@ export function AudioPathView({
         )}
         {deviceError && (
           <p className={styles.warning}>
-            Output details could not be refreshed. Route health is based on the
-            live player snapshot.
+            Output details could not be refreshed. The route shown is based on
+            the live MPD snapshot only.
           </p>
         )}
         {actionError && (
@@ -323,9 +372,13 @@ export function AudioPathView({
                         ? "Disconnected"
                         : output.connected === true
                           ? "Connected"
-                          : output.available
-                            ? "Available"
-                            : "Unavailable"}
+                          : output.selection_key
+                                .toLowerCase()
+                                .startsWith("alsa:")
+                            ? "DAC connection not verified"
+                            : output.available
+                              ? "Available"
+                              : "Unavailable"}
                       {" · "}
                       {output.enabled ? "Enabled" : "Disabled"}
                     </span>
@@ -400,6 +453,43 @@ export function AudioPathView({
             </dl>
           </details>
         </section>
+      )}
+      {confirmReconnect && selected && (
+        <div
+          className={styles.dialogOverlay}
+          role="presentation"
+          onClick={() => !busy && setConfirmReconnect(false)}
+        >
+          <div
+            className={styles.dialog}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reconnect-heading"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 id="reconnect-heading">Reconnect {selected.name}?</h3>
+            <p>
+              Oxide will briefly disable and re-enable this MPD output. Playback
+              may pause while the DAC reconnects.
+            </p>
+            <div className={styles.controlRow}>
+              <button
+                className={styles.secondary}
+                onClick={() => setConfirmReconnect(false)}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.primary}
+                onClick={() => void invokeReconnect()}
+                disabled={busy}
+              >
+                {busy ? "Reconnecting…" : "Reconnect output"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {confirmResolve && (

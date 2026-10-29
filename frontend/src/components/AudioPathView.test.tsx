@@ -89,6 +89,15 @@ describe("AudioPathView route reduction", () => {
       }).state,
     ).toBe("multiple-output");
   });
+  it("reports a disconnected Bluetooth output even while MPD says playing", () => {
+    const result = reduceAudioPath({
+      status: status(),
+      outputs: [output({ connected: false })],
+      connected: true,
+    });
+    expect(result.state).toBe("output-disconnected");
+    expect(result.message).toMatch(/Bluetooth device is disconnected/);
+  });
 
   it("keeps route health visible from a live snapshot while details are unavailable", () => {
     const result = reduceAudioPath({
@@ -99,6 +108,23 @@ describe("AudioPathView route reduction", () => {
     });
     expect(result.state).toBe("healthy");
     expect(result.enabledOutputs[0].name).toBe("USB DAC");
+  });
+
+  it("identifies the DAC destination when MPD feeds DSP instead of the direct output", () => {
+    const result = reduceAudioPath({
+      status: status({
+        outputs: [
+          { id: 1, name: "USB DAC", enabled: false },
+          { id: 2, name: "visualizer", enabled: true },
+          { id: 3, name: "camilladsp-loopback", enabled: true },
+        ],
+        error: null,
+      }),
+      outputs: [output({ enabled: false, active: false, dsp_enabled: true })],
+      connected: true,
+    });
+
+    expect(result.enabledOutputs.map((device) => device.name)).toEqual(["USB DAC"]);
   });
 
   it("uses stable selection identity rather than a numeric runtime id", () => {

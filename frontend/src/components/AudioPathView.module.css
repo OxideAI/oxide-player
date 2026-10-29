@@ -85,6 +85,12 @@
 }
 
 .state_mpd-error,
+.state_output-disconnected {
+    color: var(--danger);
+    border-color: var(--danger);
+    background: var(--danger-soft);
+}
+
 .state_unavailable,
 .state_zero-output,
 .state_stale {
@@ -139,12 +145,10 @@
     align-self: flex-start;
     border: 0;
     color: var(--bg);
-    background: conic-gradient(
-        from 180deg,
-        var(--accent),
-        var(--accent-2),
-        var(--accent)
-    );
+    background: conic-gradient(from 180deg,
+            var(--accent),
+            var(--accent-2),
+            var(--accent));
     box-shadow: var(--glow-accent);
 }
 
@@ -263,16 +267,16 @@
     line-height: 1.45;
 }
 
-@media (max-width: 560px) {
-    .routeHead,
-    .sectionHead,
-    .controlRow {
-        align-items: stretch;
-        flex-direction: column;
-    }
 
-    .primary,
-    .secondary {
-        width: 100%;
-    }
+.routeHead,
+.sectionHead,
+.controlRow {
+    align-items: stretch;
+    flex-direction: column;
+}
+
+.primary,
+.secondary {
+    width: 100%;
+}
 }

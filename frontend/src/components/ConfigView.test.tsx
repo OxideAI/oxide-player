@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { api } from "../api";
 import { ConfigView } from "./ConfigView";
 
 vi.mock("../api", () => ({
@@ -15,6 +16,8 @@ vi.mock("../api", () => ({
       data_dir: "/tmp",
       static_dir: "/tmp",
     }),
+    disableDevice: vi.fn().mockResolvedValue(undefined),
+    enableDevice: vi.fn().mockResolvedValue(undefined),
     version: vi.fn().mockResolvedValue({ version: "0.1.0" }),
     devices: vi.fn().mockResolvedValue([
       {
@@ -50,7 +53,7 @@ describe("ConfigView version", () => {
       expect(checkbox.checked).toBe(true);
     });
   });
-  it("keeps route health visible while administration config loads", async () => {
+  it("shows MPD route status without claiming audible DAC output while config loads", async () => {
     render(
       <ConfigView
         status={{
@@ -67,7 +70,47 @@ describe("ConfigView version", () => {
         statusLastUpdatedAt={Date.now()}
       />,
     );
-    expect(await screen.findByText("Healthy")).toBeTruthy();
+    expect(await screen.findByText("Playing in MPD")).toBeTruthy();
+    expect(
+      screen.getByText(/cannot be verified here/i),
+    ).toBeTruthy();
     expect(screen.getAllByText("USB DAC").length).toBeGreaterThan(0);
+    expect(
+      await screen.findByRole("button", {
+        name: "Reconnect USB / DAC output",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("reconnects an enabled USB output by toggling its MPD output", async () => {
+    render(
+      <ConfigView
+        status={{
+          state: "playing",
+          volume: 70,
+          elapsed: 4,
+          duration: 120,
+          outputs: [{ id: 1, name: "USB DAC", enabled: true }],
+          error: null,
+          current_song: null,
+          random: false,
+        }}
+        statusConnected
+        statusLastUpdatedAt={Date.now()}
+      />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Reconnect USB / DAC output" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reconnect output" }),
+    );
+    await waitFor(() => {
+      expect(api.disableDevice).toHaveBeenCalledWith(1);
+      expect(api.enableDevice).toHaveBeenCalledWith(1);
+      expect(
+        screen.getByText(/Check whether sound has returned/i),
+      ).toBeTruthy();
+    });
   });
 });

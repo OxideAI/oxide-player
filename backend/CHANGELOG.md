@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### User experience
+
+* Clarify that playback status confirms MPD routing, not audible DAC output; add a confirmed USB / DAC output reconnect action in Settings.
+
 ## [0.20.7](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.6...oxide-player-v0.20.7) (2026-10-28)
 
 
