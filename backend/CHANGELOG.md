@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.12...oxide-player-v0.21.0) (2026-10-31)
+
+
+### Features
+
+* tags ([db1eaa3](https://github.com/OxideAI/oxide-player/commit/db1eaa3b2f650a4db6a5630672cbcd5eb2afd323))
+
 ## [0.20.12](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.20.11...oxide-player-v0.20.12) (2026-10-29)
 
 
