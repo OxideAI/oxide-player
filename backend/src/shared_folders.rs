@@ -8,6 +8,15 @@ const SHARE_FILE_NAME: &str = "smb-shares.conf";
 /// The installer includes this file from smb.conf. Keeping the fragment under
 /// data_dir lets the unprivileged oxide service update shares without editing
 /// the system-owned Samba configuration.
+///
+/// Library folders are frequently FAT-family volumes (vfat/exfat/NTFS via
+/// fuse), which have no xattrs or alternate data streams. With default
+/// settings smbd creates directories through a `.::TMPNAME:…` stream temp
+/// name; exfat-fuse rejects it and every SMB-side mkdir fails with
+/// NT_STATUS_OBJECT_NAME_NOT_FOUND even though permissions allow the write.
+/// `store dos attributes = no` stops smbd from using that temp name (this
+/// deliberately drops RO/SYSTEM/ARCHIVE/HIDDEN attr persistence on these
+/// shares — cosmetic on a music library).
 pub fn sync(data_dir: &Path, folders: &[PathBuf]) -> Result<()> {
     let path = data_dir.join(SHARE_FILE_NAME);
     let text = render(folders)?;
@@ -66,7 +75,7 @@ fn render(folders: &[PathBuf]) -> Result<String> {
         names.push(name.clone());
 
         text.push_str(&format!(
-            "[{name}]\npath = \"{}\"\nbrowseable = yes\nread only = no\nguest ok = yes\nforce user = oxide\nforce group = oxide\ncreate mask = 0644\ndirectory mask = 0755\n\n",
+            "[{name}]\npath = \"{}\"\nbrowseable = yes\nread only = no\nguest ok = yes\nforce user = oxide\nforce group = oxide\ncreate mask = 0644\ndirectory mask = 0755\nstore dos attributes = no\n\n",
             samba_quote(path)
         ));
     }
@@ -128,6 +137,10 @@ mod tests {
         assert!(text.contains("path = \"/mnt/music\""));
         assert!(text.contains("[Oxide-jazz_collection]"));
         assert!(text.contains("path = \"/srv/jazz collection\""));
+        // Library folders are commonly FAT-family mounts (no streams/xattrs):
+        // without this line smbd mkdir uses a ::TMPNAME stream temp name that
+        // exfat-fuse rejects and network folder creation always fails.
+        assert!(text.contains("store dos attributes = no"));
     }
     #[test]
     fn sync_removes_deleted_folder_shares() {

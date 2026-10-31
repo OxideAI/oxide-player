@@ -900,6 +900,10 @@ SAMBAEOF
    force group = $SERVICE_USER
    create mask = 0644
    directory mask = 0755
+   # Music libraries commonly live on FAT-family volumes (no xattrs/ADS);
+   # without this smbd mkdir goes through a ::TMPNAME stream temp name that
+   # exfat-fuse/NTFS-3g reject and network-side folder creation always fails.
+   store dos attributes = no
 SHAREEOF
   run chown "$SERVICE_USER:$SERVICE_USER" "$SAMBA_SHARES_CONFIG"
 
