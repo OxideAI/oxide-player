@@ -13,6 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const TRACK_COLS: &str = "id, uri, path, title, artist, album, album_artist, genre, year, \
 track, duration, format, sample_rate, bit_depth, channels, has_cover, cover_key, cue_index, \
 start_time, end_time, file_mtime, source";
+
+/// `genre` is a system-maintained tag key: the scanner seeds values from the
+/// track files and the API refuses to delete them (`delete_tag` returns 400).
+pub const SYSTEM_TAG_KEYS: &[&str] = &["genre"];
 // Qualified form used when joining `tracks_fts` (both tables expose
 // title/artist/album and an unqualified reference would be ambiguous).
 const TRACK_COLS_Q: &str = "tracks.id, tracks.uri, tracks.path, tracks.title, tracks.artist, \
@@ -25,6 +29,17 @@ tracks.source";
 pub enum LibrarySnapshot {
     NotModified { etag: String },
     Fresh { etag: String, tracks: Vec<Track> },
+}
+
+/// One stored tag on one album. `system: true` marks scanner-seeded values
+/// (currently only `genre`); the UI renders those non-deletable. A user tag
+/// carries whatever key/value pair the user typed.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AlbumTag {
+    pub album: String,
+    pub key: String,
+    pub value: String,
+    pub system: bool,
 }
 
 #[derive(Clone)]
@@ -126,7 +141,16 @@ impl LibraryDb {
             -- non-CUE (cue_index IS NULL) row per uri, so INSERT OR REPLACE
             -- dedupes on rescan while CUE tracks keep their own key.
             CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_uri_noncue
-                ON tracks(uri) WHERE cue_index IS NULL;",
+                ON tracks(uri) WHERE cue_index IS NULL;
+
+            CREATE TABLE IF NOT EXISTS album_tags (
+                album TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                origin TEXT NOT NULL CHECK (origin IN ('system','user')),
+                PRIMARY KEY (album, key, value, origin)
+            );
+            CREATE INDEX IF NOT EXISTS idx_album_tags_key ON album_tags(key);",
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
         // FTS5 index over the searchable text columns. External-content table
@@ -758,6 +782,211 @@ impl LibraryDb {
         self.distinct_column("artist")
     }
 
+    /// Read one album's tags. System tags always come back even when the
+    /// stored value was wiped by a rescan; if a system key has no rows the
+    /// caller renders a placeholder instead of an empty list.
+    pub fn album_tags(&self, album: &str) -> AppResult<Vec<AlbumTag>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT album, key, value, origin FROM album_tags \
+                 WHERE album = ? ORDER BY origin, key, value",
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let rows = stmt
+            .query_map([album], |r| {
+                Ok(AlbumTag {
+                    album: r.get(0)?,
+                    key: r.get(1)?,
+                    value: r.get(2)?,
+                    system: &r.get::<_, String>(3)? == "system",
+                })
+            })
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        rows.map(|row| row.map_err(|e| AppError::Library(e.to_string())))
+            .collect()
+    }
+
+    /// Return the union of user tag values per album, across every album that
+    /// carries at least one user tag. Used by the album tiles.
+    pub fn user_tags_by_album(&self) -> AppResult<Vec<(String, Vec<String>)>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT album, key, value FROM album_tags \
+                 WHERE origin = 'user' ORDER BY album, key, value",
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(2)?)))
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
+        for row in rows {
+            let (album, value) = row.map_err(|e| AppError::Library(e.to_string()))?;
+            match out.last_mut() {
+                Some((last_album, values)) if *last_album == album => {
+                    if !values.contains(&value) {
+                        values.push(value);
+                    }
+                }
+                _ => out.push((album, vec![value])),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every distinct user-set tag key, used to offer autocomplete keys in the
+    /// composer.
+    pub fn user_tag_keys(&self) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT key FROM album_tags WHERE origin = 'user' ORDER BY key")
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AppError::Library(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
+    /// Every distinct value set under one key, across all albums. Used to
+    /// autocomplete values inside the composer for a chosen key.
+    pub fn user_tag_values_for_key(&self, key: &str) -> AppResult<Vec<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT value FROM album_tags \
+                 WHERE origin = 'user' AND key = ? ORDER BY value",
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let rows = stmt
+            .query_map([key], |r| r.get::<_, String>(0))
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AppError::Library(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
+    /// Insert or replace user tags of one album under one key: replaces the
+    /// key's whole user value set, leaving system rows and other keys alone.
+    pub fn set_user_tags(&self, album: &str, key: &str, values: &[String]) -> AppResult<()> {
+        let trimmed: Vec<String> = values
+            .iter()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect();
+        let mut uniq = trimmed.clone();
+        uniq.sort();
+        uniq.dedup();
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        tx.execute(
+            "DELETE FROM album_tags WHERE album = ? AND key = ? AND origin = 'user'",
+            params![album, key],
+        )
+        .map_err(|e| AppError::Library(e.to_string()))?;
+        for value in &uniq {
+            tx.execute(
+                "INSERT OR IGNORE INTO album_tags (album, key, value, origin) \
+                 VALUES (?1, ?2, ?3, 'user')",
+                params![album, key, value],
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        }
+        tx.commit().map_err(|e| AppError::Library(e.to_string()))?;
+        self.bump_revision();
+        Ok(())
+    }
+
+    /// Remove a single user tag value from one album. System rows are never
+    /// touchable this way; removing the last value leaves the album silently
+    /// untagged for that key.
+    pub fn delete_user_tag(&self, album: &str, key: &str, value: &str) -> AppResult<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n = conn
+            .execute(
+                "DELETE FROM album_tags WHERE album = ? AND key = ? AND value = ? \
+                 AND origin = 'user'",
+                params![album, key, value],
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        if n > 0 {
+            self.bump_revision();
+        }
+        Ok(n)
+    }
+
+    /// Recompute the system genre rows from the track files' `genre` column
+    /// so every album's system set reflects what the files currently claim.
+    /// All `origin='system'` rows are replaced each call (a stale system chip
+    /// would otherwise survive a file re-tag forever); rows the user added
+    /// (`origin='user'`) are untouched. Files often carry delimited genre
+    /// strings ("Jazz; Funk"); each piece seeds its own tag.
+    pub fn sync_system_genre_tags(&self) -> AppResult<usize> {
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT album, genre FROM tracks \
+                 WHERE album IS NOT NULL AND genre IS NOT NULL",
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let mut wanted: Vec<(String, String)> = Vec::new();
+        for row in rows {
+            let (album, genre) = row.map_err(|e| AppError::Library(e.to_string()))?;
+            for genre in genre.split(';').map(str::trim).filter(|g| !g.is_empty()) {
+                let pair = (album.clone(), genre.to_string());
+                if !wanted.contains(&pair) {
+                    wanted.push(pair);
+                }
+            }
+        }
+        drop(stmt);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let removed = tx
+            .execute("DELETE FROM album_tags WHERE origin = 'system'", [])
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        for (album, genre) in &wanted {
+            tx.execute(
+                "INSERT OR IGNORE INTO album_tags (album, key, value, origin) \
+                 VALUES (?1, 'genre', ?2, 'system')",
+                params![album, genre],
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        }
+        tx.commit().map_err(|e| AppError::Library(e.to_string()))?;
+        self.bump_revision();
+        Ok(removed as usize)
+    }
+
+    /// Drop tag rows whose album no longer has any tracks, so removed albums
+    /// do not leave stale tags behind after a rescan. Returns rows removed.
+    pub fn prune_orphan_album_tags(&self) -> AppResult<u64> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let n = conn
+            .execute(
+                "DELETE FROM album_tags \
+                 WHERE NOT EXISTS (SELECT 1 FROM tracks WHERE tracks.album = album_tags.album)",
+                [],
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        if n > 0 {
+            self.bump_revision();
+        }
+        Ok(n as u64)
+    }
+
     fn distinct_column(&self, col: &str) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
@@ -1269,5 +1498,309 @@ mod search_tests {
             .find(|(a, _)| a == "Solo")
             .expect("Solo album present");
         assert_eq!(solo.1, vec!["/music/A".to_string()]);
+    }
+
+    #[test]
+    fn set_user_tags_roundtrip_and_replace() {
+        let db = fresh();
+        put(&db, "/a/1.flac", "A1", "Artist", "Kind of Blue");
+        put(&db, "/a/2.flac", "A2", "Artist", "Kind of Blue");
+
+        db.set_user_tags("Kind of Blue", "genre", &["Jazz".into(), "Funk".into()])
+            .unwrap();
+        let tags = db.album_tags("Kind of Blue").unwrap();
+        assert_eq!(tags.len(), 2);
+        assert!(tags.iter().all(|t| !t.system));
+        assert!(tags.iter().any(|t| t.value == "Jazz"));
+        assert!(tags.iter().any(|t| t.value == "Funk"));
+
+        // Replacing the key's user set drops the old values.
+        db.set_user_tags("Kind of Blue", "genre", &["Bop".into()])
+            .unwrap();
+        let tags = db.album_tags("Kind of Blue").unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].value, "Bop");
+
+        // Empty array clears the key on that album without failing.
+        db.set_user_tags("Kind of Blue", "genre", &[]).unwrap();
+        assert!(db.album_tags("Kind of Blue").unwrap().is_empty());
+    }
+
+    #[test]
+    fn set_user_tags_replaces_only_that_key_and_album() {
+        let db = fresh();
+        put(&db, "/a/1.flac", "A1", "Artist", "Blue Train");
+        db.set_user_tags("Blue Train", "genre", &["Jazz".into()])
+            .unwrap();
+        db.set_user_tags("Blue Train", "mood", &["chill".into()])
+            .unwrap();
+
+        db.set_user_tags("Blue Train", "genre", &["Bop".into()])
+            .unwrap();
+
+        let tags = db.album_tags("Blue Train").unwrap();
+        assert!(tags.iter().any(|t| t.key == "genre" && t.value == "Bop"));
+        assert!(!tags.iter().any(|t| t.key == "genre" && t.value == "Jazz"));
+        assert!(
+            tags.iter().any(|t| t.key == "mood" && t.value == "chill"),
+            "other keys untouched by the genre replace"
+        );
+    }
+
+    #[test]
+    fn set_user_tags_trims_and_dedupes() {
+        let db = fresh();
+        put(&db, "/a/1.flac", "A1", "Artist", "Giant Steps");
+        db.set_user_tags(
+            "Giant Steps",
+            "genre",
+            &["Jazz".into(), " Jazz ".into(), "".into()],
+        )
+        .unwrap();
+        let tags = db.album_tags("Giant Steps").unwrap();
+        assert_eq!(tags.len(), 1, "trimmed duplicate and empty input dropped");
+        assert_eq!(tags[0].value, "Jazz");
+    }
+
+    #[test]
+    fn sync_system_genre_seeds_values_per_album() {
+        let db = fresh();
+        // Two tracks, two file genres: the album must land under both.
+        put(&db, "/a/1.flac", "A1", "Artist", "Head Hunters");
+        db.insert_track(
+            "/a/2.flac",
+            "/a/2.flac",
+            Some("A2"),
+            Some("Artist"),
+            Some("Head Hunters"),
+            None,
+            Some("Funk"),
+            None,
+            Some(2),
+            Some(180.0),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            None,
+        )
+        .unwrap();
+        // The `put` helper sets no genre; set it on track 1 manually through
+        // the same insert path used by the scanner by overwriting row 1's
+        // genre via a second insert (INSERT OR REPLACE keeps the last).
+        db.insert_track(
+            "/a/1.flac",
+            "/a/1.flac",
+            Some("A1"),
+            Some("Artist"),
+            Some("Head Hunters"),
+            None,
+            Some("Jazz; Fusion"),
+            None,
+            Some(1),
+            Some(180.0),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            None,
+        )
+        .unwrap();
+
+        db.sync_system_genre_tags().unwrap();
+        let tags = db.album_tags("Head Hunters").unwrap();
+        assert!(tags.iter().all(|t| t.system));
+        for expected in ["Jazz", "Fusion", "Funk"] {
+            assert!(
+                tags.iter().any(|t| t.value == expected),
+                "missing system genre '{expected}'"
+            );
+        }
+
+        // Rescan (same genre set) must not duplicate rows.
+        let before = db.album_tags("Head Hunters").unwrap().len();
+        db.sync_system_genre_tags().unwrap();
+        assert_eq!(
+            db.album_tags("Head Hunters").unwrap().len(),
+            before,
+            "idempotent recompute"
+        );
+    }
+
+    #[test]
+    fn sync_system_genre_replaces_stale_file_genres() {
+        // A file re-tag (say Jazz→Blues) must drop the old system chip on the
+        // next scan; user-added values survive untouched.
+        let db = fresh();
+        db.insert_track(
+            "/a/1.flac",
+            "/a/1.flac",
+            Some("A1"),
+            Some("Artist"),
+            Some("Head Hunters"),
+            None,
+            Some("Jazz"),
+            None,
+            Some(1),
+            Some(180.0),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            None,
+        )
+        .unwrap();
+        db.sync_system_genre_tags().unwrap();
+        db.set_user_tags("Head Hunters", "genre", &["Afrobeat".into()])
+            .unwrap();
+
+        // Re-tag the file: replace the row with a Blues genre.
+        db.insert_track(
+            "/a/1.flac",
+            "/a/1.flac",
+            Some("A1"),
+            Some("Artist"),
+            Some("Head Hunters"),
+            None,
+            Some("Blues"),
+            None,
+            Some(1),
+            Some(180.0),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            None,
+        )
+        .unwrap();
+        db.sync_system_genre_tags().unwrap();
+
+        let tags = db.album_tags("Head Hunters").unwrap();
+        assert!(
+            !tags.iter().any(|t| t.system && t.value == "Jazz"),
+            "stale system genre removed"
+        );
+        for expected in ["Blues", "Afrobeat"] {
+            assert!(
+                tags.iter().any(|t| t.value == expected && {
+                    // Afrobeat is user-owned, Blues system-owned.
+                    t.system == (expected == "Blues")
+                }),
+                "missing '{expected}'"
+            );
+        }
+    }
+
+    #[test]
+    fn delete_user_tag_rejects_nothing_but_system_is_untouchable() {
+        let db = fresh();
+        put(&db, "/a/1.flac", "A1", "Artist", "Mingus Ah Um");
+        db.set_user_tags("Mingus Ah Um", "genre", &["Jazz".into()])
+            .unwrap();
+        db.insert_track(
+            "/a/1.flac",
+            "/a/1.flac",
+            Some("A1"),
+            Some("Artist"),
+            Some("Mingus Ah Um"),
+            None,
+            Some("Jazz"),
+            None,
+            Some(1),
+            Some(180.0),
+            Some("flac"),
+            Some(44100),
+            Some(16),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            None,
+        )
+        .unwrap();
+        db.sync_system_genre_tags().unwrap();
+
+        // User value deletes fine.
+        assert_eq!(
+            db.delete_user_tag("Mingus Ah Um", "genre", "Bop").unwrap(),
+            0
+        );
+
+        // System value (re-seeded by the scanner on next scan) can be removed
+        // only by the scanner path (origin = system); the user-table call
+        // targets user rows exclusively, so a system row survives it.
+        db.set_user_tags("Mingus Ah Um", "genre", &[]).unwrap();
+        let tags = db.album_tags("Mingus Ah Um").unwrap();
+        assert!(
+            tags.iter().any(|t| t.system && t.value == "Jazz"),
+            "system genre survives a user-set clear"
+        );
+
+        // Wholly unknown tag value is a clean no-op (0 removed), so the API
+        // turns it into 404 rather than pretending it deleted something.
+        assert_eq!(
+            db.delete_user_tag("Mingus Ah Um", "mood", "awake").unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn prune_orphan_album_tags_drops_tags_of_removed_albums() {
+        let db = fresh();
+        put_src(&db, "/a/1.flac", "A1", "Artist", "Gone album", "/a");
+        put_src(&db, "/b/1.flac", "B1", "Artist", "Kept album", "/b");
+        db.set_user_tags("Gone album", "genre", &["Funk".into()])
+            .unwrap();
+        db.set_user_tags("Kept album", "genre", &["Jazz".into()])
+            .unwrap();
+
+        db.delete_by_source(Path::new("/a")).unwrap();
+        assert_eq!(db.prune_orphan_album_tags().unwrap(), 1);
+
+        assert!(db.album_tags("Gone album").unwrap().is_empty());
+        assert_eq!(db.album_tags("Kept album").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn user_tags_by_album_and_key_value_lists() {
+        let db = fresh();
+        put(&db, "/a/1.flac", "A1", "Artist", "Blue Train");
+        put(&db, "/b/1.flac", "B1", "Artist", "Giant Steps");
+        db.set_user_tags("Blue Train", "mood", &["chill".into()])
+            .unwrap();
+        db.set_user_tags("Giant Steps", "genre", &["Jazz".into(), "Bop".into()])
+            .unwrap();
+
+        // Blue Train's only tag is user-set here (no scanner sync ran, no
+        // system rows) so it shows up; albums with no user tags never do.
+        let summary = db.user_tags_by_album().unwrap();
+        assert_eq!(summary.len(), 2);
+
+        let keys = db.user_tag_keys().unwrap();
+        assert_eq!(keys, vec!["genre", "mood"]);
+        let genre_values = db.user_tag_values_for_key("genre").unwrap();
+        assert_eq!(genre_values, vec!["Bop", "Jazz"]);
     }
 }

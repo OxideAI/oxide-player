@@ -5,6 +5,7 @@ import { fmtTime, displayTitle, folderKey } from "../util";
 import { readLibraryCache, writeLibraryCache } from "../libraryCache";
 import { TrackMenu } from "./TrackMenu";
 import { Reveal } from "./Reveal";
+import { AlbumTags } from "./AlbumTags";
 import styles from "./LibraryView.module.css";
 
 interface Props {
@@ -76,25 +77,20 @@ export function LibraryView({
   const toastTimer = useRef<number | undefined>(undefined);
   const notify = useCallback((msg: string) => {
     setToast(msg);
-    if (toastTimer.current !== undefined)
-      window.clearTimeout(toastTimer.current);
+    if (toastTimer.current !== undefined) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 2500);
   }, []);
   useEffect(
     () => () => {
-      if (toastTimer.current !== undefined)
-        window.clearTimeout(toastTimer.current);
+      if (toastTimer.current !== undefined) window.clearTimeout(toastTimer.current);
     },
-    [],
+    []
   );
 
   const nowId = useMemo(
     () =>
-      nowPlayingId ??
-      (playingUri
-        ? (tracks.find((t) => t.uri === playingUri)?.id ?? null)
-        : null),
-    [nowPlayingId, playingUri, tracks],
+      nowPlayingId ?? (playingUri ? (tracks.find((t) => t.uri === playingUri)?.id ?? null) : null),
+    [nowPlayingId, playingUri, tracks]
   );
 
   useEffect(() => {
@@ -153,8 +149,7 @@ export function LibraryView({
         map.set(key, f);
       }
       f.tracks.push(t);
-      if (f.coverKey === null && t.has_cover && t.cover_key)
-        f.coverKey = t.cover_key;
+      if (f.coverKey === null && t.has_cover && t.cover_key) f.coverKey = t.cover_key;
     }
     const arr = [...map.values()];
     arr.forEach((f) => f.tracks.sort(trackOrder));
@@ -173,33 +168,24 @@ export function LibraryView({
         f.tracks.some((t) =>
           [t.title, t.artist]
             .filter(Boolean)
-            .some((v) => v!.toLowerCase().includes(normalizedQuery)),
-        ),
+            .some((v) => v!.toLowerCase().includes(normalizedQuery))
+        )
     );
   }, [folders, normalizedQuery]);
 
   useEffect(() => {
-    if (
-      openFolder !== null &&
-      folders.length > 0 &&
-      !folders.some((f) => f.key === openFolder)
-    )
+    if (openFolder !== null && folders.length > 0 && !folders.some((f) => f.key === openFolder))
       setOpenFolder(null);
   }, [folders, openFolder]);
 
   const current = useMemo(
-    () =>
-      openFolder !== null
-        ? (folders.find((f) => f.key === openFolder) ?? null)
-        : null,
-    [folders, openFolder],
+    () => (openFolder !== null ? (folders.find((f) => f.key === openFolder) ?? null) : null),
+    [folders, openFolder]
   );
   const visibleTracks = useMemo(() => {
     if (!current || !normalizedQuery) return current?.tracks ?? [];
     return current.tracks.filter((t) =>
-      [t.title, t.artist]
-        .filter(Boolean)
-        .some((v) => v!.toLowerCase().includes(normalizedQuery)),
+      [t.title, t.artist].filter(Boolean).some((v) => v!.toLowerCase().includes(normalizedQuery))
     );
   }, [current, normalizedQuery]);
 
@@ -289,9 +275,7 @@ export function LibraryView({
           </svg>
           <input
             className={styles.search}
-            placeholder={
-              current ? "Search this folder…" : "Search albums, artists…"
-            }
+            placeholder={current ? "Search this folder…" : "Search albums, artists…"}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -305,12 +289,8 @@ export function LibraryView({
         <span className={styles.count}>{count}</span>
       </div>
 
-
       {error && (
-        <div
-          className={styles.error}
-          role={tracks.length > 0 ? "status" : "alert"}
-        >
+        <div className={styles.error} role={tracks.length > 0 ? "status" : "alert"}>
           {error}
         </div>
       )}
@@ -329,19 +309,11 @@ export function LibraryView({
         <div className={styles.grid}>
           {filteredFolders.map((f, i) => (
             <Reveal key={f.key} delay={Math.min(i * 35, 350)}>
-              <button
-                className={styles.tile}
-                onClick={() => setOpenFolder(f.key)}
-              >
+              <button className={styles.tile} onClick={() => setOpenFolder(f.key)}>
                 <span className={styles.tileShell}>
                   <span className={styles.tileCore}>
                     {f.coverKey !== null ? (
-                      <img
-                        src={api.coverUrl(f.coverKey)}
-                        alt=""
-                        loading="lazy"
-                        decoding="async"
-                      />
+                      <img src={api.coverUrl(f.coverKey)} alt="" loading="lazy" decoding="async" />
                     ) : (
                       <span className={styles.tilePh}>♪</span>
                     )}
@@ -365,11 +337,7 @@ export function LibraryView({
             <span className={styles.albumShell}>
               <span className={styles.albumCore}>
                 {current.coverKey !== null ? (
-                  <img
-                    src={api.coverUrl(current.coverKey)}
-                    alt=""
-                    decoding="async"
-                  />
+                  <img src={api.coverUrl(current.coverKey)} alt="" decoding="async" />
                 ) : (
                   <span className={styles.tilePh}>♪</span>
                 )}
@@ -379,9 +347,8 @@ export function LibraryView({
               <span className={styles.eyebrow}>Album</span>
               <div className={styles.albumTitle}>{current.name}</div>
               <div className={styles.albumArtist}>{current.artist ?? "—"}</div>
-              <div className={styles.albumMeta}>
-                {current.tracks.length} tracks
-              </div>
+              <div className={styles.albumMeta}>{current.tracks.length} tracks</div>
+              <AlbumTags album={current.name} notify={notify} onError={setError} />
             </div>
             <div className={styles.albumActions}>
               <TrackMenu
@@ -399,11 +366,7 @@ export function LibraryView({
                 key={t.id}
                 data-track-id={t.id}
                 className={
-                  nowId === t.id
-                    ? isPlaying
-                      ? styles.rowPlaying
-                      : styles.rowPaused
-                    : styles.row
+                  nowId === t.id ? (isPlaying ? styles.rowPlaying : styles.rowPaused) : styles.row
                 }
                 onClick={() => play(t)}
               >

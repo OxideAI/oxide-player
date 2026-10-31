@@ -1,0 +1,148 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.error {
+  font-size: 12px;
+  color: var(--error);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  max-width: 220px;
+  overflow: hidden;
+}
+
+.systemChip {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.chipKey {
+  color: var(--muted);
+  text-transform: capitalize;
+}
+
+.chipValue {
+  color: var(--fg);
+}
+
+.chipRemove {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 1px;
+}
+
+.chipRemove:hover {
+  color: var(--error);
+}
+
+.addChip {
+  border: 1px dashed var(--border);
+  background: none;
+  color: var(--muted);
+  border-radius: 999px;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.addChip:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.composer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 5px 9px;
+  min-width: 160px;
+  flex: 0 1 220px;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.saveBtn,
+.cancelBtn {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--fg);
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 5px 11px;
+  cursor: pointer;
+}
+
+.saveBtn {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.saveBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cancelBtn {
+  color: var(--muted);
+}
+
+.suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.suggestBtn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.suggestBtn:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}

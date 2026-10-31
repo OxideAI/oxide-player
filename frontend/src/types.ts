@@ -41,6 +41,14 @@ export interface Track extends TrackRef {
  */
 export type AlbumSources = [string, string[]];
 
+/** One stored tag on one album; `system` marks scanner-seeded values (genre). */
+export interface AlbumTag {
+  album: string;
+  key: string;
+  value: string;
+  system: boolean;
+}
+
 export interface QueueItem {
   pos: number;
   id: number;

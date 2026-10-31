@@ -7,7 +7,7 @@ use crate::dsp::camilladsp::DspApplyResult;
 use crate::dsp::profile::DspProfile;
 use crate::dsp::{parse_dsp_text, DspSettings};
 use crate::error::{AppError, AppResult};
-use crate::library::db::LibrarySnapshot;
+use crate::library::db::{AlbumTag, LibrarySnapshot, SYSTEM_TAG_KEYS};
 use crate::radio::RadioStation;
 use crate::state::AppState;
 use crate::types::{DeviceOutput, DeviceOutputDiagnosticCode, DeviceOutputRole, PlaybackState};
@@ -41,6 +41,17 @@ pub async fn router(state: AppState) -> Router {
         .route("/api/library", get(library_list))
         .route("/api/library/albums", get(library_albums))
         .route("/api/library/albums/sources", get(library_albums_sources))
+        .route("/api/library/album-tags", get(album_tags_summary))
+        .route(
+            "/api/library/album-tags/{album}",
+            get(album_tags_get).put(album_tags_put),
+        )
+        .route(
+            "/api/library/album-tags/{album}/{key}/{value}",
+            delete(album_tags_delete),
+        )
+        .route("/api/library/album-tag-keys", get(album_tags_keys))
+        .route("/api/library/album-tag-values", get(album_tags_values))
         .route("/api/library/artists", get(library_artists))
         .route("/api/cover/{key}", get(cover))
         .route("/api/library/cover/{*folder}", get(folder_cover))
@@ -335,6 +346,152 @@ async fn library_albums_sources(
 
 async fn library_artists(State(s): State<AppState>) -> AppResult<Json<Vec<String>>> {
     Ok(Json(s.db().list_artists()?))
+}
+
+/// `GET /api/library/album-tags` — every album that has at least one user tag,
+/// paired with that album's user tag values (comma-joined keys and values are
+/// rendered by the UI; system-only albums are omitted so tiles stay unchanged
+/// when the user hasn't tagged anything).
+async fn album_tags_summary(
+    State(s): State<AppState>,
+) -> AppResult<Json<Vec<(String, Vec<String>)>>> {
+    Ok(Json(s.db().user_tags_by_album()?))
+}
+
+/// `GET /api/library/album-tags/{album}` — all tags (system + user) on one
+/// album. Used by the album detail header.
+async fn album_tags_get(
+    State(s): State<AppState>,
+    Path(album): Path<String>,
+) -> AppResult<Json<Vec<AlbumTag>>> {
+    let album = percent_decode(&album);
+    Ok(Json(s.db().album_tags(&album)?))
+}
+
+/// `PUT /api/library/album-tags/{album}` — replace the user value set under
+/// one key. Body:
+/// `{"key": "mood", "values": ["chill", "evening"]}`. System-backed keys
+/// (`genre`) only accept the merge of previously stored user values + values
+/// present in the files; the response carries both so the UI renders the
+/// merged view. Deleting all of a key's user values (empty array) is allowed
+/// and clears the key on that album.
+#[derive(Deserialize)]
+struct AlbumTagsPutBody {
+    key: String,
+    values: Vec<String>,
+}
+
+async fn album_tags_put(
+    State(s): State<AppState>,
+    Path(album): Path<String>,
+    axum::Json(body): axum::Json<AlbumTagsPutBody>,
+) -> AppResult<Json<Vec<AlbumTag>>> {
+    let album = percent_decode(&album);
+    let key = body.key.trim();
+    if key.is_empty() {
+        return Err(AppError::BadRequest("tag key must not be empty".into()));
+    }
+    if key.chars().count() > 64 {
+        return Err(AppError::BadRequest(
+            "tag key must be at most 64 characters".into(),
+        ));
+    }
+    if body.values.len() > 64 {
+        return Err(AppError::BadRequest("at most 64 values per key".into()));
+    }
+    s.db().set_user_tags(&album, key, &body.values)?;
+    Ok(Json(s.db().album_tags(&album)?))
+}
+
+/// `DELETE /api/library/album-tags/{album}/{key}/{value}` — remove one value.
+/// Scanner-seeded values (`origin='system'`, currently file-derived genres)
+/// return 400: they are re-seeded by the next scan, so deleting them would
+/// silently undo itself. User values under the same key — including custom
+/// genres — delete normally.
+async fn album_tags_delete(
+    State(s): State<AppState>,
+    Path((album, key, value)): Path<(String, String, String)>,
+) -> AppResult<Json<serde_json::Value>> {
+    let album = percent_decode(&album);
+    let key = percent_decode(&key);
+    let value = percent_decode(&value);
+    let removed = s.db().delete_user_tag(&album, &key, &value)?;
+    if removed == 0 {
+        // Distinguish "row exists but is system-owned" (400) from "no such
+        // tag at all" (404) so the UI can say why the chip is unremovable.
+        let is_system = s
+            .db()
+            .album_tags(&album)?
+            .iter()
+            .any(|t| t.key == key && t.value == value && t.system);
+        if is_system {
+            return Err(AppError::BadRequest(format!(
+                "tag '{key}={value}' comes from the files' metadata and cannot be removed"
+            )));
+        }
+        return Err(AppError::NotFound(format!(
+            "tag {key}={value} on album {album}"
+        )));
+    }
+    Ok(Json(serde_json::json!({ "removed": removed })))
+}
+
+/// `GET /api/library/album-tag-keys` — distinct keys across all albums.
+async fn album_tags_keys(State(s): State<AppState>) -> AppResult<Json<Vec<String>>> {
+    let mut keys: Vec<String> = s.db().user_tag_keys()?;
+    for k in SYSTEM_TAG_KEYS {
+        if !keys.iter().any(|existing| existing == k) {
+            keys.insert(0, (*k).to_string());
+        }
+    }
+    keys.sort();
+    Ok(Json(keys))
+}
+
+/// `GET /api/library/album-tag-values?key=...` — distinct values under one key
+/// across all albums, for composer autocomplete.
+#[derive(Deserialize)]
+struct AlbumTagValuesQuery {
+    key: String,
+}
+
+async fn album_tags_values(
+    State(s): State<AppState>,
+    Query(q): Query<AlbumTagValuesQuery>,
+) -> AppResult<Json<Vec<String>>> {
+    Ok(Json(s.db().user_tag_values_for_key(&q.key)?))
+}
+
+/// Axum Path segments are already UTF-8 percent-decoded, but `%2F` inside a
+/// segment stays encoded (Axum expands it to a literal `/` only in `{*rest}`
+/// captures). Decode manually so album names containing `/` still match the
+/// rows stored with the same encoded album name (`create_tag` path uses plain
+/// names through `list_albums`, which never percent-encodes).
+fn percent_decode(s: &str) -> String {
+    urldecode(s)
+}
+
+fn urldecode(s: &str) -> String {
+    percent_decoding(s)
+}
+
+fn percent_decoding(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = &s[i + 1..i + 3];
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 async fn cover(State(s): State<AppState>, Path(key): Path<String>) -> AppResult<Response> {
@@ -1940,6 +2097,13 @@ mod tests {
     }
 
     async fn test_app_with_config(config: Config) -> axum::Router {
+        let (app, _state) = test_app_with_state(config).await;
+        app
+    }
+
+    /// Like `test_app_with_config`, but also returns the `AppState` so tests
+    /// can seed data through the same `LibraryDb` the handlers use.
+    async fn test_app_with_state(config: Config) -> (axum::Router, AppState) {
         let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
         db.migrate().unwrap();
         let dsp = DspManager::new(
@@ -1954,7 +2118,8 @@ mod tests {
         let visualizer = crate::visualizer::VisualizerAnalyzer::new(&config);
         let bt = crate::bluetooth::BluetoothManager::new().await;
         let state = AppState::new(config, db, dsp, mpd, visualizer, bt, None);
-        super::router(state).await
+        let app = super::router(state.clone()).await;
+        (app, state)
     }
 
     #[tokio::test]
@@ -2516,5 +2681,249 @@ mod tests {
             enabled: true,
         };
         assert!(super::configured_dsp_device(&[], &output).is_err());
+    }
+
+    #[tokio::test]
+    async fn album_tags_get_put_delete_roundtrip() {
+        let (app, state) = test_app_with_state(Config::default_config()).await;
+        state
+            .db()
+            .insert_track(
+                "Artist/Album.flac",
+                "/music/Artist/Album.flac",
+                Some("Title"),
+                Some("Artist"),
+                Some("Nu directions/Various"),
+                None,
+                None,
+                None,
+                Some(1),
+                Some(180.0),
+                Some("flac"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // PUT a user tag on an album name with a slash, then GET.
+        let album = "Nu directions/Various";
+        let put = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/library/album-tags/{}", urlencode_path(album)))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({"key": "mood", "values": ["chill", "evening"]}).to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(put).await.unwrap();
+        // Album doesn't exist yet — but tags are independent of tracks, so PUT
+        // on an untracked album still succeeds (the tag becomes an orphan the
+        // next scan prunes).
+        assert_eq!(response.status(), StatusCode::OK);
+        let tags: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(tags
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| { t["key"] == "mood" && t["value"] == "chill" && t["system"] == false }));
+
+        let get = Request::builder()
+            .uri(format!("/api/library/album-tags/{}", urlencode_path(album)))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(get).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let tags: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let user_values: Vec<&str> = tags
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["key"] == "mood")
+            .map(|t| t["value"].as_str().unwrap())
+            .collect();
+        assert_eq!(user_values, vec!["chill", "evening"]);
+
+        // DELETE one value.
+        let delete = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/library/album-tags/{}/mood/{}",
+                urlencode_path(album),
+                urlencode_path("chill")
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(delete).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // DELETE the system-backed genre value → 400 (system rows refuse
+        // deletion because the next scan re-seeds them). Seed one through the
+        // same db-sync path the scanner calls after a scan.
+        state
+            .db()
+            .insert_track(
+                "Artist/Album.flac",
+                "/music/Artist/Album.flac",
+                Some("Title"),
+                Some("Artist"),
+                Some(album),
+                None,
+                Some("File Genre"),
+                None,
+                Some(1),
+                Some(180.0),
+                Some("flac"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        state.db().sync_system_genre_tags().unwrap();
+        let delete = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/library/album-tags/{}/genre/{}",
+                urlencode_path(album),
+                urlencode_path("File Genre")
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(delete).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Deleting a genre value the album doesn't carry → 404.
+        let delete = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/library/album-tags/{}/genre/{}",
+                urlencode_path(album),
+                urlencode_path("Swing")
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(delete).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // Unknown key/value → 404.
+        let delete = Request::builder()
+            .method("DELETE")
+            .uri(format!(
+                "/api/library/album-tags/{}/mood/{}",
+                urlencode_path(album),
+                urlencode_path("absent")
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(delete).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn album_tags_put_rejects_empty_key() {
+        let app = test_app().await;
+        let put = Request::builder()
+            .method("PUT")
+            .uri("/api/library/album-tags/Some%20Album")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({"key": "   ", "values": ["x"]}).to_string(),
+            ))
+            .unwrap();
+        let response = app.oneshot(put).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn album_tags_summary_lists_only_user_tagged_albums() {
+        let app = test_app().await;
+        let put = Request::builder()
+            .method("PUT")
+            .uri("/api/library/album-tags/Tagged%20Album")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({"key": "genre", "values": ["Funk"]}).to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(put).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let summary_req = Request::builder()
+            .uri("/api/library/album-tags")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(summary_req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body, serde_json::json!([["Tagged Album", ["Funk"]]]));
+
+        // Keys endpoint includes the system genre key.
+        let keys_req = Request::builder()
+            .uri("/api/library/album-tag-keys")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(keys_req).await.unwrap();
+        let keys: Vec<String> = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            keys.iter().any(|k| k == "genre"),
+            "system + user genre keys both present"
+        );
+        assert!(keys.iter().any(|k| k == "anykey") == false);
+        // The only user key created by this test is genre.
+        assert_eq!(
+            keys.iter().filter(|k| **k == "genre").count(),
+            1,
+            "genre listed once regardless of origin"
+        );
+    }
+
+    fn urlencode_path(s: &str) -> String {
+        s.bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                    (b as char).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn album_tags_put_is_reachable() {
+        // compile-time: keep the handler referenced even if routes change.
+        let _ = super::album_tags_put;
     }
 }

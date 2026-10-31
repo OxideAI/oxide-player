@@ -514,6 +514,19 @@ pub fn scan(
         }
     }
 
+    // Album tags: seed system genre rows from the files just scanned and
+    // drop tags on albums whose tracks all disappeared from the library.
+    if let Ok(n) = db.sync_system_genre_tags() {
+        if n > 0 {
+            tracing::info!("seeded {n} system genre album tags");
+        }
+    }
+    if let Ok(n) = db.prune_orphan_album_tags() {
+        if n > 0 {
+            tracing::info!("pruned {n} album tags for removed albums");
+        }
+    }
+
     // Migrate any pre-existing rows (scanned before covers were album-keyed) so
     // their cover files and `cover_key` match the new scheme.
     if let Ok(n) = backfill_covers(db, cover_dir, opt) {

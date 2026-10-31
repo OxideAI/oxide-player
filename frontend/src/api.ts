@@ -1,5 +1,6 @@
 import type {
   AlbumSources,
+  AlbumTag,
   BtDevice,
   Config,
   DspProfile,
@@ -66,10 +67,7 @@ async function json<T>(res: Response): Promise<T> {
   }
   if (!res.ok) {
     const detail =
-      body &&
-      typeof body === "object" &&
-      "error" in body &&
-      typeof body.error === "string"
+      body && typeof body === "object" && "error" in body && typeof body.error === "string"
         ? body.error
         : res.statusText || `Request failed (${res.status})`;
     throw new ApiError(res.status, detail);
@@ -101,8 +99,7 @@ export const api = {
     };
   },
   albums: () => fetch("/api/library/albums").then((r) => json<string[]>(r)),
-  albumSources: () =>
-    fetch("/api/library/albums/sources").then((r) => json<AlbumSources[]>(r)),
+  albumSources: () => fetch("/api/library/albums/sources").then((r) => json<AlbumSources[]>(r)),
   artists: () => fetch("/api/library/artists").then((r) => json<string[]>(r)),
   coverUrl: (key: string | number) => `/api/cover/${key}`,
   // Live per-directory art (`folder.jpg`/`cover.jpg` read straight from disk by
@@ -116,25 +113,44 @@ export const api = {
     hasCover ? `/api/cover/${coverKey ?? id}` : null,
 
   scan: () =>
-    fetch("/api/library/scan", { method: "POST" }).then((r) =>
-      json<{ scanned: number }>(r),
-    ),
+    fetch("/api/library/scan", { method: "POST" }).then((r) => json<{ scanned: number }>(r)),
   refresh: () =>
-    fetch("/api/library/refresh", { method: "POST" }).then((r) =>
-      json<{ scanned: number }>(r),
-    ),
+    fetch("/api/library/refresh", { method: "POST" }).then((r) => json<{ scanned: number }>(r)),
   rescanArt: () =>
     fetch("/api/library/rescan-art", { method: "POST" }).then((r) =>
-      json<{ with_cover: number }>(r),
+      json<{ with_cover: number }>(r)
     ),
+
+  // Album tags. `{album}` is URL-encoded so album names containing `/` travel
+  // as one path segment; the backend decodes the same way.
+  albumTags: (album: string) =>
+    fetch(`/api/library/album-tags/${encodeURIComponent(album)}`).then((r) => json<AlbumTag[]>(r)),
+  albumTagsSummary: () =>
+    fetch("/api/library/album-tags").then((r) => json<[string, string[]][]>(r)),
+  albumTagKeys: () => fetch("/api/library/album-tag-keys").then((r) => json<string[]>(r)),
+  albumTagValues: (key: string) =>
+    fetch(`/api/library/album-tag-values?key=${encodeURIComponent(key)}`).then((r) =>
+      json<string[]>(r)
+    ),
+  setAlbumTags: (album: string, key: string, values: string[]) =>
+    fetch(`/api/library/album-tags/${encodeURIComponent(album)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, values }),
+    }).then((r) => json<AlbumTag[]>(r)),
+  deleteAlbumTag: (album: string, key: string, value: string) =>
+    fetch(
+      `/api/library/album-tags/${encodeURIComponent(album)}/${encodeURIComponent(
+        key
+      )}/${encodeURIComponent(value)}`,
+      { method: "DELETE" }
+    ).then((r) => json<{ removed: number }>(r)),
 
   play: (uri?: string, start?: number, end?: number, trackId?: number) =>
     fetch("/api/playback/play", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        uri === undefined ? {} : { uri, start, end, track_id: trackId },
-      ),
+      body: JSON.stringify(uri === undefined ? {} : { uri, start, end, track_id: trackId }),
     }).then((r) => json<unknown>(r)),
   pause: (pause: boolean) =>
     fetch("/api/playback/pause", {
@@ -142,18 +158,9 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pause }),
     }).then((r) => json<unknown>(r)),
-  stop: () =>
-    fetch("/api/playback/stop", { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
-  next: () =>
-    fetch("/api/playback/next", { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
-  prev: () =>
-    fetch("/api/playback/prev", { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
+  stop: () => fetch("/api/playback/stop", { method: "POST" }).then((r) => json<unknown>(r)),
+  next: () => fetch("/api/playback/next", { method: "POST" }).then((r) => json<unknown>(r)),
+  prev: () => fetch("/api/playback/prev", { method: "POST" }).then((r) => json<unknown>(r)),
   seek: (seconds: number) =>
     fetch("/api/playback/seek", {
       method: "POST",
@@ -166,29 +173,19 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ volume }),
     }).then((r) => json<unknown>(r)),
-  usbDevices: () =>
-    fetch("/api/devices/usb").then((r) => json<UsbAudioDevice[]>(r)),
+  usbDevices: () => fetch("/api/devices/usb").then((r) => json<UsbAudioDevice[]>(r)),
   devices: () => fetch("/api/devices").then((r) => json<DeviceOutput[]>(r)),
   enableDevice: (id: number) =>
-    fetch(`/api/devices/${id}/enable`, { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
+    fetch(`/api/devices/${id}/enable`, { method: "POST" }).then((r) => json<unknown>(r)),
   disableDevice: (id: number) =>
-    fetch(`/api/devices/${id}/disable`, { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
+    fetch(`/api/devices/${id}/disable`, { method: "POST" }).then((r) => json<unknown>(r)),
   enableDeviceDsp: (id: number) =>
-    fetch(`/api/devices/${id}/dsp/enable`, { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
+    fetch(`/api/devices/${id}/dsp/enable`, { method: "POST" }).then((r) => json<unknown>(r)),
   disableDeviceDsp: (id: number) =>
-    fetch(`/api/devices/${id}/dsp/disable`, { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
+    fetch(`/api/devices/${id}/dsp/disable`, { method: "POST" }).then((r) => json<unknown>(r)),
 
   // —— Device config fragments ——
-  deviceConfigs: () =>
-    fetch("/api/devices/configs").then((r) => json<DeviceConfig[]>(r)),
+  deviceConfigs: () => fetch("/api/devices/configs").then((r) => json<DeviceConfig[]>(r)),
   createDeviceConfig: (cfg: Partial<DeviceConfig>) => {
     // Map frontend output_type → backend 'type' field name
     const { output_type, ...rest } = cfg;
@@ -201,8 +198,7 @@ export const api = {
   },
   updateDeviceConfig: (name: string, cfg: Partial<DeviceConfig>) => {
     const { output_type, ...rest } = cfg;
-    const body =
-      output_type !== undefined ? { type: output_type, ...rest } : rest;
+    const body = output_type !== undefined ? { type: output_type, ...rest } : rest;
     return fetch(`/api/devices/configs/${encodeURIComponent(name)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -214,9 +210,7 @@ export const api = {
       method: "DELETE",
     }).then((r) => json<unknown>(r)),
   restartMpd: () =>
-    fetch("/api/devices/restart-mpd", { method: "POST" }).then((r) =>
-      json<{ status: string }>(r),
-    ),
+    fetch("/api/devices/restart-mpd", { method: "POST" }).then((r) => json<{ status: string }>(r)),
   dsp: () => fetch("/api/dsp").then((r) => json<DspProfile[]>(r)),
   setDsp: (profile: DspProfile) =>
     fetch("/api/dsp", {
@@ -239,9 +233,7 @@ export const api = {
 
   playlists: () => fetch("/api/playlists").then((r) => json<string[]>(r)),
   playlist: (name: string) =>
-    fetch(`/api/playlists/${encodeURIComponent(name)}`).then((r) =>
-      json<QueueItem[]>(r),
-    ),
+    fetch(`/api/playlists/${encodeURIComponent(name)}`).then((r) => json<QueueItem[]>(r)),
   playPlaylist: (name: string) =>
     fetch(`/api/playlists/${encodeURIComponent(name)}/play`, {
       method: "POST",
@@ -284,12 +276,12 @@ export const api = {
       body: JSON.stringify({ name, artwork }),
     }).then((r) => json<RadioStation>(r)),
   deleteRadio: (id: string) =>
-    fetch(`/api/radio/${encodeURIComponent(id)}`, { method: "DELETE" }).then(
-      (r) => json<unknown>(r),
+    fetch(`/api/radio/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) =>
+      json<unknown>(r)
     ),
   playRadio: (id: string) =>
-    fetch(`/api/radio/${encodeURIComponent(id)}/play`, { method: "POST" }).then(
-      (r) => json<unknown>(r),
+    fetch(`/api/radio/${encodeURIComponent(id)}/play`, { method: "POST" }).then((r) =>
+      json<unknown>(r)
     ),
 
   // `tracks` is one or more `PlayRef` envelopes (a single track or a whole
@@ -338,8 +330,7 @@ export const api = {
     }).then((r) => json<unknown>(r)),
 
   // —— Settings / config ——
-  version: () =>
-    fetch("/api/version").then((r) => json<{ version: string }>(r)),
+  version: () => fetch("/api/version").then((r) => json<{ version: string }>(r)),
   getConfig: () => fetch("/api/config").then((r) => json<Config>(r)),
   updateConfig: (cfg: Config) =>
     fetch("/api/config", {
@@ -361,23 +352,14 @@ export const api = {
     }).then((r) => json<unknown>(r)),
 
   // Gracefully stop the oxide-player process.
-  shutdown: () =>
-    fetch("/api/system/shutdown", { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
+  shutdown: () => fetch("/api/system/shutdown", { method: "POST" }).then((r) => json<unknown>(r)),
   // Restart the oxide-player process (requires a supervising systemd unit).
-  restart: () =>
-    fetch("/api/system/restart", { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
-  visualizerStatus: () =>
-    fetch("/api/visualizer/status").then((r) => json<VisualizerStatus>(r)),
+  restart: () => fetch("/api/system/restart", { method: "POST" }).then((r) => json<unknown>(r)),
+  visualizerStatus: () => fetch("/api/visualizer/status").then((r) => json<VisualizerStatus>(r)),
 
   // —— Visualizer tuning (persisted on disk, not the browser) ——
   getVizParams: () =>
-    fetch("/api/visualizer/params").then((r) =>
-      json<Record<string, number | string>>(r),
-    ),
+    fetch("/api/visualizer/params").then((r) => json<Record<string, number | string>>(r)),
   saveVizParams: (params: Record<string, number | string>) =>
     fetch("/api/visualizer/params", {
       method: "PUT",
@@ -386,10 +368,8 @@ export const api = {
     }).then((r) => json<unknown>(r)),
 
   // —— Bluetooth ——
-  btDevices: () =>
-    fetch("/api/bluetooth/devices").then((r) => json<BtDevice[]>(r)),
-  btAudioDevices: () =>
-    fetch("/api/bluetooth/devices/audio").then((r) => json<BtDevice[]>(r)),
+  btDevices: () => fetch("/api/bluetooth/devices").then((r) => json<BtDevice[]>(r)),
+  btAudioDevices: () => fetch("/api/bluetooth/devices/audio").then((r) => json<BtDevice[]>(r)),
   btScan: (timeout = 15) =>
     fetch("/api/bluetooth/scan", {
       method: "POST",
@@ -397,13 +377,9 @@ export const api = {
       body: JSON.stringify({ timeout }),
     }).then((r) => json<unknown>(r)),
   btScanStop: () =>
-    fetch("/api/bluetooth/scan/stop", { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
+    fetch("/api/bluetooth/scan/stop", { method: "POST" }).then((r) => json<unknown>(r)),
   btScanResults: () =>
-    fetch("/api/bluetooth/scan/results").then((r) =>
-      json<ScanResultsResponse>(r),
-    ),
+    fetch("/api/bluetooth/scan/results").then((r) => json<ScanResultsResponse>(r)),
   btPair: (address: string) =>
     fetch("/api/bluetooth/pair", {
       method: "POST",
@@ -453,15 +429,9 @@ export const api = {
       body: JSON.stringify({ address }),
     }).then((r) => json<{ success: boolean; message: string }>(r)),
   btInputEnable: () =>
-    fetch("/api/bluetooth/input/enable", { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
+    fetch("/api/bluetooth/input/enable", { method: "POST" }).then((r) => json<unknown>(r)),
   btInputDisable: () =>
-    fetch("/api/bluetooth/input/disable", { method: "POST" }).then((r) =>
-      json<unknown>(r),
-    ),
+    fetch("/api/bluetooth/input/disable", { method: "POST" }).then((r) => json<unknown>(r)),
   btInputStatus: () =>
-    fetch("/api/bluetooth/input/status").then((r) =>
-      json<InputStatusResponse>(r),
-    ),
+    fetch("/api/bluetooth/input/status").then((r) => json<InputStatusResponse>(r)),
 };
