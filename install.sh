@@ -1229,7 +1229,12 @@ EOF
 write_visualizer_fifo() {
   local fifo_conf="$DATA_DIR/mpd-outputs.d/visualizer-fifo.conf"
   log "Writing visualizer fifo output ($fifo_conf)"
+  # The backend runs as the service user and writes per-output fragments here
+  # (ConfigFragmentManager), so the directory itself must be service-user
+  # writable — chowning only fifo_conf leaves it root-owned on fresh installs
+  # where write_mpd_config's recursive chown ran earlier (do_install order).
   run mkdir -p "$DATA_DIR/mpd-outputs.d"
+  run chown "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR/mpd-outputs.d" 2>/dev/null || true
   cat > "$fifo_conf" <<EOF
 audio_output {
     type        "fifo"
