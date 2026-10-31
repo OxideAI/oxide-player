@@ -1,6 +1,6 @@
 [package]
 name = "oxide-player"
-version = "0.20.12"
+version = "0.21.0"
 edition = "2021"
 default-run = "oxide-player"
 
