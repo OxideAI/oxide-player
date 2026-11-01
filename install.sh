@@ -418,17 +418,19 @@ ensure_vfat_writable() {
     fstype="$(awk -v mp="$mp" '$2==mp {print $3}' /proc/mounts 2>/dev/null | head -n1)"
   fi
   case "$fstype" in
-    vfat|exfat|ntfs|ntfs3|fuseblk) ;;
+    vfat|exfat|ntfs|ntfs3|exfat-fuse|fuseblk) ;;
     *) return 0 ;;
   esac
   # fstab entry must exist — otherwise this is a transient/automounted volume
   if ! awk -v mp="$mp" '$2==mp {found=1; exit} END{exit !found}' /etc/fstab 2>/dev/null; then
     return 0
   fi
-  # already group-writable?
-  if awk -v mp="$mp" '$2==mp {print $4}' /etc/fstab 2>/dev/null | grep -qE '(^|,)(fmask=0113|dmask=0002|umask=002)(,|$)'; then
+  # already group-writable / world-writable? (umask=000 is what exfat-fuse
+  # needs when kernel exfat drops uid/gid handling; fuse.* prefixed variants
+  # come from the exfat-fuse fstab form.)
+  if awk -v mp="$mp" '$2==mp {print $4}' /etc/fstab 2>/dev/null | grep -qE '(^|,)(fmask=0113|dmask=0002|umask=002|umask=000|fmask=0000|fuse\.umask=000|fuse\.fmask=0000)(,|$)'; then
     # still ensure remount reflects fstab (systemd may be stale)
-    if ! grep -q 'fmask=0113' /proc/mounts 2>/dev/null || ! cat /proc/mounts 2>/dev/null | awk -v mp="$mp" '$2==mp {print $4}' | grep -q 'fmask=0113'; then
+    if ! grep -q 'fmask=0113' /proc/mounts 2>/dev/null && ! grep -qE '(umask=000|fmask=0000|fmask=0022,dmask=0022)' /proc/mounts 2>/dev/null; then
       :
     else
       return 0
@@ -450,6 +452,14 @@ ensure_vfat_writable() {
         new=new a[i]
       }
       if(new!="") new=new ","
+      # fuse-prefixed options must survive: they are the exfat-fuse
+      # helper spelling of the same knobs — kernel exfat ignores uid/gid.
+      for(i=1;i<=n;i++) {
+        if(a[i] ~ /^fuse\./) {
+          if(new!="") new=new ","
+          new=new a[i]
+        }
+      }
       new=new "uid="uid",gid="gid",fmask=0113,dmask=0002"
       $4=new
     }
@@ -1565,12 +1575,20 @@ install_units() {
   cat > /etc/systemd/system/camilladsp.service <<EOF
 [Unit]
 Description=CamillaDSP audio processor
-After=network.target sound.target
-Wants=sound.target
+# snd-aloop provides hw:Loopback via /etc/modules-load.d/oxide.conf, which
+# systemd-modules-load applies before basic.target. Ordering against it plus
+# a bounded retry loop in ExecStartPre prevents the "Cannot get card index
+# for Loopback" capture failure that immediately kills this service when it
+# races module load at boot.
+After=network.target sound.target systemd-modules-load.service
+Wants=sound.target systemd-modules-load.service
 
 [Service]
 Type=simple
 User=$SERVICE_USER
+# Some deb/rpi kernels finish module insertion after modules-load "finished"
+# reports; probe once and retry briefly instead of dying on the first open.
+ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do aplay -l 2>/dev/null | grep -q Loopback && exit 0; sleep 1; done; exit 0'
 ExecStart=$BIN_DIR/camilladsp $CAMILLADSP_CONFIG -a $_cam_host -p $_cam_port
 Restart=on-failure
 
@@ -1626,6 +1644,13 @@ EOF
 
   run mkdir -p /etc/modules-load.d
   echo "snd-aloop" > /etc/modules-load.d/oxide.conf
+  # Debian's packaged unit runs `mpd --systemd $MPDCONF` and sources
+  # /etc/default/mpd, which leaves MPDCONF commented out — systemd then
+  # warns "Referenced but unset environment variable evaluates to an empty
+  # string" on every MPD start (and an empty arg reaches the binary).
+  if [ -f /etc/default/mpd ] && ! grep -q '^MPDCONF=' /etc/default/mpd 2>/dev/null; then
+    echo 'MPDCONF=/etc/mpd.conf' >> /etc/default/mpd
+  fi
   run systemctl disable --now shairport-sync.service || true
   run systemctl daemon-reload
   run systemctl enable mpd camilladsp oxide-player oxide-airplay
