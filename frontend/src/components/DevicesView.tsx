@@ -217,7 +217,9 @@ export function DevicesView({
       device: device.alsa_device,
       // Larger buffers ride out USB transfer hiccups and slow decoders
       // (MPD: "Decoder is too slow; playing silence to avoid xrun").
-      buffer_time: "200000",
+      // 500ms covers a decode stall while the library scanner hammers the
+      // disk; period 50ms keeps wake-up latency low.
+      buffer_time: "500000",
       period_time: "50000",
     });
   };

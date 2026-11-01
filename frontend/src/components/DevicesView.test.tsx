@@ -190,7 +190,7 @@ describe("DevicesView output controls", () => {
     expect(getByDisplayValue("hw:2,0")).toBeTruthy();
     // USB outputs get stutter-proof ALSA buffer tuning prefilled ("Decoder
     // is too slow; playing silence to avoid xrun").
-    expect(getByDisplayValue("200000")).toBeTruthy();
+    expect(getByDisplayValue("500000")).toBeTruthy();
     expect(getByDisplayValue("50000")).toBeTruthy();
   });
 });

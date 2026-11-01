@@ -1101,6 +1101,8 @@ setup_asound() {
   cat > "$conf" <<'ASOUNDEOF'
 # oxide-player: shared input path for MPD, Bluetooth A2DP, and AirPlay
 # Producers write to oxide_loopback; CamillaDSP captures hw:Loopback,1.
+# Buffer holds ~250ms (period 1024 ≈ 21ms × 12): large enough that a decoder
+# stall (library scan on the same disk) never underflows before MPD refills.
 pcm.oxide_loopback {
     type plug
     slave.pcm {
@@ -1112,7 +1114,7 @@ pcm.oxide_loopback {
             rate 48000
             channels 2
             period_size 1024
-            buffer_size 4096
+            buffer_size 12288
         }
     }
 }
@@ -1150,6 +1152,19 @@ ASOUNDEOF
 ensure_asound_loopback() {
   local conf="$ASOUND_CONFIG"
   if [ -f "$conf" ] && grep -Fq 'pcm.oxide_loopback' "$conf"; then
+    # Older installs wrote buffer_size 4096 (~85ms), which underflows as soon
+    # as the decoder stalls for a moment (library scan hits the same disk) and
+    # MPD logs "Decoder is too slow; playing silence to avoid xrun". Refresh
+    # the slave block in place; a newer buffer size is left untouched.
+    if grep -Fq 'buffer_size 4096' "$conf"; then
+      local tmp="$conf.oxide.tmp"
+      awk '
+        /^            buffer_size 4096$/ { print "            buffer_size 12288"; next }
+        { print }
+      ' "$conf" > "$tmp" && cat "$tmp" > "$conf" && rm -f "$tmp"
+      log "Enlarged oxide_loopback dmix buffer in $conf (4096 → 12288)"
+      return 0
+    fi
     log "ALSA shared loopback already configured: $conf"
     return 1
   fi
@@ -1168,7 +1183,7 @@ pcm.oxide_loopback {
             rate 48000
             channels 2
             period_size 1024
-            buffer_size 4096
+            buffer_size 12288
         }
     }
 }

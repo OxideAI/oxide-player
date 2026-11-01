@@ -572,9 +572,12 @@ async fn folder_cover(
 }
 
 /// Scan the configured library directories into the DB. `incremental` chooses
-/// whether MPD's index is refreshed (`rescan`, keeps existing data) or fully
-/// rebuilt (`update`). Shared by the scan/refresh endpoints and library-dir
-/// edits so all three paths use the same pipeline.
+/// whether MPD's index is refreshed cheaply (`update`, keeps existing entries
+/// and only reads mtime-changed files) or fully rebuilt (`rescan`, re-reads
+/// every file — needed after a wholesale change but far more expensive, and
+/// done in-process by MPD so it must not run during playback on slow disks).
+/// Shared by the scan/refresh endpoints and library-dir edits so all three
+/// paths use the same pipeline.
 async fn run_scan(s: &AppState, incremental: bool) -> AppResult<u64> {
     let _guard = s.scan_guard().await;
     let cfg = s.config().await;
@@ -596,10 +599,15 @@ async fn run_scan(s: &AppState, incremental: bool) -> AppResult<u64> {
         // Keep MPD's index in sync with the filesystem so every scanned track
         // is playable (a stale MPD db is the usual cause of "No such song" on
         // add). `scan` re-reads only files whose mtime changed and lets
-        // `prune_missing` drop entries whose files are gone.
-        let _ = s.mpd().rescan().await;
-    } else {
+        // `prune_missing` drop entries whose files are gone. MPD's `update`
+        // only reads mtime-changed files, so it is cheap even during
+        // playback; `rescan` re-reads every file and stalls playback for
+        // minutes on a big library.
         let _ = s.mpd().update().await;
+    } else {
+        // Full scan: rebuild the index so stale/incorrect entries that would
+        // make `add` fail or point at missing paths are re-read.
+        let _ = s.mpd().rescan().await;
     }
     Ok(count)
 }
@@ -2980,5 +2988,108 @@ mod tests {
     fn album_tags_put_is_reachable() {
         // compile-time: keep the handler referenced even if routes change.
         let _ = super::album_tags_put;
+    }
+
+    /// Regression for the "Decoder is too slow; playing silence to avoid
+    /// xrun" bursts during library refresh: the refresh endpoint must ask MPD
+    /// for the cheap incremental `update` (mtime-only) and not a full `rescan`
+    /// (re-reads every file in-process and starves the decoder while MPD
+    /// rebuilds its whole DB on slow disks). A minimal fake MPD server records
+    /// the first command word of every client line, so the assertion observes
+    /// what MPD was actually asked to do. Bug shape: `run_scan` had the two
+    /// branches swapped, so every "Refresh" forced a `rescan` storm.
+    async fn assert_scan_endpoint_issues_mpd_command(uri: &str, expected_command: &'static str) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (command_tx, command_rx) = tokio::sync::oneshot::channel::<String>();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            // Greeting: the client waits for this before anything else.
+            stream.write_all(b"OK MPD 0.24.0\n").await.unwrap();
+            let mut first_command_word = None;
+            let mut buf = [0u8; 8192];
+            loop {
+                let read = match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    stream.read(&mut buf),
+                )
+                .await
+                {
+                    Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                    Ok(Ok(n)) => n,
+                };
+                let text = String::from_utf8_lossy(&buf[..read]);
+                for line in text.lines() {
+                    let Some(word) = line.split_whitespace().next() else {
+                        continue;
+                    };
+                    // Ignore housekeeping + teardown commands: the test only
+                    // cares about the first scan command after the POST.
+                    if !matches!(
+                        word,
+                        "idle" | "noidle" | "close" | "status" | "currentsong" | "outputs"
+                    ) {
+                        first_command_word.get_or_insert_with(|| word.to_string());
+                    }
+                }
+                stream.write_all(b"OK\n").await.unwrap();
+            }
+            let _ = command_tx.send(first_command_word.unwrap_or_default());
+        });
+
+        let config = Config::default_config();
+        let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let dsp = DspManager::new(
+            std::env::temp_dir().join("oxide_test_scan_cmds_dsp.yaml"),
+            None,
+            String::new(),
+            44100,
+            false,
+            None,
+        );
+        let mpd = Mpd::with_connection("127.0.0.1", address.port(), false, None, None);
+        let visualizer = crate::visualizer::VisualizerAnalyzer::new(&config);
+        let bt = crate::bluetooth::BluetoothManager::new().await;
+        let state = AppState::new(config, db, dsp, mpd, visualizer, bt, None);
+        let app = super::router(state).await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let expected_status = response.status();
+        let word = command_rx.await.unwrap();
+
+        assert_eq!(
+            expected_status,
+            StatusCode::OK,
+            "endpoint {uri} should succeed against the fake MPD"
+        );
+        assert_eq!(
+            word, expected_command,
+            "endpoint {uri} must issue MPD '{expected_command}', got '{word}'"
+        );
+        server.await.ok();
+    }
+
+    #[tokio::test]
+    async fn library_refresh_issues_mpd_update_not_rescan() {
+        assert_scan_endpoint_issues_mpd_command("/api/library/refresh", "update").await;
+    }
+
+    #[tokio::test]
+    async fn library_scan_issues_mpd_rescan() {
+        assert_scan_endpoint_issues_mpd_command("/api/library/scan", "rescan").await;
     }
 }
