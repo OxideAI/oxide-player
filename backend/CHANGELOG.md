@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.21.2...oxide-player-v0.22.0) (2026-11-01)
+
+
+### Features
+
+* add mixer type, buffer options to config ([7f6f554](https://github.com/OxideAI/oxide-player/commit/7f6f5548d10db937b60d85f53cf0b43a45fd81a2))
+
 ## [0.21.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.21.1...oxide-player-v0.21.2) (2026-10-31)
 
 
