@@ -1,9 +1,12 @@
 name: Release (build & package)
 
 on:
-  push:
-    tags:
-      - "oxide-player-v*"
+  # Do NOT also trigger on tag pushes: release-please already invokes this
+  # workflow (workflow_call) when it pushes the tag with the release-merge,
+  # and a second concurrent run of the same matrix races the asset uploads
+  # (two runs deleted/re-uploaded the same assets with overwrite_files,
+  # losing oxide-player-arm64.tar.gz on oxide-player-v0.23.0). Manual builds
+  # of arbitrary tags remain available via workflow_dispatch with tag_name.
   workflow_dispatch:
     inputs:
       tag_name:
