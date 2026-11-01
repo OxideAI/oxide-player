@@ -1228,6 +1228,10 @@ audio_output {
     format        "48000:16:2"
     mixer_type    "software"
     dop           "no"
+    # Ride out decode/network stalls (mpc1 stream dropouts, "Decoder is too
+    # slow; playing silence to avoid xrun"): 200 ms ALSA buffer, 50 ms period.
+    buffer_time   "200000"
+    period_time   "50000"
 }
 EOF
   run mkdir -p "$DATA_DIR/playlists"
@@ -1377,9 +1381,12 @@ setup_mpd_systemd() {
 
 # Older installs have a managed CamillaDSP loopback output without an
 # explicit mixer. MPD then probes the ALSA PCM mixer ("PCM"), which snd-aloop
-# does not provide, so setvol fails while DSP is active. Repair only Oxide's
-# loopback block and leave user-managed outputs untouched.
-ensure_mpd_loopback_mixer() {
+# does not provide, so setvol fails while DSP is active. Older installs also
+# lack the ALSA buffer tuning that keeps playback from stalling when the
+# decoder falls behind ("Decoder is too slow; playing silence to avoid
+# xrun"). Repair only Oxide's loopback block and leave user-managed outputs
+# untouched.
+ensure_mpd_loopback_output() {
   local conf="$MPD_CONFIG"
   if [ ! -f "$conf" ] || [ ! -s "$conf" ]; then
     return 1
@@ -1395,17 +1402,25 @@ ensure_mpd_loopback_mixer() {
       for (i = 1; i <= block_len; i++) delete block[i]
       block_len = 0
     }
-    function flush_block( i, line, loopback, mixer_seen, has_name, has_device) {
+    function flush_block( i, line, loopback, mixer_seen, has_name, has_device, has_buffer, has_period) {
       if (!in_output) return
 
       has_name = 0
       has_device = 0
+      has_buffer = 0
+      has_period = 0
       for (i = 1; i <= block_len; i++) {
         if (block[i] ~ /^[[:space:]]*name[[:space:]]+"camilladsp-loopback"[[:space:]]*$/) {
           has_name = 1
         }
         if (block[i] ~ /^[[:space:]]*device[[:space:]]+"(oxide_loopback|hw:Loopback,0)"[[:space:]]*$/) {
           has_device = 1
+        }
+        if (block[i] ~ /^[[:space:]]*buffer_time[[:space:]]+"/) {
+          has_buffer = 1
+        }
+        if (block[i] ~ /^[[:space:]]*period_time[[:space:]]+"/) {
+          has_period = 1
         }
       }
       loopback = has_name && has_device
@@ -1419,7 +1434,7 @@ ensure_mpd_loopback_mixer() {
       mixer_seen = 0
       for (i = 1; i <= block_len; i++) {
         line = block[i]
-        if (line ~ /^[[:space:]]*mixer_type[[:space:]]+"/) {
+        if (loopback && line ~ /^[[:space:]]*mixer_type[[:space:]]+"/) {
           mixer_seen = 1
           if (line ~ /^[[:space:]]*mixer_type[[:space:]]+"software"[[:space:]]*$/) {
             print line
@@ -1427,8 +1442,10 @@ ensure_mpd_loopback_mixer() {
             print "    mixer_type    \"software\""
           }
         } else {
-          if (line ~ /^[[:space:]]*}[[:space:]]*$/ && !mixer_seen) {
-            print "    mixer_type    \"software\""
+          if (line ~ /^[[:space:]]*}[[:space:]]*$/) {
+            if (!mixer_seen) print "    mixer_type    \"software\""
+            if (!has_buffer) print "    buffer_time   \"200000\""
+            if (!has_period) print "    period_time   \"50000\""
           }
           print line
         }
@@ -2134,7 +2151,7 @@ do_update() {
   fix_vfat_music_mounts || true
   ensure_mpd_include || true
   setup_mpd_systemd
-  ensure_mpd_loopback_mixer || true
+  ensure_mpd_loopback_output || true
   write_camilladsp_config
   ensure_samba_shares || true
   ensure_samba_deadtime || true

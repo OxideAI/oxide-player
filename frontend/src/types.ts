@@ -237,6 +237,10 @@ export interface DeviceConfig {
   mixer_type: string | null;
   mixer_device: string | null;
   dop: boolean;
+  /** MPD `buffer_time` in microseconds (ALSA output tuning). */
+  buffer_time?: number | null;
+  /** MPD `period_time` in microseconds (ALSA output tuning). */
+  period_time?: number | null;
   restart_pending: boolean;
   include_warning?: boolean;
 }

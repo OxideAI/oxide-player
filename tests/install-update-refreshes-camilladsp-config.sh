@@ -18,7 +18,7 @@ fetch_source() { :; }
 build_backend() { :; }
 build_frontend() { :; }
 ensure_mpd_include() { :; }
-ensure_mpd_loopback_mixer() { :; }
+ensure_mpd_loopback_output() { :; }
 ensure_asound_loopback() { :; }
 ensure_samba_shares() { :; }
 write_visualizer_fifo() { :; }

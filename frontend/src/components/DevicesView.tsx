@@ -18,6 +18,10 @@ interface FormData {
   mixer_type: string;
   mixer_device: string;
   dop: boolean;
+  /** MPD `buffer_time` in microseconds; empty string leaves MPD's default. */
+  buffer_time: string;
+  /** MPD `period_time` in microseconds; empty string leaves MPD's default. */
+  period_time: string;
 }
 
 const emptyForm: FormData = {
@@ -25,9 +29,11 @@ const emptyForm: FormData = {
   output_type: "alsa",
   device: "",
   format: "",
-  mixer_type: "",
+  mixer_type: "hardware",
   mixer_device: "",
   dop: false,
+  buffer_time: "",
+  period_time: "",
 };
 
 export interface DevicesViewProps {
@@ -44,21 +50,15 @@ function errorMessage(error: unknown): string {
 }
 
 function outputStatus(output: DeviceOutput): string {
-  if (output.diagnostic_code === "reload_error")
-    return "Provisioning failed — retry MPD reload";
-  if (output.diagnostic_code === "disconnected")
-    return "Bluetooth disconnected";
+  if (output.diagnostic_code === "reload_error") return "Provisioning failed — retry MPD reload";
+  if (output.diagnostic_code === "disconnected") return "Bluetooth disconnected";
   if (output.diagnostic_code === "inactive")
     return output.dsp_enabled ? "DSP active · direct output off" : "Disabled";
-  if (output.diagnostic_code === "missing_profile")
-    return "DSP profile missing";
+  if (output.diagnostic_code === "missing_profile") return "DSP profile missing";
   if (output.diagnostic_code === "unsupported_output_type")
     return "Playback output · DSP unavailable";
   if (output.connected === false) return "Bluetooth disconnected";
-  if (output.enabled)
-    return output.active
-      ? "Ready for playback"
-      : "Configured · waiting for MPD";
+  if (output.enabled) return output.active ? "Ready for playback" : "Configured · waiting for MPD";
   return "Disabled";
 }
 
@@ -83,10 +83,7 @@ function outputTypeLabel(type: string): string {
 
 function isBluetoothConfig(config: DeviceConfig, address: string): boolean {
   const device = config.device?.toUpperCase() ?? "";
-  return (
-    device.includes(`DEV=${address.toUpperCase()}`) ||
-    device.includes(address.toUpperCase())
-  );
+  return device.includes(`DEV=${address.toUpperCase()}`) || device.includes(address.toUpperCase());
 }
 
 export function DevicesView({
@@ -97,16 +94,12 @@ export function DevicesView({
   onRefresh,
 }: DevicesViewProps = {}) {
   const [devices, setDevices] = useState<DeviceOutput[]>(providedOutputs ?? []);
-  const [deviceLoading, setDeviceLoading] = useState(
-    providedOutputs === undefined,
-  );
+  const [deviceLoading, setDeviceLoading] = useState(providedOutputs === undefined);
   const [deviceError, setDeviceError] = useState<string | null>(null);
   const [deviceStale, setDeviceStale] = useState(false);
 
   const [configs, setConfigs] = useState<DeviceConfig[]>(providedConfigs ?? []);
-  const [configLoading, setConfigLoading] = useState(
-    providedConfigs === undefined,
-  );
+  const [configLoading, setConfigLoading] = useState(providedConfigs === undefined);
   const [configError, setConfigError] = useState<string | null>(null);
   const [configStale, setConfigStale] = useState(false);
   const [busy, setBusy] = useState<number | null>(null);
@@ -204,9 +197,7 @@ export function DevicesView({
       else await api.enableDeviceDsp(device.id);
       await refreshSnapshots();
     } catch (error) {
-      setActionError(
-        `Could not update DSP for ${device.name}: ${errorMessage(error)}`,
-      );
+      setActionError(`Could not update DSP for ${device.name}: ${errorMessage(error)}`);
     } finally {
       setBusy(null);
     }
@@ -224,6 +215,10 @@ export function DevicesView({
       name: device.name,
       output_type: "alsa",
       device: device.alsa_device,
+      // Larger buffers ride out USB transfer hiccups and slow decoders
+      // (MPD: "Decoder is too slow; playing silence to avoid xrun").
+      buffer_time: "200000",
+      period_time: "50000",
     });
   };
 
@@ -234,9 +229,17 @@ export function DevicesView({
       output_type: config.output_type,
       device: config.device ?? "",
       format: config.format ?? "",
-      mixer_type: config.mixer_type ?? "",
+      mixer_type: config.mixer_type ?? "hardware",
       mixer_device: config.mixer_device ?? "",
       dop: config.dop,
+      buffer_time:
+        config.buffer_time === null || config.buffer_time === undefined
+          ? ""
+          : String(config.buffer_time),
+      period_time:
+        config.period_time === null || config.period_time === undefined
+          ? ""
+          : String(config.period_time),
     });
     setFormError(null);
     setShowForm(true);
@@ -266,8 +269,31 @@ export function DevicesView({
     setFormError(null);
     setSaving(true);
     try {
-      if (editing) await api.updateDeviceConfig(editing, form);
-      else await api.createDeviceConfig(form);
+      const numeric = (value: string): number | null => {
+        const trimmed = value.trim();
+        if (trimmed === "") return null;
+        const parsed = Number(trimmed);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          throw new Error(`${trimmed}: buffer values must be non-negative microseconds`);
+        }
+        return Math.round(parsed);
+      };
+      const bufferTime = numeric(form.buffer_time);
+      const periodTime = numeric(form.period_time);
+      if (editing) {
+        // Explicit nulls clear the stored setting; absent keeps it.
+        await api.updateDeviceConfig(editing, {
+          ...form,
+          buffer_time: bufferTime,
+          period_time: periodTime,
+        });
+      } else {
+        await api.createDeviceConfig({
+          ...form,
+          buffer_time: bufferTime,
+          period_time: periodTime,
+        });
+      }
       closeForm();
       await refreshSnapshots();
     } catch (error) {
@@ -305,15 +331,13 @@ export function DevicesView({
   const playbackOutputs = useMemo(
     () =>
       devices.filter(
-        (device) =>
-          (device.role ?? "playback") === "playback" &&
-          device.selectable !== false,
+        (device) => (device.role ?? "playback") === "playback" && device.selectable !== false
       ),
-    [devices],
+    [devices]
   );
   const advancedOutputs = useMemo(
     () => devices.filter((device) => !playbackOutputs.includes(device)),
-    [devices, playbackOutputs],
+    [devices, playbackOutputs]
   );
 
   return (
@@ -322,9 +346,8 @@ export function DevicesView({
         <span className={styles.eyebrow}>Playback destinations</span>
         <h2 className={styles.h}>Output devices</h2>
         <p className={styles.dim}>
-          Choose a DAC or configured Bluetooth speaker. Output changes restart
-          MPD automatically; system and visualizer outputs stay out of this
-          list.
+          Choose a DAC or configured Bluetooth speaker. Output changes restart MPD automatically;
+          system and visualizer outputs stay out of this list.
         </p>
       </div>
 
@@ -345,8 +368,7 @@ export function DevicesView({
       )}
       {(deviceStale || configStale) && (
         <p className={styles.stale} role="status">
-          Showing the last known output snapshot. Retry to reconcile current
-          state.
+          Showing the last known output snapshot. Retry to reconcile current state.
         </p>
       )}
 
@@ -367,15 +389,12 @@ export function DevicesView({
       )}
       {configs.some((config) => config.include_warning) && (
         <div className={styles.error} role="alert">
-          MPD is not loading managed output fragments. Add the configured{" "}
-          <code>include</code> directive before retrying.
+          MPD is not loading managed output fragments. Add the configured <code>include</code>{" "}
+          directive before retrying.
         </div>
       )}
 
-      <section
-        className={styles.primarySection}
-        aria-labelledby="playback-outputs-heading"
-      >
+      <section className={styles.primarySection} aria-labelledby="playback-outputs-heading">
         <div className={styles.sectionHead}>
           <div>
             <span className={styles.eyebrow}>Playback</span>
@@ -393,17 +412,13 @@ export function DevicesView({
         </div>
         {deviceLoading && <p className={styles.dim}>Loading output status…</p>}
         {!deviceLoading && playbackOutputs.length === 0 && (
-          <p className={styles.dim}>
-            No configured playback outputs are visible in MPD yet.
-          </p>
+          <p className={styles.dim}>No configured playback outputs are visible in MPD yet.</p>
         )}
         <ul className={styles.list}>
           {playbackOutputs.map((device) => {
             const key = device.selection_key || `managed:${device.name}`;
             const selected = selectedOutputKey === key;
-            const config = configs.find(
-              (candidate) => candidate.name === device.name,
-            );
+            const config = configs.find((candidate) => candidate.name === device.name);
             const kind =
               device.configured === false
                 ? "Runtime output"
@@ -429,12 +444,8 @@ export function DevicesView({
                 </button>
                 <div className={styles.outputActions}>
                   <button
-                    className={
-                      device.dsp_enabled ? styles.dspOn : styles.dspOff
-                    }
-                    disabled={
-                      busy === device.id || device.dsp_supported !== true
-                    }
+                    className={device.dsp_enabled ? styles.dspOn : styles.dspOff}
+                    disabled={busy === device.id || device.dsp_supported !== true}
                     title={
                       device.dsp_supported === true
                         ? "Route this output through CamillaDSP"
@@ -465,12 +476,9 @@ export function DevicesView({
 
       {advancedOutputs.length > 0 && (
         <details className={styles.advancedBlock}>
-          <summary className={styles.advancedSummary}>
-            Technical and system outputs
-          </summary>
+          <summary className={styles.advancedSummary}>Technical and system outputs</summary>
           <p className={styles.dim}>
-            These outputs are inspectable but cannot be selected as listening
-            destinations.
+            These outputs are inspectable but cannot be selected as listening destinations.
           </p>
           <ul className={styles.list}>
             {advancedOutputs.map((device) => (
@@ -478,8 +486,7 @@ export function DevicesView({
                 <div>
                   <div className={styles.name}>{device.name}</div>
                   <div className={styles.id}>
-                    {device.role ?? "unknown"} ·{" "}
-                    {device.technical_detail ?? "not selectable"}
+                    {device.role ?? "unknown"} · {device.technical_detail ?? "not selectable"}
                   </div>
                 </div>
               </li>
@@ -527,13 +534,7 @@ interface UsbSectionProps {
   onSelect: (device: UsbAudioDevice) => void;
 }
 
-function UsbSection({
-  devices,
-  scanning,
-  error,
-  onScan,
-  onSelect,
-}: UsbSectionProps) {
+function UsbSection({ devices, scanning, error, onScan, onSelect }: UsbSectionProps) {
   return (
     <section className={styles.advancedBlock} aria-labelledby="usb-dac-heading">
       <div className={styles.sectionHead}>
@@ -548,8 +549,7 @@ function UsbSection({
         </button>
       </div>
       <p className={styles.dim}>
-        Scan ALSA playback hardware, then open the device details to configure
-        the MPD output.
+        Scan ALSA playback hardware, then open the device details to configure the MPD output.
       </p>
       {error && (
         <div className={styles.error} role="alert">
@@ -557,9 +557,7 @@ function UsbSection({
         </div>
       )}
       {!error && devices.length === 0 && (
-        <p className={styles.dim}>
-          No USB DACs found yet. Connect the DAC and scan again.
-        </p>
+        <p className={styles.dim}>No USB DACs found yet. Connect the DAC and scan again.</p>
       )}
       <ul className={styles.list}>
         {devices.map((device) => (
@@ -567,14 +565,10 @@ function UsbSection({
             <div>
               <div className={styles.name}>{device.name}</div>
               <div className={styles.id}>
-                Card {device.card}, device {device.device} ·{" "}
-                {device.alsa_device}
+                Card {device.card}, device {device.device} · {device.alsa_device}
               </div>
             </div>
-            <button
-              className={styles.btnPrimary}
-              onClick={() => onSelect(device)}
-            >
+            <button className={styles.btnPrimary} onClick={() => onSelect(device)}>
               Configure device
             </button>
           </li>
@@ -625,25 +619,18 @@ function AdvancedConfig(props: AdvancedConfigProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   return (
     <details className={styles.advancedBlock} open={showForm || undefined}>
-      <summary className={styles.advancedSummary}>
-        Advanced output configuration
-      </summary>
+      <summary className={styles.advancedSummary}>Advanced output configuration</summary>
       <p className={styles.dim}>
-        Raw MPD type, device, format, mixer, and DoP fields are the DAC or
-        output details used to build its managed MPD configuration. Changes
-        restart MPD automatically.
+        Raw MPD type, device, format, mixer, and DoP fields are the DAC or output details used to
+        build its managed MPD configuration. Changes restart MPD automatically.
       </p>
       {!showForm && (
         <button className={styles.addBtn} onClick={openAddForm}>
           + Add output configuration
         </button>
       )}
-      {configLoading && (
-        <p className={styles.dim}>Loading saved configurations…</p>
-      )}
-      {configStale && (
-        <p className={styles.stale}>Saved configuration is stale.</p>
-      )}
+      {configLoading && <p className={styles.dim}>Loading saved configurations…</p>}
+      {configStale && <p className={styles.stale}>Saved configuration is stale.</p>}
       {showForm && (
         <div className={styles.form}>
           {formError && (
@@ -657,13 +644,20 @@ function AdvancedConfig(props: AdvancedConfigProps) {
               "output_type",
               "device",
               "format",
-              "mixer_type",
               "mixer_device",
+              "buffer_time",
+              "period_time",
             ] as const
           ).map((field) => (
             <label key={field} className={styles.formRow}>
               <span className={styles.formLabel}>
-                {field === "output_type" ? "Type" : field.replace("_", " ")}
+                {field === "output_type"
+                  ? "Type"
+                  : field === "buffer_time"
+                    ? "Buffer time (µs)"
+                    : field === "period_time"
+                      ? "Period time (µs)"
+                      : field.replace("_", " ")}
               </span>
               <input
                 className={styles.formInput}
@@ -677,6 +671,23 @@ function AdvancedConfig(props: AdvancedConfigProps) {
               />
             </label>
           ))}
+          <label className={styles.formRow}>
+            <span className={styles.formLabel}>Mixer type</span>
+            <select
+              className={styles.formInput}
+              value={form.mixer_type}
+              onChange={(event) =>
+                setForm((previous) => ({
+                  ...previous,
+                  mixer_type: event.target.value,
+                }))
+              }
+            >
+              <option value="hardware">Hardware</option>
+              <option value="software">Software</option>
+              <option value="none">None</option>
+            </select>
+          </label>
           <label className={styles.formCheck}>
             <input
               type="checkbox"
@@ -718,25 +729,16 @@ function AdvancedConfig(props: AdvancedConfigProps) {
               </div>
             </div>
             <div className={styles.btActions}>
-              <span
-                className={
-                  config.restart_pending ? styles.pending : styles.ready
-                }
-              >
+              <span className={config.restart_pending ? styles.pending : styles.ready}>
                 {config.restart_pending ? "reload pending" : "saved"}
               </span>
-              <button
-                className={styles.btnGhost}
-                onClick={() => openEditForm(config)}
-              >
+              <button className={styles.btnGhost} onClick={() => openEditForm(config)}>
                 Edit
               </button>
               <details
                 className={styles.rowMenu}
                 open={openMenu === config.name}
-                onToggle={(event) =>
-                  setOpenMenu(event.currentTarget.open ? config.name : null)
-                }
+                onToggle={(event) => setOpenMenu(event.currentTarget.open ? config.name : null)}
               >
                 <summary className={styles.btnGhost}>More</summary>
                 <div aria-hidden={openMenu !== config.name}>
@@ -765,20 +767,14 @@ function AdvancedConfig(props: AdvancedConfigProps) {
             onClick={(event) => event.stopPropagation()}
           >
             <p className={styles.confirmText}>
-              Remove <strong>{confirmDelete}</strong> from managed playback
-              outputs? MPD restarts automatically after removal.
+              Remove <strong>{confirmDelete}</strong> from managed playback outputs? MPD restarts
+              automatically after removal.
             </p>
             <div className={styles.confirmActions}>
-              <button
-                className={styles.btnGhost}
-                onClick={() => setConfirmDelete(null)}
-              >
+              <button className={styles.btnGhost} onClick={() => setConfirmDelete(null)}>
                 Cancel
               </button>
-              <button
-                className={styles.btnDanger}
-                onClick={() => void deleteConfig(confirmDelete)}
-              >
+              <button className={styles.btnDanger} onClick={() => void deleteConfig(confirmDelete)}>
                 Remove output
               </button>
             </div>
@@ -805,9 +801,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
   const [scanning, setScanning] = useState(false);
   const [scanResults, setScanResults] = useState<BtDevice[]>([]);
   const [busyAddr, setBusyAddr] = useState<string | null>(null);
-  const [inputStatus, setInputStatus] = useState<InputStatusResponse | null>(
-    null,
-  );
+  const [inputStatus, setInputStatus] = useState<InputStatusResponse | null>(null);
   const [inputBusy, setInputBusy] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{
@@ -900,7 +894,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
         setBusyAddr(null);
       }
     },
-    [loadDevices, onRefresh],
+    [loadDevices, onRefresh]
   );
 
   const handleInputToggle = async () => {
@@ -923,10 +917,10 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
         configs.flatMap((config) =>
           btDevices
             .filter((device) => isBluetoothConfig(config, device.address))
-            .map((device) => device.address),
-        ),
+            .map((device) => device.address)
+        )
       ),
-    [btDevices, configs],
+    [btDevices, configs]
   );
   const knownAddresses = new Set(btDevices.map((device) => device.address));
   const candidates = [
@@ -935,10 +929,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
   ];
 
   return (
-    <section
-      className={styles.btSection}
-      aria-labelledby="bluetooth-outputs-heading"
-    >
+    <section className={styles.btSection} aria-labelledby="bluetooth-outputs-heading">
       <div className={styles.sectionHead}>
         <div>
           <span className={styles.eyebrow}>Bluetooth playback</span>
@@ -957,16 +948,11 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
             </button>
           ))}
       </div>
-      {btLoading && (
-        <p className={styles.dim}>Loading Bluetooth availability…</p>
-      )}
+      {btLoading && <p className={styles.dim}>Loading Bluetooth availability…</p>}
       {btError?.unavailable && (
         <div className={styles.error} role="alert">
           Bluetooth is unavailable ({btError.message}).{" "}
-          <button
-            className={styles.btnGhost}
-            onClick={() => void loadDevices()}
-          >
+          <button className={styles.btnGhost} onClick={() => void loadDevices()}>
             Retry Bluetooth
           </button>
         </div>
@@ -1001,22 +987,15 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
           const busyNow = busyAddr === device.address;
           const isConfigured = configuredAddresses.has(device.address);
           return (
-            <li
-              key={device.address}
-              className={device.connected ? styles.rowOn : styles.rowOff}
-            >
+            <li key={device.address} className={device.connected ? styles.rowOn : styles.rowOff}>
               <div>
                 <div className={styles.name}>
                   {btDisplayName(device)}
-                  {device.connected && (
-                    <span className={styles.btBadge}>connected</span>
-                  )}
+                  {device.connected && <span className={styles.btBadge}>connected</span>}
                   {!device.connected && device.paired && (
                     <span className={styles.btBadge}>paired</span>
                   )}
-                  {isConfigured && (
-                    <span className={styles.btBadge}>configured</span>
-                  )}
+                  {isConfigured && <span className={styles.btBadge}>configured</span>}
                 </div>
                 <div className={styles.id}>
                   {device.address}
@@ -1024,8 +1003,8 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
                 </div>
                 {device.connected && !isConfigured && (
                   <div className={styles.provisioning}>
-                    Connected, but no managed playback output is visible yet.
-                    Connect again after MPD reload if needed.
+                    Connected, but no managed playback output is visible yet. Connect again after
+                    MPD reload if needed.
                   </div>
                 )}
               </div>
@@ -1040,7 +1019,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
                           void runBluetoothAction(
                             device.address,
                             () => api.btWakeConnect(device.address),
-                            "Provisioning failed",
+                            "Provisioning failed"
                           )
                         }
                       >
@@ -1054,7 +1033,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
                         void runBluetoothAction(
                           device.address,
                           () => api.btDisconnect(device.address),
-                          "Disconnect failed",
+                          "Disconnect failed"
                         )
                       }
                     >
@@ -1069,7 +1048,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
                       void runBluetoothAction(
                         device.address,
                         () => api.btWakeConnect(device.address),
-                        "Connect failed",
+                        "Connect failed"
                       )
                     }
                   >
@@ -1083,7 +1062,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
                       void runBluetoothAction(
                         device.address,
                         () => api.btPair(device.address),
-                        "Pair failed",
+                        "Pair failed"
                       )
                     }
                   >
@@ -1094,9 +1073,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
                   className={styles.rowMenu}
                   open={advancedAddress === device.address}
                   onToggle={(event) =>
-                    setAdvancedAddress(
-                      event.currentTarget.open ? device.address : null,
-                    )
+                    setAdvancedAddress(event.currentTarget.open ? device.address : null)
                   }
                 >
                   <summary className={styles.btnGhost}>More</summary>
@@ -1122,11 +1099,7 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
       </ul>
 
       {confirm && (
-        <div
-          className={styles.confirmOverlay}
-          role="presentation"
-          onClick={() => setConfirm(null)}
-        >
+        <div className={styles.confirmOverlay} role="presentation" onClick={() => setConfirm(null)}>
           <div
             className={styles.confirmBox}
             role="dialog"
@@ -1136,22 +1109,19 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
             <p className={styles.confirmText}>
               {confirm.action === "forget" ? (
                 <>
-                  Forget <strong>{btDisplayName(confirm.device)}</strong>?
-                  Pairing and its saved device state will be removed.
+                  Forget <strong>{btDisplayName(confirm.device)}</strong>? Pairing and its saved
+                  device state will be removed.
                 </>
               ) : (
                 <>
                   Remove the managed playback output for{" "}
-                  <strong>{btDisplayName(confirm.device)}</strong>? The
-                  Bluetooth pairing remains available.
+                  <strong>{btDisplayName(confirm.device)}</strong>? The Bluetooth pairing remains
+                  available.
                 </>
               )}
             </p>
             <div className={styles.confirmActions}>
-              <button
-                className={styles.btnGhost}
-                onClick={() => setConfirm(null)}
-              >
+              <button className={styles.btnGhost} onClick={() => setConfirm(null)}>
                 Cancel
               </button>
               <button
@@ -1164,15 +1134,11 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
                     next.action === "forget"
                       ? () => api.btForget(next.device.address)
                       : () => api.btRemoveOutput(next.device.address),
-                    next.action === "forget"
-                      ? "Forget failed"
-                      : "Remove output failed",
+                    next.action === "forget" ? "Forget failed" : "Remove output failed"
                   );
                 }}
               >
-                {confirm.action === "forget"
-                  ? "Forget device"
-                  : "Remove output"}
+                {confirm.action === "forget" ? "Forget device" : "Remove output"}
               </button>
             </div>
           </div>
@@ -1180,16 +1146,12 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
       )}
 
       <details className={styles.advancedBlock}>
-        <summary className={styles.advancedSummary}>
-          Bluetooth input and AirPlay
-        </summary>
+        <summary className={styles.advancedSummary}>Bluetooth input and AirPlay</summary>
         <div className={styles.btInputRow}>
           <div>
             <span className={styles.eyebrow}>Input</span>
             <h4 className={styles.h}>A2DP Sink</h4>
-            <p className={styles.dim}>
-              Allow phones and tablets to stream audio to this system.
-            </p>
+            <p className={styles.dim}>Allow phones and tablets to stream audio to this system.</p>
           </div>
           <button
             className={inputStatus?.enabled ? styles.on : styles.off}
@@ -1205,20 +1167,16 @@ function BluetoothSection({ configs, onRefresh }: BluetoothSectionProps) {
                   : "Disabled"}
           </button>
         </div>
-        {inputError && (
-          <p className={styles.error}>Bluetooth input: {inputError}</p>
-        )}
+        {inputError && <p className={styles.error}>Bluetooth input: {inputError}</p>}
         {inputStatus?.streaming && (
-          <div className={styles.btNote}>
-            Audio is being streamed from a phone or tablet.
-          </div>
+          <div className={styles.btNote}>Audio is being streamed from a phone or tablet.</div>
         )}
         <div className={styles.airplay}>
           <span className={styles.eyebrow}>AirPlay</span>
           <h4 className={styles.h}>iPhone and iPad input</h4>
           <p className={styles.dim}>
-            Select <strong>Oxide Player</strong> in the AirPlay output picker
-            while both devices are on the same network.
+            Select <strong>Oxide Player</strong> in the AirPlay output picker while both devices are
+            on the same network.
           </p>
           <span className={styles.btBadge}>LAN receiver</span>
         </div>

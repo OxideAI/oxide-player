@@ -62,7 +62,7 @@ audio_output {
     device "oxide_loopback"
 }
 EOF
-ensure_mpd_loopback_mixer
+ensure_mpd_loopback_output
 grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
 
 cat > "$MPD_CONFIG" <<'EOF'
@@ -74,7 +74,7 @@ audio_output {
     mixer_type "hardware"
 }
 EOF
-ensure_mpd_loopback_mixer
+ensure_mpd_loopback_output
 grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
 cat > "$MPD_CONFIG" <<'EOF'
 music_directory "/music"
@@ -85,9 +85,49 @@ audio_output {
     device "hw:Loopback,0"
 }
 EOF
-ensure_mpd_loopback_mixer
+ensure_mpd_loopback_output
 test "$(grep -Fc 'mixer_type' "$MPD_CONFIG")" -eq 1
 grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
+# Buffer tuning is injected on repair so playback survives decoder/network
+# stalls ("Decoder is too slow; playing silence to avoid xrun").
+grep -Fq 'buffer_time   "200000"' "$MPD_CONFIG"
+grep -Fq 'period_time   "50000"' "$MPD_CONFIG"
+
+# Existing settings are not duplicated or overwritten.
+cat > "$MPD_CONFIG" <<'EOF'
+music_directory "/music"
+audio_output {
+    type "alsa"
+    name "camilladsp-loopback"
+    device "oxide_loopback"
+    mixer_type "software"
+    buffer_time "300000"
+    period_time "25000"
+}
+EOF
+ensure_mpd_loopback_output || true
+test "$(grep -Fc 'buffer_time' "$MPD_CONFIG")" -eq 1
+test "$(grep -Fc 'period_time' "$MPD_CONFIG")" -eq 1
+grep -Fq 'buffer_time "300000"' "$MPD_CONFIG"
+grep -Fq 'period_time "25000"' "$MPD_CONFIG"
+
+# A block with only one of the two settings gets the other injected.
+cat > "$MPD_CONFIG" <<'EOF'
+music_directory "/music"
+audio_output {
+    type "alsa"
+    name "camilladsp-loopback"
+    device "oxide_loopback"
+    mixer_type "hardware"
+    period_time "25000"
+}
+EOF
+ensure_mpd_loopback_output || true
+grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
+test "$(grep -Fc 'period_time' "$MPD_CONFIG")" -eq 1
+grep -Fq 'period_time "25000"' "$MPD_CONFIG"
+grep -Fq 'buffer_time   "200000"' "$MPD_CONFIG"
+
 cat > "$MPD_CONFIG" <<'EOF'
 music_directory "/music"
 audio_output {
@@ -97,7 +137,7 @@ audio_output {
     mixer_type "hardware"
 }
 EOF
-ensure_mpd_loopback_mixer || true
+ensure_mpd_loopback_output || true
 ! grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
 grep -Fq 'mixer_type "hardware"' "$MPD_CONFIG"
 
@@ -112,9 +152,12 @@ audio_output {
     mixer_type "hardware"
 }
 EOF
-ensure_mpd_loopback_mixer || true
+ensure_mpd_loopback_output || true
 ! grep -Fq 'mixer_type    "software"' "$MPD_CONFIG"
 grep -Fq 'mixer_type "hardware"' "$MPD_CONFIG"
+# User-managed outputs keep their own buffering choices.
+! grep -Fq 'buffer_time' "$MPD_CONFIG"
+! grep -Fq 'period_time' "$MPD_CONFIG"
 
 printf 'installer MPD loopback mixer test passed\n'
 

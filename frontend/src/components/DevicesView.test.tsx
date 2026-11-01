@@ -130,9 +130,7 @@ describe("DevicesView output controls", () => {
     ]);
 
     const { getByRole } = render(<DevicesView />);
-    const enable = await waitFor(() =>
-      getByRole("button", { name: "Enable DSP for USB DAC" }),
-    );
+    const enable = await waitFor(() => getByRole("button", { name: "Enable DSP for USB DAC" }));
     const unsupported = getByRole("button", {
       name: "Enable DSP for Pipe monitor",
     });
@@ -144,14 +142,10 @@ describe("DevicesView output controls", () => {
   });
 
   it("offers disabling DSP when the output is routed through CamillaDSP", async () => {
-    listDevices.mockResolvedValue([
-      makeOutput({ dsp_enabled: true, enabled: false }),
-    ]);
+    listDevices.mockResolvedValue([makeOutput({ dsp_enabled: true, enabled: false })]);
 
     const { getByRole } = render(<DevicesView />);
-    const disable = await waitFor(() =>
-      getByRole("button", { name: "Disable DSP for USB DAC" }),
-    );
+    const disable = await waitFor(() => getByRole("button", { name: "Disable DSP for USB DAC" }));
 
     fireEvent.click(disable);
     await waitFor(() => expect(disableDeviceDsp).toHaveBeenCalledWith(1));
@@ -194,6 +188,10 @@ describe("DevicesView output controls", () => {
     fireEvent.click(getByRole("button", { name: "Configure device" }));
     expect(getByDisplayValue("Topping USB DAC")).toBeTruthy();
     expect(getByDisplayValue("hw:2,0")).toBeTruthy();
+    // USB outputs get stutter-proof ALSA buffer tuning prefilled ("Decoder
+    // is too slow; playing silence to avoid xrun").
+    expect(getByDisplayValue("200000")).toBeTruthy();
+    expect(getByDisplayValue("50000")).toBeTruthy();
   });
 });
 
@@ -219,26 +217,20 @@ describe("DevicesView Bluetooth actions", () => {
     listBluetoothDevices.mockResolvedValue([makeDevice()]);
 
     const { getByRole, queryByRole } = render(<DevicesView />);
-    await waitFor(() =>
-      expect(getByRole("button", { name: "Connect" })).toBeTruthy(),
-    );
+    await waitFor(() => expect(getByRole("button", { name: "Connect" })).toBeTruthy());
 
     expect(queryByRole("button", { name: "Wake & Connect" })).toBeNull();
     expect(queryByRole("button", { name: "Disconnect" })).toBeNull();
 
     fireEvent.click(getByRole("button", { name: "Connect" }));
-    await waitFor(() =>
-      expect(wakeConnect).toHaveBeenCalledWith("AA:BB:CC:DD:EE:FF"),
-    );
+    await waitFor(() => expect(wakeConnect).toHaveBeenCalledWith("AA:BB:CC:DD:EE:FF"));
   });
   it("keeps Connect available for a configured paired speaker after disconnect", async () => {
     listBluetoothDevices.mockResolvedValue([makeDevice()]);
     listConfigs.mockResolvedValue([makeBluetoothConfig()]);
 
     const { getByRole } = render(<DevicesView />);
-    await waitFor(() =>
-      expect(getByRole("button", { name: "Connect" })).toBeTruthy(),
-    );
+    await waitFor(() => expect(getByRole("button", { name: "Connect" })).toBeTruthy());
   });
 
   it("hides provisioning prompt for a configured connected device", async () => {
@@ -246,9 +238,7 @@ describe("DevicesView Bluetooth actions", () => {
     listConfigs.mockResolvedValue([makeBluetoothConfig()]);
 
     const { getByRole, queryByRole, queryByText } = render(<DevicesView />);
-    await waitFor(() =>
-      expect(getByRole("button", { name: "Disconnect" })).toBeTruthy(),
-    );
+    await waitFor(() => expect(getByRole("button", { name: "Disconnect" })).toBeTruthy());
 
     expect(queryByRole("button", { name: "Retry provisioning" })).toBeNull();
     expect(queryByText(/no managed playback output is visible/)).toBeNull();
@@ -258,29 +248,21 @@ describe("DevicesView Bluetooth actions", () => {
     listBluetoothDevices.mockResolvedValue([makeDevice({ connected: true })]);
 
     const { getByRole, queryByRole } = render(<DevicesView />);
-    await waitFor(() =>
-      expect(getByRole("button", { name: "Disconnect" })).toBeTruthy(),
-    );
+    await waitFor(() => expect(getByRole("button", { name: "Disconnect" })).toBeTruthy());
 
     expect(queryByRole("button", { name: "Connect" })).toBeNull();
     fireEvent.click(getByRole("button", { name: "Disconnect" }));
-    await waitFor(() =>
-      expect(disconnect).toHaveBeenCalledWith("AA:BB:CC:DD:EE:FF"),
-    );
+    await waitFor(() => expect(disconnect).toHaveBeenCalledWith("AA:BB:CC:DD:EE:FF"));
   });
 
   it("keeps Bluetooth removal behind advanced confirmation", async () => {
     listBluetoothDevices.mockResolvedValue([makeDevice({ connected: true })]);
 
     const { getByRole, getByText, queryByRole } = render(<DevicesView />);
-    await waitFor(() =>
-      expect(getByRole("button", { name: "Disconnect" })).toBeTruthy(),
-    );
+    await waitFor(() => expect(getByRole("button", { name: "Disconnect" })).toBeTruthy());
     expect(queryByRole("button", { name: "Remove output" })).toBeNull();
     fireEvent.click(getByText("More"));
-    fireEvent.click(
-      await waitFor(() => getByRole("button", { name: "Remove output" })),
-    );
+    fireEvent.click(await waitFor(() => getByRole("button", { name: "Remove output" })));
     expect(getByRole("dialog")).toBeTruthy();
     fireEvent.click(getByRole("button", { name: "Cancel" }));
     expect(queryByRole("dialog")).toBeNull();
@@ -297,22 +279,16 @@ describe("DevicesView Bluetooth actions", () => {
 
     const { getByRole, queryByRole } = render(<DevicesView />);
     await waitFor(() =>
-      expect(
-        getByRole("button", { name: "Enable DSP for USB DAC" }),
-      ).toBeTruthy(),
+      expect(getByRole("button", { name: "Enable DSP for USB DAC" })).toBeTruthy()
     );
-    expect(
-      queryByRole("button", { name: "Enable DSP for visualizer" }),
-    ).toBeNull();
+    expect(queryByRole("button", { name: "Enable DSP for visualizer" })).toBeNull();
   });
 
   it("shows Pair for an unpaired Bluetooth candidate", async () => {
     listBluetoothDevices.mockResolvedValue([makeDevice({ paired: false })]);
 
     const { getByRole } = render(<DevicesView />);
-    const pairButton = await waitFor(() =>
-      getByRole("button", { name: "Pair" }),
-    );
+    const pairButton = await waitFor(() => getByRole("button", { name: "Pair" }));
     fireEvent.click(pairButton);
     await waitFor(() => expect(pair).toHaveBeenCalledWith("AA:BB:CC:DD:EE:FF"));
   });
@@ -323,9 +299,7 @@ describe("DevicesView Bluetooth actions", () => {
       .mockResolvedValueOnce([]);
 
     const { getByRole } = render(<DevicesView />);
-    const retry = await waitFor(() =>
-      getByRole("button", { name: "Retry Bluetooth" }),
-    );
+    const retry = await waitFor(() => getByRole("button", { name: "Retry Bluetooth" }));
     fireEvent.click(retry);
     await waitFor(() => expect(listBluetoothDevices).toHaveBeenCalledTimes(2));
   });
