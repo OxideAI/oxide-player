@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.23.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.22.0...oxide-player-v0.23.0) (2026-11-01)
+
+
+### Features
+
+* cover ([6bcaab8](https://github.com/OxideAI/oxide-player/commit/6bcaab8fe980e6041a6a5bd42b201ef2bf8c44cd))
+
+
+### Bug Fixes
+
+* devices ([69ff8d3](https://github.com/OxideAI/oxide-player/commit/69ff8d363935e426e3ebec8f66ac8f4a2ae75b69))
+
 ## [0.22.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.21.2...oxide-player-v0.22.0) (2026-11-01)
 
 
