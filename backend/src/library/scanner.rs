@@ -340,13 +340,17 @@ fn cover_ext(mime: &MimeType) -> &'static str {
     }
 }
 
-/// Look for a local cover image in `dir`, preferring `cover.*` over `folder.*`
-/// and jpg over png. Matching is case-insensitive on both name and extension.
+/// Look for a local cover image in `dir`, preferring `cover.*` over `front.*`
+/// over `folder.*` and jpg over png. Matching is case-insensitive on both name
+/// and extension.
 pub(crate) fn find_local_cover(dir: &Path) -> Option<PathBuf> {
     const NAMES: &[&str] = &[
         "cover.jpg",
         "cover.jpeg",
         "cover.png",
+        "front.jpg",
+        "front.jpeg",
+        "front.png",
         "folder.jpg",
         "folder.jpeg",
         "folder.png",
@@ -688,7 +692,8 @@ fn simple_hash(s: &str) -> String {
 }
 
 /// Extract a cover for `path` into the cover cache as `{cover_key}.{ext}`.
-/// Local image files (`cover.*`, `folder.*`) take precedence over embedded art.
+/// Local image files (`cover.*`, `front.*`, `folder.*`) take precedence over
+/// embedded art.
 /// `tagged`, when provided, is the already-parsed audio file so embedded art is
 /// read from the first pass instead of re-reading the whole file. `cover_key`
 /// names the destination file; every track in an album resolves to the same key
@@ -953,6 +958,37 @@ mod tests {
         assert!(is_audio(Path::new("song.MP3")));
         assert!(!is_audio(Path::new("cover.jpg")));
         assert!(!is_audio(Path::new("notes.txt")));
+    }
+
+    #[test]
+    fn find_local_cover_prefers_cover_front_folder_and_ignores_case() {
+        let dir = tempfile::tempdir().unwrap();
+        // All three present: cover wins.
+        write_junk(&dir, "Cover.PNG");
+        write_junk(&dir, "front.jpg");
+        write_junk(&dir, "FOLDER.Jpg");
+        assert_eq!(
+            find_local_cover(dir.path()).unwrap().file_name().unwrap(),
+            "Cover.PNG"
+        );
+        let _ = std::fs::remove_file(dir.path().join("Cover.PNG"));
+        // front beats folder.
+        assert_eq!(
+            find_local_cover(dir.path()).unwrap().file_name().unwrap(),
+            "front.jpg"
+        );
+        let _ = std::fs::remove_file(dir.path().join("front.jpg"));
+        // Only cased folder left.
+        assert_eq!(
+            find_local_cover(dir.path()).unwrap().file_name().unwrap(),
+            "FOLDER.Jpg"
+        );
+        let _ = std::fs::remove_file(dir.path().join("FOLDER.Jpg"));
+        assert!(find_local_cover(dir.path()).is_none());
+    }
+
+    fn write_junk(dir: &tempfile::TempDir, name: &str) {
+        std::fs::write(dir.path().join(name), b"junk").unwrap();
     }
 
     #[test]
