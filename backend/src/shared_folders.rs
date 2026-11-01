@@ -75,7 +75,7 @@ fn render(folders: &[PathBuf]) -> Result<String> {
         names.push(name.clone());
 
         text.push_str(&format!(
-            "[{name}]\npath = \"{}\"\nbrowseable = yes\nread only = no\nguest ok = yes\nforce user = oxide\nforce group = oxide\ncreate mask = 0644\ndirectory mask = 0755\nstore dos attributes = no\n\n",
+            "[{name}]\npath = \"{}\"\nbrowseable = yes\nread only = no\nguest ok = yes\nforce user = oxide\nforce group = oxide\ncreate mask = 0644\ndirectory mask = 0755\nstore dos attributes = no\nveto files = /._*/.DS_Store/\ndelete veto files = yes\n\n",
             samba_quote(path)
         ));
     }
@@ -141,6 +141,10 @@ mod tests {
         // without this line smbd mkdir uses a ::TMPNAME stream temp name that
         // exfat-fuse rejects and network folder creation always fails.
         assert!(text.contains("store dos attributes = no"));
+        // FAT-family mounts plus macOS clients: veto AppleDouble junk so `._*`
+        // twins and .DS_Store never reach the music tree.
+        assert!(text.contains("veto files = /._*/.DS_Store/"));
+        assert!(text.contains("delete veto files = yes"));
     }
     #[test]
     fn sync_removes_deleted_folder_shares() {
