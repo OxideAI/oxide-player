@@ -1,6 +1,7 @@
 use crate::devices::config_fragment::{
-    classify_output_role, diagnostic_code, output_selection_key, validate_config,
-    DeviceConfig as DeviceConfigDto, OutputDiagnosticFacts, MANAGED_DSP_LOOPBACK_OUTPUT,
+    classify_output_role, diagnostic_code, output_selection_key, validate_buffer_fields,
+    validate_config, DeviceConfig as DeviceConfigDto, OutputDiagnosticFacts,
+    MANAGED_DSP_LOOPBACK_OUTPUT,
 };
 use crate::devices::usb;
 use crate::dsp::camilladsp::DspApplyResult;
@@ -1336,6 +1337,12 @@ struct DeviceConfigResponse {
     mixer_type: Option<String>,
     mixer_device: Option<String>,
     dop: bool,
+    /// MPD `buffer_time` in microseconds (ALSA output tuning).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    buffer_time: Option<u32>,
+    /// MPD `period_time` in microseconds (ALSA output tuning).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    period_time: Option<u32>,
     restart_pending: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     include_warning: Option<bool>,
@@ -1356,6 +1363,35 @@ struct UpdateDeviceConfigBody {
     mixer_device: Option<String>,
     #[serde(default)]
     dop: Option<bool>,
+    /// MPD `buffer_time` in microseconds. Outer `None`: key absent → keep the
+    /// existing value; `Some(None)`: explicit null → clear the setting;
+    /// `Some(Some(n))` → set it.
+    #[serde(default, deserialize_with = "double_option")]
+    buffer_time: Option<Option<u32>>,
+    /// MPD `period_time` in microseconds, same outer/inner semantics.
+    #[serde(default, deserialize_with = "double_option")]
+    period_time: Option<Option<u32>>,
+}
+
+/// Deserialize a nullable, optional JSON number: an absent key never invokes
+/// the deserializer (outer `None` via `#[serde(default)]`), while an explicit
+/// JSON `null` becomes `Some(None)` so PUT can distinguish "keep" from "clear"
+/// without a per-type visitor.
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Repr<T> {
+        Null,
+        Value(T),
+    }
+    Ok(match Repr::<T>::deserialize(de)? {
+        Repr::Null => Some(None),
+        Repr::Value(v) => Some(Some(v)),
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -1373,6 +1409,8 @@ struct CreateDeviceConfigBody {
     mixer_device: Option<String>,
     #[serde(default)]
     dop: bool,
+    buffer_time: Option<u32>,
+    period_time: Option<u32>,
 }
 
 /// List all managed device config fragments.
@@ -1393,6 +1431,8 @@ async fn list_device_configs(
             mixer_type: c.mixer_type,
             mixer_device: c.mixer_device,
             dop: c.dop,
+            buffer_time: c.buffer_time,
+            period_time: c.period_time,
             restart_pending: pending,
             include_warning: if include_warning { Some(true) } else { None },
         })
@@ -1413,7 +1453,8 @@ async fn create_device_config(
         b.mixer_type.as_deref(),
         b.mixer_device.as_deref(),
         b.dop,
-    );
+    )
+    .merge(validate_buffer_fields(b.buffer_time, b.period_time));
     if !validation.is_valid() {
         return Err(AppError::Unprocessable(
             validation.into_error_string().unwrap_or_default(),
@@ -1429,6 +1470,8 @@ async fn create_device_config(
         mixer_device: b.mixer_device.clone(),
         mixer_control: None,
         dop: b.dop,
+        buffer_time: b.buffer_time,
+        period_time: b.period_time,
     };
     s.device_configs()
         .create(&cfg)
@@ -1448,6 +1491,8 @@ async fn create_device_config(
         mixer_type: b.mixer_type,
         mixer_device: b.mixer_device,
         dop: b.dop,
+        buffer_time: b.buffer_time,
+        period_time: b.period_time,
         restart_pending: false,
         include_warning: if include_warning { Some(true) } else { None },
     }))
@@ -1474,6 +1519,9 @@ async fn update_device_config(
     let mixer_type = b.mixer_type.or_else(|| existing.mixer_type.clone());
     let mixer_device = b.mixer_device.or_else(|| existing.mixer_device.clone());
     let dop = b.dop.unwrap_or(existing.dop);
+    // Absent key keeps the existing value; explicit null clears it.
+    let buffer_time = b.buffer_time.unwrap_or(existing.buffer_time);
+    let period_time = b.period_time.unwrap_or(existing.period_time);
 
     let validation = validate_config(
         &new_name,
@@ -1483,7 +1531,8 @@ async fn update_device_config(
         mixer_type.as_deref(),
         mixer_device.as_deref(),
         dop,
-    );
+    )
+    .merge(validate_buffer_fields(buffer_time, period_time));
     if !validation.is_valid() {
         return Err(AppError::Unprocessable(
             validation.into_error_string().unwrap_or_default(),
@@ -1499,6 +1548,8 @@ async fn update_device_config(
         mixer_device: mixer_device.clone(),
         mixer_control: existing.mixer_control.clone(),
         dop,
+        buffer_time,
+        period_time,
     };
     s.device_configs()
         .update(&name, &cfg)
@@ -1514,6 +1565,8 @@ async fn update_device_config(
         mixer_type,
         mixer_device,
         dop,
+        buffer_time,
+        period_time,
         restart_pending: false,
         include_warning: None,
     }))
@@ -2639,6 +2692,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         }
     }
     #[test]

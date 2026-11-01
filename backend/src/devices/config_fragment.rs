@@ -15,6 +15,11 @@ pub struct DeviceConfig {
     pub mixer_device: Option<String>,
     pub mixer_control: Option<String>,
     pub dop: bool,
+    /// MPD `buffer_time` in microseconds. Larger buffers ride out decode or
+    /// network stalls; `None` leaves MPD's default (500 ms on ALSA).
+    pub buffer_time: Option<u32>,
+    /// MPD `period_time` in microseconds (ALSA period size).
+    pub period_time: Option<u32>,
 }
 /// MPD output names written by Oxide itself. These are not listening
 /// destinations and must stay out of playback selection.
@@ -107,6 +112,13 @@ pub struct ValidationResult {
 impl ValidationResult {
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
+    }
+
+    /// Merge `other`'s field errors into `self`, keeping entries for distinct
+    /// fields from both sources.
+    pub fn merge(mut self, other: ValidationResult) -> Self {
+        self.errors.extend(other.errors);
+        self
     }
 
     pub fn into_error_string(self) -> Option<String> {
@@ -232,6 +244,34 @@ pub fn validate_config(
     result
 }
 
+/// Validate MPD ALSA buffer tuning fields. MPD accepts these on any output
+/// type (other outputs ignore them), so the numeric check is type-agnostic.
+pub fn validate_buffer_fields(
+    buffer_time: Option<u32>,
+    period_time: Option<u32>,
+) -> ValidationResult {
+    let mut result = ValidationResult::default();
+    // MPDDocs: buffer_time values below ~1s of audio at 44.1 kHz stereo
+    // 16-bit (≈172 KiB per second) are useless; ALSA itself rejects 0.
+    if let Some(bt) = buffer_time {
+        if bt == 0 || bt < 100_000 {
+            result.errors.insert(
+                "buffer_time".to_string(),
+                "must be a positive microsecond value, at least 100000".to_string(),
+            );
+        }
+    }
+    if let Some(pt) = period_time {
+        if pt == 0 {
+            result.errors.insert(
+                "period_time".to_string(),
+                "must be a positive microsecond value".to_string(),
+            );
+        }
+    }
+    result
+}
+
 /// Manages MPD audio output config fragment files on disk.
 #[derive(Debug, Clone)]
 pub struct ConfigFragmentManager {
@@ -308,6 +348,12 @@ impl ConfigFragmentManager {
         if config.dop {
             out.push_str("    dop         \"yes\"\n");
         }
+        if let Some(bt) = config.buffer_time {
+            out.push_str(&format!("    buffer_time \"{bt}\"\n"));
+        }
+        if let Some(pt) = config.period_time {
+            out.push_str(&format!("    period_time \"{pt}\"\n"));
+        }
 
         out.push_str("}\n");
         out
@@ -328,6 +374,8 @@ impl ConfigFragmentManager {
         let mut mixer_device: Option<String> = None;
         let mut mixer_control: Option<String> = None;
         let mut dop = false;
+        let mut buffer_time: Option<u32> = None;
+        let mut period_time: Option<u32> = None;
 
         for line in content.lines() {
             let line = line.trim();
@@ -347,6 +395,8 @@ impl ConfigFragmentManager {
                     "mixer_device" => mixer_device = Some(val.to_string()),
                     "mixer_control" => mixer_control = Some(val.to_string()),
                     "dop" => dop = val.eq_ignore_ascii_case("yes"),
+                    "buffer_time" => buffer_time = val.parse::<u32>().ok().or(buffer_time),
+                    "period_time" => period_time = val.parse::<u32>().ok().or(period_time),
                     _ => {}
                 }
             }
@@ -361,6 +411,8 @@ impl ConfigFragmentManager {
             mixer_device,
             mixer_control,
             dop,
+            buffer_time,
+            period_time,
         }
     }
 
@@ -538,6 +590,51 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_buffer_fields_accepts_sane_values() {
+        assert!(validate_buffer_fields(Some(200_000), Some(50_000)).is_valid());
+        assert!(validate_buffer_fields(None, None).is_valid());
+    }
+
+    #[test]
+    fn test_validate_buffer_fields_rejects_zero_and_tiny_buffer() {
+        let r = validate_buffer_fields(Some(0), Some(0));
+        assert!(r.errors.contains_key("buffer_time"));
+        assert!(r.errors.contains_key("period_time"));
+
+        let r = validate_buffer_fields(Some(500), None);
+        assert!(r.errors.contains_key("buffer_time"));
+    }
+
+    #[test]
+    fn test_render_and_parse_roundtrip_buffer_fields() {
+        let cfg = DeviceConfig {
+            name: "USB DAC".to_string(),
+            output_type: "alsa".to_string(),
+            device: Some("hw:1,0".to_string()),
+            format: Some("44100:16:2".to_string()),
+            mixer_type: Some("hardware".to_string()),
+            mixer_device: None,
+            mixer_control: None,
+            dop: false,
+            buffer_time: Some(200_000),
+            period_time: Some(50_000),
+        };
+        let rendered = ConfigFragmentManager::render_fragment(&cfg);
+        assert!(rendered.contains("buffer_time \"200000\""));
+        assert!(rendered.contains("period_time \"50000\""));
+        let parsed = ConfigFragmentManager::parse_content(&rendered);
+        assert_eq!(parsed.buffer_time, Some(200_000));
+        assert_eq!(parsed.period_time, Some(50_000));
+
+        // A fragment without the settings parses back as None.
+        let bare = ConfigFragmentManager::parse_content(
+            "audio_output {\n    type \"alsa\"\n    name \"x\"\n}\n",
+        );
+        assert_eq!(bare.buffer_time, None);
+        assert_eq!(bare.period_time, None);
+    }
+
+    #[test]
     fn test_create_fragment() {
         let dir = temp_dir("test_create_fragment");
         let mgr = ConfigFragmentManager::new(dir.clone()).unwrap();
@@ -551,6 +648,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         };
         mgr.create(&cfg).unwrap();
 
@@ -583,6 +682,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: true,
+            buffer_time: None,
+            period_time: None,
         };
         mgr.create(&cfg).unwrap();
 
@@ -611,6 +712,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         };
         let cfg2 = DeviceConfig {
             name: "Pulse Two".to_string(),
@@ -621,6 +724,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         };
         mgr.create(&cfg1).unwrap();
         mgr.create(&cfg2).unwrap();
@@ -649,6 +754,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         };
         mgr.create(&cfg).unwrap();
 
@@ -661,6 +768,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         };
         mgr.update("Original", &updated).unwrap();
 
@@ -694,6 +803,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         };
         mgr.create(&cfg).unwrap();
         assert_eq!(mgr.list().len(), 1);
@@ -727,6 +838,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         };
         mgr.create(&cfg).unwrap();
 
@@ -750,6 +863,8 @@ mod tests {
             mixer_device: Some("Master".to_string()),
             mixer_control: Some("PCM".to_string()),
             dop: true,
+            buffer_time: None,
+            period_time: None,
         };
         mgr.create(&cfg).unwrap();
 
@@ -781,6 +896,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         }];
         assert_eq!(
             classify_output_role("visualizer", &configs),

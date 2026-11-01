@@ -40,6 +40,8 @@ fn build_device_config(device: &BtDevice) -> DeviceConfig {
         mixer_device: Some(format!("bluealsa:{}", device.address)),
         mixer_control: Some("A2DP".to_string()),
         dop: false,
+        buffer_time: None,
+        period_time: None,
     }
 }
 /// Match both current and legacy BlueALSA PCM strings so reconnecting a
@@ -270,6 +272,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         };
         mgr.create(&legacy).unwrap();
 
@@ -319,6 +323,8 @@ mod tests {
             mixer_device: None,
             mixer_control: None,
             dop: false,
+            buffer_time: None,
+            period_time: None,
         };
         // Simulate the legacy on-disk state (two names, same MAC) by writing
         // the fragments directly through the manager.

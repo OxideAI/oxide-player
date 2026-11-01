@@ -1143,6 +1143,8 @@ mod tests {
                 mixer_device: None,
                 mixer_control: None,
                 dop: false,
+                buffer_time: None,
+                period_time: None,
             },
             crate::devices::config_fragment::DeviceConfig {
                 name: "Loopback".to_string(),
@@ -1153,6 +1155,8 @@ mod tests {
                 mixer_device: None,
                 mixer_control: None,
                 dop: false,
+                buffer_time: None,
+                period_time: None,
             },
         ];
 
