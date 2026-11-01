@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.23.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.23.0...oxide-player-v0.23.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* cover folder ([85b7b87](https://github.com/OxideAI/oxide-player/commit/85b7b87717319574413230835d34f74c0da316bf))
+* drop duplicate tag-push trigger from release workflow ([8a40b30](https://github.com/OxideAI/oxide-player/commit/8a40b303f9fc7cdf66590c6a6dc1acb5aa2d1342))
+* tests ([8c04161](https://github.com/OxideAI/oxide-player/commit/8c04161aa367e4972707f83c8df711240b70a01a))
+
 ## [0.23.0](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.22.0...oxide-player-v0.23.0) (2026-11-01)
 
 
