@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     std::fs::create_dir_all(&config.data_dir).context("create data dir")?;
-    std::fs::create_dir_all(&config.cover_cache_dir()).context("create cover cache dir")?;
+    std::fs::create_dir_all(config.cover_cache_dir()).context("create cover cache dir")?;
 
     let db = library::LibraryDb::open(&config.db_path())?;
     db.migrate()?;

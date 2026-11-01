@@ -662,10 +662,7 @@ impl AppState {
                 status.elapsed = 0.0;
             }
         }
-        status.outputs = match outputs {
-            Ok(o) => o,
-            Err(_) => Vec::new(),
-        };
+        status.outputs = outputs.unwrap_or_default();
         // Push the new status to WS clients.
         let _ = self
             .inner

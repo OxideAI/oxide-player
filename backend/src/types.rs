@@ -55,16 +55,12 @@ pub struct DeviceOutput {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DeviceOutputRole {
     Playback,
     System,
+    #[default]
     Unknown,
-}
-
-impl Default for DeviceOutputRole {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

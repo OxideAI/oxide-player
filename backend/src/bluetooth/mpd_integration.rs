@@ -91,15 +91,14 @@ pub fn create_fragment(
     for existing in &existing_configs {
         if is_bluetooth_pcm(existing.device.as_deref(), &device.address)
             && existing.name != cfg.name
+            && config_manager.delete(&existing.name).is_ok()
         {
-            if config_manager.delete(&existing.name).is_ok() {
-                removed = true;
-                tracing::info!(
-                    "removed stale MPD fragment '{}' for same BT device {}",
-                    existing.name,
-                    device.address
-                );
-            }
+            removed = true;
+            tracing::info!(
+                "removed stale MPD fragment '{}' for same BT device {}",
+                existing.name,
+                device.address
+            );
         }
     }
 

@@ -2963,7 +2963,7 @@ mod tests {
             keys.iter().any(|k| k == "genre"),
             "system + user genre keys both present"
         );
-        assert!(keys.iter().any(|k| k == "anykey") == false);
+        assert!(!keys.iter().any(|k| k == "anykey"));
         // The only user key created by this test is genre.
         assert_eq!(
             keys.iter().filter(|k| **k == "genre").count(),

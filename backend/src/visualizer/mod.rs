@@ -407,7 +407,7 @@ impl VisualizerAnalyzer {
                 match tx.send(frame) {
                     Ok(n) => {
                         published += 1;
-                        if published % 200 == 0 {
+                        if published.is_multiple_of(200) {
                             tracing::debug!(
                                 "visualizer published {published} frames, receivers={n}"
                             );
@@ -670,7 +670,7 @@ where
     let status = status.clone();
     let stream = device
         .build_input_stream(
-            config.clone(),
+            *config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
                 let mut guard = shared.samples.lock().unwrap();
                 // Mix down to mono by averaging channels, then append. Keep only
@@ -726,8 +726,8 @@ fn compute_frame(
         let w = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (n as f32 - 1.0)).cos();
         scratch[i] = Complex::new(s * w, 0.0);
     }
-    for i in guard.len()..padded {
-        scratch[i] = Complex::new(0.0, 0.0);
+    for scratch_slot in scratch[guard.len()..padded].iter_mut() {
+        *scratch_slot = Complex::new(0.0, 0.0);
     }
     fft.process(scratch);
 
@@ -735,12 +735,11 @@ fn compute_frame(
     // magnitude is ~amplitude * N/2, so dividing by N/2 recovers the per-bin
     // amplitude in 0..1 (full-scale float), independent of window size.
     let half = padded / 2;
-    let mut mag = vec![0.0f32; half];
     let scale = (n as f32 / 2.0).max(1.0);
-    for i in 0..half {
-        let m = (scratch[i].re * scratch[i].re + scratch[i].im * scratch[i].im).sqrt() / scale;
-        mag[i] = m;
-    }
+    let mag: Vec<f32> = scratch[..half]
+        .iter()
+        .map(|c| (c.re * c.re + c.im * c.im).sqrt() / scale)
+        .collect();
 
     // Log-spaced grouping into BANDS bins. Frequency bin i corresponds to
     // i * (rate/2) / half Hz; we map band edges logarithmically so bass gets
@@ -750,7 +749,7 @@ fn compute_frame(
     let max_bin = half.min(fft_bins / 2).saturating_sub(1).max(min_bin);
     let log_min = (min_bin as f64).ln();
     let log_max = (max_bin as f64).ln();
-    for i in min_bin..=max_bin {
+    for (i, m) in mag.iter().enumerate().take(max_bin + 1).skip(min_bin) {
         let t = (i as f64).ln();
         let norm = if log_max > log_min {
             (t - log_min) / (log_max - log_min)
@@ -762,7 +761,7 @@ fn compute_frame(
         // Keep the strongest FFT bin in each musical band. Averaging dilutes
         // narrow tonal peaks across hundreds of mostly-empty high-frequency
         // bins, making real music appear motionless.
-        bins[band] = bins[band].max(mag[i].clamp(0.0, 1.0));
+        bins[band] = bins[band].max(m.clamp(0.0, 1.0));
     }
     for value in &mut bins {
         // Perceptual lift: sqrt so quiet bands remain visible; clamp to 0..1.

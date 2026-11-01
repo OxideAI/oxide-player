@@ -31,6 +31,14 @@ pub enum LibrarySnapshot {
     Fresh { etag: String, tracks: Vec<Track> },
 }
 
+/// Row projection for album-cover derivation: `(id, path, album,
+/// album_artist, cover_key)`.
+type ArtRow = (i64, String, Option<String>, Option<String>, Option<String>);
+
+/// Row projection for the one-time cover-key backfill: `(id, path, album,
+/// album_artist)`.
+type BackfillRow = (i64, String, Option<String>, Option<String>);
+
 /// One stored tag on one album. `system: true` marks scanner-seeded values
 /// (currently only `genre`); the UI renders those non-deletable. A user tag
 /// carries whatever key/value pair the user typed.
@@ -293,9 +301,7 @@ impl LibraryDb {
 
     /// Return every track with the fields needed to (re)derive album-keyed
     /// covers: id, path, album, album_artist, and any stored `cover_key`.
-    pub fn all_tracks_for_art(
-        &self,
-    ) -> AppResult<Vec<(i64, String, Option<String>, Option<String>, Option<String>)>> {
+    pub fn all_tracks_for_art(&self) -> AppResult<Vec<ArtRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, path, album, album_artist, cover_key FROM tracks")
@@ -322,9 +328,7 @@ impl LibraryDb {
     /// yet) so a one-time backfill can derive the key and relocate their cover
     /// file without re-reading every audio file. Each entry carries the id,
     /// path, album and album_artist needed to compute the key.
-    pub fn tracks_missing_cover_key(
-        &self,
-    ) -> AppResult<Vec<(i64, String, Option<String>, Option<String>)>> {
+    pub fn tracks_missing_cover_key(&self) -> AppResult<Vec<BackfillRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT id, path, album, album_artist FROM tracks WHERE cover_key IS NULL")
@@ -967,7 +971,7 @@ impl LibraryDb {
         }
         tx.commit().map_err(|e| AppError::Library(e.to_string()))?;
         self.bump_revision();
-        Ok(removed as usize)
+        Ok(removed)
     }
 
     /// Drop tag rows whose album no longer has any tracks, so removed albums

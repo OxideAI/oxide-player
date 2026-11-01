@@ -127,7 +127,6 @@ impl RadioManager {
 
     /// Add a station. Trims inputs; rejects empty names, non-http(s) URLs, and
     /// duplicate URLs. Artwork is an optional http(s) image URL.
-
     pub fn add(
         &self,
         name: &str,
