@@ -3,11 +3,13 @@ import { createPortal } from "react-dom";
 import type { Track } from "../types";
 import { api, toPlayRef } from "../api";
 import { displayTitle } from "../util";
+import { AlbumInfo } from "./AlbumInfo";
 import { FileInfo } from "./FileInfo";
 import styles from "./TrackMenu.module.css";
 
 interface Props {
   tracks: Track[];
+  albumName?: string;
   label?: string;
   playing?: boolean;
   onPlayNext?: () => void;
@@ -18,13 +20,7 @@ interface Props {
 
 function Dots() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      width="17"
-      height="17"
-      fill="currentColor"
-      aria-hidden
-    >
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden>
       <circle cx="6" cy="12" r="1.7" />
       <circle cx="12" cy="12" r="1.7" />
       <circle cx="18" cy="12" r="1.7" />
@@ -52,6 +48,7 @@ function MI({ d }: { d: string }) {
 
 export function TrackMenu({
   tracks,
+  albumName,
   label,
   playing,
   onPlayNext,
@@ -62,14 +59,14 @@ export function TrackMenu({
   const [open, setOpen] = useState(false);
   const [showPlaylists, setShowPlaylists] = useState(false);
   const [playlists, setPlaylists] = useState<string[]>([]);
+  const [showAlbumInfo, setShowAlbumInfo] = useState(false);
   const [infoTrack, setInfoTrack] = useState<Track | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node))
-        setOpen(false);
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -98,17 +95,14 @@ export function TrackMenu({
     setOpen(false);
     void run(
       () => api.addToPlaylist(name, tracks.map(toPlayRef)),
-      `Added ${tracks.length} to “${name}”`,
+      `Added ${tracks.length} to “${name}”`
     );
   };
 
   const single = tracks.length === 1 ? tracks[0] : null;
 
   return (
-    <div
-      className={`${styles.trackMenu}${playing ? ` ${styles.playing}` : ""}`}
-      ref={wrapRef}
-    >
+    <div className={`${styles.trackMenu}${playing ? ` ${styles.playing}` : ""}`} ref={wrapRef}>
       <button
         className={styles.trackMenuBtn}
         title={label ?? "More actions"}
@@ -121,10 +115,7 @@ export function TrackMenu({
         <Dots />
       </button>
       {open && (
-        <div
-          className={styles.trackMenuPop}
-          onClick={(e) => e.stopPropagation()}
-        >
+        <div className={styles.trackMenuPop} onClick={(e) => e.stopPropagation()}>
           <button
             className={styles.trackMenuItem}
             onClick={() => {
@@ -133,7 +124,7 @@ export function TrackMenu({
               else
                 void run(
                   () => api.playNext(tracks.map(toPlayRef)),
-                  `Queued “${single ? displayTitle(single) : `${tracks.length} tracks`}” next`,
+                  `Queued “${single ? displayTitle(single) : `${tracks.length} tracks`}” next`
                 );
             }}
           >
@@ -148,25 +139,31 @@ export function TrackMenu({
               else
                 void run(
                   () => api.clearAndPlay(tracks.map(toPlayRef)),
-                  `Playing ${single ? displayTitle(single) : `${tracks.length} tracks`}`,
+                  `Playing ${single ? displayTitle(single) : `${tracks.length} tracks`}`
                 );
             }}
           >
             <MI d="M5 5v14l11-7-11-7zM19 5a2 2 0 1 0 0 0" />
             Clear and play
           </button>
-          <button
-            className={styles.trackMenuItem}
-            onClick={() => void openPlaylists()}
-          >
+          <button className={styles.trackMenuItem} onClick={() => void openPlaylists()}>
             <MI d="M12 5v14M5 12h14" />
             Add to playlist…
           </button>
-          {single && (
+          {albumName && (
             <button
               className={styles.trackMenuItem}
-              onClick={() => setInfoTrack(single)}
+              onClick={() => {
+                setOpen(false);
+                setShowAlbumInfo(true);
+              }}
             >
+              <MI d="M12 8v.01M11 11h1v5h1" />
+              Album info
+            </button>
+          )}
+          {single && (
+            <button className={styles.trackMenuItem} onClick={() => setInfoTrack(single)}>
               <MI d="M12 8v.01M11 11h1v5h1" />
               File info
             </button>
@@ -175,14 +172,8 @@ export function TrackMenu({
       )}
       {showPlaylists &&
         createPortal(
-          <div
-            className={styles.trackMenuModal}
-            onClick={() => setShowPlaylists(false)}
-          >
-            <div
-              className={styles.trackMenuModalBox}
-              onClick={(e) => e.stopPropagation()}
-            >
+          <div className={styles.trackMenuModal} onClick={() => setShowPlaylists(false)}>
+            <div className={styles.trackMenuModalBox} onClick={(e) => e.stopPropagation()}>
               <div className={styles.trackMenuModalTitle}>Add to playlist</div>
               <ul className={styles.trackMenuPlaylistList}>
                 {playlists.length === 0 && (
@@ -190,29 +181,29 @@ export function TrackMenu({
                 )}
                 {playlists.map((p) => (
                   <li key={p}>
-                    <button
-                      className={styles.trackMenuItem}
-                      onClick={() => addTo(p)}
-                    >
+                    <button className={styles.trackMenuItem} onClick={() => addTo(p)}>
                       {p}
                     </button>
                   </li>
                 ))}
               </ul>
-              <button
-                className={styles.trackMenuClose}
-                onClick={() => setShowPlaylists(false)}
-              >
+              <button className={styles.trackMenuClose} onClick={() => setShowPlaylists(false)}>
                 Close
               </button>
             </div>
           </div>,
-          document.body,
+          document.body
         )}
       {infoTrack &&
         createPortal(
           <FileInfo track={infoTrack} onClose={() => setInfoTrack(null)} />,
-          document.body,
+          document.body
+        )}
+      {showAlbumInfo &&
+        albumName &&
+        createPortal(
+          <AlbumInfo name={albumName} tracks={tracks} onClose={() => setShowAlbumInfo(false)} />,
+          document.body
         )}
     </div>
   );

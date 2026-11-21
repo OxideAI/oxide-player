@@ -353,6 +353,7 @@ export function LibraryView({
             <div className={styles.albumActions}>
               <TrackMenu
                 tracks={current.tracks}
+                albumName={current.name}
                 label="Album actions"
                 onAdded={notify}
                 onError={setError}

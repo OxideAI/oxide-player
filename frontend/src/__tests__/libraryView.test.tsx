@@ -4,12 +4,8 @@ import { Track } from "../types";
 
 // Mock the api module so the component's library load and playback calls are
 // observable. Only the methods LibraryView actually touches need real spies.
-const clearAndPlay = vi.fn<(tracks: unknown) => Promise<unknown>>(() =>
-  Promise.resolve({}),
-);
-const play = vi.fn<(...args: unknown[]) => Promise<unknown>>(() =>
-  Promise.resolve({}),
-);
+const clearAndPlay = vi.fn<(tracks: unknown) => Promise<unknown>>(() => Promise.resolve({}));
+const play = vi.fn<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve({}));
 const library = vi.fn<() => Promise<Track[]>>();
 
 // Mock only the `api` object (network calls) while keeping the real
@@ -63,10 +59,7 @@ const noop = () => Promise.resolve();
 
 const folderKey = (uri: string) => uri.slice(0, uri.lastIndexOf("/"));
 
-function renderAlbumView(
-  tracks: Track[],
-  props: Partial<Parameters<typeof LibraryView>[0]> = {},
-) {
+function renderAlbumView(tracks: Track[], props: Partial<Parameters<typeof LibraryView>[0]> = {}) {
   // Passing `album` equal to the tracks' folder key opens the album view
   // directly, so the track rows are rendered without an extra folder click.
   return render(
@@ -80,20 +73,15 @@ function renderAlbumView(
       album={folderKey(tracks[0].uri)}
       onAlbumChange={() => {}}
       {...props}
-    />,
+    />
   );
 }
 
 // Find a track row by its stable data-track-id, waiting for the async library
 // load to render it.
-async function rowForTrack(
-  container: HTMLElement,
-  id: number,
-): Promise<HTMLElement> {
+async function rowForTrack(container: HTMLElement, id: number): Promise<HTMLElement> {
   return waitFor(() => {
-    const row = container.querySelector<HTMLElement>(
-      `li[data-track-id="${id}"]`,
-    );
+    const row = container.querySelector<HTMLElement>(`li[data-track-id="${id}"]`);
     if (!row) throw new Error(`row for track ${id} not rendered yet`);
     return row;
   });
@@ -135,7 +123,7 @@ describe("LibraryView track click (issue #32)", () => {
     await waitFor(() =>
       expect(clearAndPlay).toHaveBeenCalledWith([
         { uri: track.uri, start: 12.5, end: 200, track_id: 42 },
-      ]),
+      ])
     );
   });
 
@@ -149,7 +137,7 @@ describe("LibraryView track click (issue #32)", () => {
     await waitFor(() =>
       expect(clearAndPlay).toHaveBeenCalledWith([
         { uri: track.uri, start: undefined, end: undefined, track_id: 3 },
-      ]),
+      ])
     );
   });
 
@@ -174,7 +162,7 @@ describe("LibraryView track click (issue #32)", () => {
     await waitFor(() =>
       expect(clearAndPlay).toHaveBeenCalledWith([
         { uri: third.uri, start: undefined, end: undefined, track_id: 3 },
-      ]),
+      ])
     );
   });
 
@@ -191,28 +179,21 @@ describe("LibraryView track click (issue #32)", () => {
 
     await waitFor(() =>
       expect(
-        container.querySelector<HTMLElement>(`li[data-track-id="${track.id}"]`)!
-          .className,
-      ).toContain("Playing"),
+        container.querySelector<HTMLElement>(`li[data-track-id="${track.id}"]`)!.className
+      ).toContain("Playing")
     );
   });
 
   it("keeps the library visible when clear-and-play fails", async () => {
     const track = makeTrack();
     library.mockResolvedValue([track]);
-    clearAndPlay.mockRejectedValueOnce(
-      new Error("track is outside MPD music_directory"),
-    );
+    clearAndPlay.mockRejectedValueOnce(new Error("track is outside MPD music_directory"));
 
     const { container, findByText } = renderAlbumView([track]);
     fireEvent.click(await rowForTrack(container, track.id));
 
-    expect(
-      await findByText("track is outside MPD music_directory"),
-    ).toBeTruthy();
-    expect(
-      container.querySelector(`li[data-track-id="${track.id}"]`),
-    ).toBeTruthy();
+    expect(await findByText("track is outside MPD music_directory")).toBeTruthy();
+    expect(container.querySelector(`li[data-track-id="${track.id}"]`)).toBeTruthy();
   });
 
   it("surfaces an error when clear-and-play fails", async () => {
@@ -228,16 +209,13 @@ describe("LibraryView track click (issue #32)", () => {
   it("paints the saved snapshot before replacing it with live data", async () => {
     const cached = makeTrack({ id: 1, title: "Cached title" });
     const live = makeTrack({ id: 2, title: "Live title" });
-    localStorage.setItem(
-      "oxide:library:v1",
-      JSON.stringify({ tracks: [cached] }),
-    );
+    localStorage.setItem("oxide:library:v1", JSON.stringify({ tracks: [cached] }));
 
     let resolveLibrary: (tracks: Track[]) => void = () => {};
     library.mockReturnValue(
       new Promise<Track[]>((resolve) => {
         resolveLibrary = resolve;
-      }),
+      })
     );
 
     const view = renderAlbumView([cached]);
@@ -247,5 +225,23 @@ describe("LibraryView track click (issue #32)", () => {
     resolveLibrary([live]);
     expect(await view.findByText("Live title")).toBeTruthy();
     expect(view.container.querySelector('[data-track-id="1"]')).toBeNull();
+  });
+
+  it("opens Album info with the album's full path and available metadata", async () => {
+    const track = makeTrack({
+      path: "/srv/music/Diana Krall - The Girl In The Other Room/01 Stop This World.m4a",
+      year: 2004,
+      genre: "Jazz",
+    });
+    library.mockResolvedValue([track]);
+
+    const view = renderAlbumView([track]);
+    fireEvent.click(await view.findByLabelText("Album actions"));
+    fireEvent.click(await view.findByText("Album info"));
+
+    expect(await view.findByRole("dialog", { name: "The Girl In The Other Room" })).toBeTruthy();
+    expect(view.getByText("/srv/music/Diana Krall - The Girl In The Other Room")).toBeTruthy();
+    expect(view.getByText("2004")).toBeTruthy();
+    expect(view.getByText("Jazz")).toBeTruthy();
   });
 });

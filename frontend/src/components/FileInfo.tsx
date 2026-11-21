@@ -18,26 +18,20 @@ function Row({ label, value }: { label: string; value: string | null }) {
 }
 
 export function FileInfo({ track, onClose }: Props) {
-  const mtime = track.file_mtime
-    ? new Date(track.file_mtime * 1000).toLocaleString()
-    : null;
+  const mtime = track.file_mtime ? new Date(track.file_mtime * 1000).toLocaleString() : null;
 
   return (
     <div className={styles.trackMenuModal} onClick={onClose}>
       <div className={styles.fileInfoBox} onClick={(e) => e.stopPropagation()}>
         <div className={styles.fileInfoHead}>
           <span className={styles.fileInfoTitle}>{displayTitle(track)}</span>
-          <button
-            className={styles.trackMenuClose}
-            onClick={onClose}
-            aria-label="Close"
-          >
+          <button className={styles.trackMenuClose} onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
 
         <div className={styles.fileInfoSection}>Location</div>
-        <Row label="File" value={track.path} />
+        <Row label="Full path" value={track.path} />
         <Row label="URI" value={track.uri} />
         <Row label="Modified" value={mtime} />
 
@@ -46,18 +40,9 @@ export function FileInfo({ track, onClose }: Props) {
         {track.format || track.sample_rate ? (
           <Row label="Quality" value={audioQuality(track)} />
         ) : null}
-        <Row
-          label="Sample rate"
-          value={track.sample_rate ? `${track.sample_rate} Hz` : null}
-        />
-        <Row
-          label="Bit depth"
-          value={track.bit_depth ? `${track.bit_depth}-bit` : null}
-        />
-        <Row
-          label="Channels"
-          value={track.channels ? String(track.channels) : null}
-        />
+        <Row label="Sample rate" value={track.sample_rate ? `${track.sample_rate} Hz` : null} />
+        <Row label="Bit depth" value={track.bit_depth ? `${track.bit_depth}-bit` : null} />
+        <Row label="Channels" value={track.channels ? String(track.channels) : null} />
         <Row label="Duration" value={fmtTime(track.duration)} />
         {track.cue_index !== null ? (
           <Row label="CUE track" value={String(track.cue_index)} />
