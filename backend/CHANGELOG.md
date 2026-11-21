@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.2](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.23.1...oxide-player-v0.23.2) (2026-11-21)
+
+
+### Bug Fixes
+
+* album info ([567d32f](https://github.com/OxideAI/oxide-player/commit/567d32f63f50edb5a38dba66722d858ce0438f1d))
+
 ## [0.23.1](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.23.0...oxide-player-v0.23.1) (2026-11-01)
 
 
