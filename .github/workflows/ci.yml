@@ -69,7 +69,6 @@ jobs:
       - name: Test
         run: npm test
 
-
   installer:
     name: Release configuration checks
     runs-on: ubuntu-latest
@@ -79,5 +78,7 @@ jobs:
         run: tests/install-release-assets.sh
       - name: Test reinstall preserves user config
         run: tests/install-config-preserve.sh
+      - name: Test permission failures do not abort installation
+        run: bash tests/install-permissions.sh
       - name: Test release-please configuration
         run: tests/release-please-config.sh

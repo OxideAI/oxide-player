@@ -98,6 +98,12 @@ die()  { printf '\033[1;31m[oxide]\033[0m %s\n' "$*" >&2; exit 1; }
 
 run() { log "+ $*"; "$@"; }
 
+# Mounted libraries can reject Unix ownership/mode changes. Keep these
+# adjustments best-effort without disabling errexit for the rest of setup.
+run_permissions() {
+  run "$@" || warn "Could not set permissions ($*); continuing."
+}
+
 need_root() {
   [ "$(id -u)" -eq 0 ] || die "Run as root (e.g. sudo bash)."
 }
@@ -806,7 +812,7 @@ setup_user_dirs() {
   if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     run useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
   fi
-  run usermod -aG audio "$SERVICE_USER" || true
+  run_permissions usermod -aG audio "$SERVICE_USER"
   # SFTP/SCP lands as the admin user (stojce), not oxide. Keep every
   # distinct audio user group-writable-friendly: if the music mount is
   # FAT-family, patch its fstab entry to fmask=0113,dmask=0002 so members
@@ -818,7 +824,7 @@ setup_user_dirs() {
   if id stojce >/dev/null 2>&1 && ! id -nG stojce 2>/dev/null | tr ' ' '\n' | grep -qxF audio; then
     if findmnt -n -o FSTYPE --target "$MPD_MUSIC_DIR" 2>/dev/null | grep -qE 'vfat|exfat|ntfs|fuse' \
       || awk -v mp="$MPD_MUSIC_DIR" '$2==mp {print $3}' /proc/mounts 2>/dev/null | grep -qE 'vfat|exfat|ntfs|fuse'; then
-      run usermod -aG audio stojce || true
+      run_permissions usermod -aG audio stojce
     fi
   fi
 
@@ -830,7 +836,7 @@ setup_user_dirs() {
     if [ -d "$_libdir" ]; then
       _grp="$(stat -c '%G' "$_libdir" 2>/dev/null || true)"
       if [ -n "$_grp" ] && [ "$_grp" != "root" ] && ! groups "$SERVICE_USER" | tr ' ' '\n' | grep -qxF "$_grp"; then
-        run usermod -aG "$_grp" "$SERVICE_USER"
+        run_permissions usermod -aG "$_grp" "$SERVICE_USER"
       fi
     fi
   done
@@ -839,17 +845,16 @@ setup_user_dirs() {
   run mkdir -p "$MPD_MUSIC_DIR"
 
   run mkdir -p "$DATA_DIR/covers" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
-  run chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
-  run chown -R "$SERVICE_USER:$SERVICE_USER" "$MPD_MUSIC_DIR" 2>/dev/null || true
+  run_permissions chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" "$CONFIG_DIR" "$(dirname "$CAMILLADSP_CONFIG")"
+  run_permissions chown -R "$SERVICE_USER:$SERVICE_USER" "$MPD_MUSIC_DIR"
   # Normalize the music tree so the service user AND MPD (a separate `mpd`
   # system user) can traverse and read it. Non-destructive — only adds
   # read/traverse bits — but repairs trees copied with root ownership and
   # mode 700, which would otherwise scan as an empty library (the scanner
   # reports those as "cannot read library directory" warnings in the log).
   # No-op on vfat/exfat (chmod is emulated via masks).
-  run chmod -R u+rwX,go+rX "$MPD_MUSIC_DIR" 2>/dev/null || \
-    warn "could not normalize permissions on $MPD_MUSIC_DIR"
-  run chmod 755 "$DATA_DIR"
+  run_permissions chmod -R u+rwX,go+rX "$MPD_MUSIC_DIR"
+  run_permissions chmod 755 "$DATA_DIR"
 }
 
 setup_hostname() {
@@ -915,11 +920,11 @@ SAMBAEOF
    # exfat-fuse/NTFS-3g reject and network-side folder creation always fails.
    store dos attributes = no
 SHAREEOF
-  run chown "$SERVICE_USER:$SERVICE_USER" "$SAMBA_SHARES_CONFIG"
+  run_permissions chown "$SERVICE_USER:$SERVICE_USER" "$SAMBA_SHARES_CONFIG"
 
   # Ensure the music dir exists with correct ownership
-  run chown -R "$SERVICE_USER:$SERVICE_USER" "$share_path"
-  run chmod 755 "$share_path"
+  run_permissions chown -R "$SERVICE_USER:$SERVICE_USER" "$share_path"
+  run_permissions chmod 755 "$share_path"
 
   # Enable and restart smbd
   run systemctl enable smbd || true
