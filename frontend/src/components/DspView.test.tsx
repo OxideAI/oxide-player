@@ -36,6 +36,36 @@ describe("DspView preamp and imports", () => {
     });
   });
 
+  it("keeps the first edit of an unsaved selected output profile", async () => {
+    // A different output already has a saved profile; this selected one does not.
+    const output: DeviceOutput = {
+      id: 1,
+      name: "USB DAC",
+      enabled: true,
+      role: "playback",
+      selectable: true,
+      selection_key: "alsa:USB DAC",
+      configured: true,
+      available: true,
+      connected: null,
+      active: true,
+      dsp_supported: true,
+      dsp_enabled: false,
+      dsp_device: "hw:USB,0",
+    };
+    render(<DspView selectedOutput={output} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit EQ and resampling" }));
+    const preamp = await screen.findByRole("spinbutton", { name: "Preamp gain (dB)" });
+    fireEvent.change(preamp, { target: { value: "-6.5" } });
+    await waitFor(() => expect((preamp as HTMLInputElement).value).toBe("-6.5"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(apiMock.setDsp).toHaveBeenCalledWith(
+        expect.objectContaining({ device: "hw:USB,0", preamp: -6.5 })
+      )
+    );
+  });
+
   it("saves preamp gain in the DSP profile", async () => {
     render(<DspView />);
     const preamp = await screen.findByRole("spinbutton", {
@@ -50,7 +80,7 @@ describe("DspView preamp and imports", () => {
         device: "DAC",
         preamp: -6.5,
         eq_bands: [],
-      }),
+      })
     );
   });
 
@@ -60,7 +90,7 @@ describe("DspView preamp and imports", () => {
     const file = new File(
       ["Preamp: -0.7 dB\nFilter 1: ON PK Fc 1000 Hz Gain +2 dB Q 1.2\n"],
       "speaker-eq.txt",
-      { type: "text/plain" },
+      { type: "text/plain" }
     );
     fireEvent.change(screen.getByLabelText("DSP settings file"), {
       target: { files: [file] },
@@ -74,8 +104,8 @@ describe("DspView preamp and imports", () => {
           screen.getByRole("spinbutton", {
             name: "Preamp gain (dB)",
           }) as HTMLInputElement
-        ).value,
-      ).toBe("-0.7"),
+        ).value
+      ).toBe("-0.7")
     );
     expect(screen.getByText(/Imported 1 filter/)).toBeTruthy();
 
@@ -85,8 +115,8 @@ describe("DspView preamp and imports", () => {
         expect.objectContaining({
           preamp: -0.7,
           eq_bands: [{ type: "peaking", freq: 1000, gain: 2, q: 1.2 }],
-        }),
-      ),
+        })
+      )
     );
   });
 
@@ -98,9 +128,7 @@ describe("DspView preamp and imports", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import URL" }));
 
     await waitFor(() =>
-      expect(apiMock.importDspUrl).toHaveBeenCalledWith(
-        "https://example.test/eq.txt",
-      ),
+      expect(apiMock.importDspUrl).toHaveBeenCalledWith("https://example.test/eq.txt")
     );
     await waitFor(() =>
       expect(
@@ -108,8 +136,8 @@ describe("DspView preamp and imports", () => {
           screen.getByRole("spinbutton", {
             name: "Preamp gain (dB)",
           }) as HTMLInputElement
-        ).value,
-      ).toBe("-3"),
+        ).value
+      ).toBe("-3")
     );
     expect(screen.getByText(/Imported 1 filter/)).toBeTruthy();
   });
@@ -122,11 +150,11 @@ describe("DspView preamp and imports", () => {
           { type: "peaking", freq: 1000, gain: 2, q: 1.2 },
           { type: "low_shelf", freq: 80, gain: -3.5, q: 0.7 },
         ],
-      }),
+      })
     ).toBe(
       "Preamp: -0.70 dB\n\n" +
         "Filter  1: ON PK Fc 1000.00 Hz Gain +2.00 dB Q 1.20\n" +
-        "Filter  2: ON LS Fc 80.00 Hz Gain -3.50 dB Q 0.70\n",
+        "Filter  2: ON LS Fc 80.00 Hz Gain -3.50 dB Q 0.70\n"
     );
   });
 
@@ -143,18 +171,14 @@ describe("DspView preamp and imports", () => {
       configurable: true,
       value: revokeObjectURL,
     });
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(() => {});
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
     try {
       render(<DspView />);
       await screen.findByRole("spinbutton", { name: "Preamp gain (dB)" });
       fireEvent.click(screen.getByRole("button", { name: "Export .txt" }));
       expect(createObjectURL).toHaveBeenCalledOnce();
-      expect((createObjectURL.mock.calls[0][0] as Blob).type).toBe(
-        "text/plain;charset=utf-8",
-      );
+      expect((createObjectURL.mock.calls[0][0] as Blob).type).toBe("text/plain;charset=utf-8");
       expect(click).toHaveBeenCalledOnce();
       expect(revokeObjectURL).toHaveBeenCalledWith("blob:test");
     } finally {
@@ -223,11 +247,9 @@ describe("DspView route verification", () => {
           dsp_supported: false,
           diagnostic_code: "unsupported_output_type",
         })}
-      />,
+      />
     );
-    expect(
-      await screen.findByText("This output does not support DSP."),
-    ).toBeTruthy();
+    expect(await screen.findByText("This output does not support DSP.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
   });
 
@@ -248,22 +270,16 @@ describe("DspView route verification", () => {
       });
     const onRefresh = vi.fn();
     render(<DspView selectedOutput={output()} onRefresh={onRefresh} />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit EQ and resampling" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Edit EQ and resampling" }));
     const preamp = await screen.findByRole("spinbutton", {
       name: "Preamp gain (dB)",
     });
     fireEvent.change(preamp, { target: { value: "-4" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(apiMock.setDsp).toHaveBeenCalled());
-    expect(
-      await screen.findByText(/Saved, but the DSP route is not confirmed/),
-    ).toBeTruthy();
+    expect(await screen.findByText(/Saved, but the DSP route is not confirmed/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
-    expect(
-      await screen.findByText("Saved and reload-confirmed active."),
-    ).toBeTruthy();
+    expect(await screen.findByText("Saved and reload-confirmed active.")).toBeTruthy();
     expect(onRefresh).toHaveBeenCalledTimes(2);
   });
 
@@ -276,24 +292,16 @@ describe("DspView route verification", () => {
       dsp_device: "hw:Headphones,0",
     });
     const onSelectOutput = vi.fn();
-    const view = render(
-      <DspView selectedOutput={first} onSelectOutput={onSelectOutput} />,
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit EQ and resampling" }),
-    );
+    const view = render(<DspView selectedOutput={first} onSelectOutput={onSelectOutput} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit EQ and resampling" }));
     const preamp = await screen.findByRole("spinbutton", {
       name: "Preamp gain (dB)",
     });
     fireEvent.change(preamp, { target: { value: "-2" } });
-    view.rerender(
-      <DspView selectedOutput={second} onSelectOutput={onSelectOutput} />,
-    );
+    view.rerender(<DspView selectedOutput={second} onSelectOutput={onSelectOutput} />);
     expect(await screen.findByRole("dialog")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Keep editing" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Discard and switch" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Discard and switch" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Discard and switch" }));
     expect(onSelectOutput).toHaveBeenLastCalledWith(second.selection_key);

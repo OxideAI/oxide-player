@@ -1,3 +1,4 @@
+import { resolveAlbumKey } from "./albumIdentity";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { usePlayerStatus } from "./ws";
@@ -112,7 +113,7 @@ export function App() {
   const tab = route.tab;
   const [refreshToken, setRefreshToken] = useState(0);
   const [navOpen, setNavOpen] = useState(false);
-  const [kiosk] = useState(() => window.location.pathname === "/kiosk");
+  const [kiosk, setKiosk] = useState(() => window.location.pathname === "/kiosk");
   const overlayRef = useRef<HTMLDivElement>(null);
   const libraryTracks = useLibraryTracks(refreshToken);
 
@@ -138,7 +139,10 @@ export function App() {
   }, [navOpen]);
 
   useEffect(() => {
-    const onPop = () => setRoute(parsePath());
+    const onPop = () => {
+      setRoute(parsePath());
+      setKiosk(window.location.pathname === "/kiosk");
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -292,12 +296,22 @@ export function App() {
     onSearch: () => setSearchOpen(true),
   });
 
-  const openAlbum = useCallback((album: string) => {
-    const next: Route = { tab: "library", album, libraryView: "albums", folderPath: null };
-    setRoute(next);
-    window.history.pushState(null, "", buildPath(next));
-    setNavOpen(false);
-  }, []);
+  const openAlbum = useCallback(
+    (reference: string, trackId?: number) => {
+      const album = resolveAlbumKey(reference, libraryTracks.tracks, trackId);
+      if (album === null) {
+        setError("This album exists in multiple library sources. Open it from the library.");
+        return;
+      }
+      const next: Route = { tab: "library", album, libraryView: "albums", folderPath: null };
+      setRoute(next);
+      window.history.pushState(null, "", buildPath(next));
+      setKiosk(false);
+      setSearchQuery(null);
+      setNavOpen(false);
+    },
+    [libraryTracks.tracks]
+  );
 
   const openFolder = useCallback((folderPath: string | null) => {
     const next: Route = { tab: "library", album: null, libraryView: "folders", folderPath };

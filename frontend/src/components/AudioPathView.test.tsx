@@ -31,6 +31,18 @@ const status = (overrides: Partial<PlayerStatus> = {}): PlayerStatus => ({
 });
 
 describe("AudioPathView route reduction", () => {
+  it.each(["playing", "paused", "stopped"] as const)(
+    "reports no output when every listening destination is disabled while %s",
+    (state) => {
+      const result = reduceAudioPath({
+        status: status({ state, outputs: [{ id: 1, name: "USB DAC", enabled: false }] }),
+        outputs: [output({ enabled: false, active: false })],
+        connected: true,
+      });
+      expect(result.state).toBe("zero-output");
+      expect(result.enabledOutputs).toEqual([]);
+    }
+  );
   it.each([
     ["playing", "healthy"],
     ["paused", "paused"],
@@ -41,7 +53,7 @@ describe("AudioPathView route reduction", () => {
         status: status({ state: playerState }),
         outputs: [output()],
         connected: true,
-      }).state,
+      }).state
     ).toBe(expected);
   });
 
@@ -52,7 +64,7 @@ describe("AudioPathView route reduction", () => {
         outputs: [output()],
         connected: false,
         connectionError: "socket closed",
-      }).state,
+      }).state
     ).toBe("stale");
   });
 
@@ -62,17 +74,17 @@ describe("AudioPathView route reduction", () => {
         status: status({ error: "No such song" }),
         outputs: [output()],
         connected: true,
-      }).state,
+      }).state
     ).toBe("mpd-error");
   });
 
   it("distinguishes unavailable, zero-output, and multiple-output states", () => {
-    expect(
-      reduceAudioPath({ status: null, outputs: [], connected: false }).state,
-    ).toBe("unavailable");
-    expect(
-      reduceAudioPath({ status: status(), outputs: [], connected: true }).state,
-    ).toBe("zero-output");
+    expect(reduceAudioPath({ status: null, outputs: [], connected: false }).state).toBe(
+      "unavailable"
+    );
+    expect(reduceAudioPath({ status: status(), outputs: [], connected: true }).state).toBe(
+      "zero-output"
+    );
     expect(
       reduceAudioPath({
         status: status({
@@ -81,12 +93,9 @@ describe("AudioPathView route reduction", () => {
             { id: 2, name: "Bedroom", enabled: true },
           ],
         }),
-        outputs: [
-          output(),
-          output({ id: 2, name: "Bedroom", selection_key: "alsa:Bedroom" }),
-        ],
+        outputs: [output(), output({ id: 2, name: "Bedroom", selection_key: "alsa:Bedroom" })],
         connected: true,
-      }).state,
+      }).state
     ).toBe("multiple-output");
   });
   it("reports a disconnected Bluetooth output even while MPD says playing", () => {
@@ -129,8 +138,6 @@ describe("AudioPathView route reduction", () => {
 
   it("uses stable selection identity rather than a numeric runtime id", () => {
     expect(stableOutputIdentity(output({ id: 4 }))).toBe("alsa:USB DAC");
-    expect(stableOutputIdentity(output({ id: 99 }))).toBe(
-      stableOutputIdentity(output({ id: 4 })),
-    );
+    expect(stableOutputIdentity(output({ id: 99 }))).toBe(stableOutputIdentity(output({ id: 4 })));
   });
 });

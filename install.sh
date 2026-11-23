@@ -955,8 +955,32 @@ setup_hostname() {
   fi
 }
 
+render_samba_shares() {
+  python3 - "$CONFIG_DIR/config.json" "$MPD_MUSIC_DIR" "$SERVICE_USER" <<'PYSHARES'
+import json, sys
+from pathlib import Path
+config, default, user = sys.argv[1:]
+folders = json.loads(Path(config).read_text()).get('library_dirs', [default]) if Path(config).exists() else [default]
+names = set()
+print('# Managed by oxide-player. Changes are replaced when library sources change.\n')
+for folder in folders:
+    if not isinstance(folder, str) or any(c in folder for c in '\n\r'):
+        raise ValueError('invalid shared folder path')
+    stem = ''.join(c if c.isascii() and (c.isalnum() or c in '_-') else '_' for c in Path(folder).name) or 'Library'
+    name = 'Music' if stem.lower() == 'music' else 'Oxide-' + stem
+    if name in names:
+        hashed = 0x811c9dc5
+        for byte in folder.encode(): hashed = ((hashed ^ byte) * 0x01000193) & 0xffffffff
+        name += f'-{hashed:08x}'
+    names.add(name)
+    escaped = folder.replace(chr(92), chr(92)*2).replace('"', chr(92)+'"')
+    print(f'[{name}]\npath = "{escaped}"\nbrowseable = yes\nread only = no\nguest ok = yes\nforce user = {user}\nforce group = {user}\ncreate mask = 0644\ndirectory mask = 0755\nstore dos attributes = no\nveto files = /._*/.DS_Store/\ndelete veto files = yes\n')
+PYSHARES
+}
+
 setup_samba() {
-  local share_path="$MPD_MUSIC_DIR"
+  local share_path="$MPD_MUSIC_DIR" shares
+  shares="$(render_samba_shares)" || return 1
 
   apt_install samba
 
@@ -981,23 +1005,9 @@ setup_samba() {
 SAMBAEOF
 
   run mkdir -p "$share_path" "$(dirname "$SAMBA_SHARES_CONFIG")"
-  cat > "$SAMBA_SHARES_CONFIG" <<SHAREEOF
-# Managed by oxide-player. The backend updates this file when library sources change.
+  printf '%s\n' "$shares" > "$SAMBA_SHARES_CONFIG.tmp"
+  mv "$SAMBA_SHARES_CONFIG.tmp" "$SAMBA_SHARES_CONFIG"
 
-[Music]
-   path = $share_path
-   browseable = yes
-   read only = no
-   guest ok = yes
-   force user = $SERVICE_USER
-   force group = $SERVICE_USER
-   create mask = 0644
-   directory mask = 0755
-   # Music libraries commonly live on FAT-family volumes (no xattrs/ADS);
-   # without this smbd mkdir goes through a ::TMPNAME stream temp name that
-   # exfat-fuse/NTFS-3g reject and network-side folder creation always fails.
-   store dos attributes = no
-SHAREEOF
   run_permissions chown "$SERVICE_USER:$SERVICE_USER" "$SAMBA_SHARES_CONFIG"
 
   # Ensure the music dir exists with correct ownership

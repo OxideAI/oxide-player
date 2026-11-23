@@ -62,6 +62,16 @@ step() {
   fi
 }
 
+kiosk_returns_to_library() {
+  "$AB" find role button click --name 'Back' >/dev/null 2>&1 || return 1
+  sleep 1
+  local destination
+  destination="$("$AB" get url 2>/dev/null)"
+  [ "$destination" = "${BASE%/}/" ] || [ "$destination" = "${BASE%/}/library" ]
+}
+export -f kiosk_returns_to_library
+if [ "${OXIDE_SMOKE_TEST:-0}" = 1 ]; then return 0; fi
+
 # --- preconditions ---------------------------------------------------------
 
 command -v "$AB" >/dev/null 2>&1 || { echo "agent-browser not found on PATH"; exit 2; }
@@ -134,15 +144,14 @@ step "playlists tab renders" \
 # --- 6. Settings tab (Devices/DSP embedded) --------------------------------
 
 step "settings tab renders" \
-  bash -c "$AB find role button click --name Settings >/dev/null 2>&1; sleep 1; snap_grep 'MPD host'"
+  bash -c "$AB find role button click --name Settings >/dev/null 2>&1; sleep 1; snap_grep 'Advanced settings'"
 
 # --- 7. Kiosk mode ---------------------------------------------------------
 
 step "kiosk mode opens" \
-  bash -c "timeout 20 $AB find role link click --name 'Open kiosk mode' >/dev/null 2>&1; sleep 1; $AB get url 2>/dev/null | grep -q '/kiosk'"
+  bash -c "timeout 20 $AB find text 'Advanced settings' click >/dev/null 2>&1; timeout 20 $AB find role link click --name 'Open kiosk mode' >/dev/null 2>&1; sleep 1; $AB get url 2>/dev/null | grep -q '/kiosk'"
 
-step "kiosk returns to library" \
-  bash -c "timeout 20 $AB find role link click --name 'Back to library' >/dev/null 2>&1; sleep 1; $AB get url 2>/dev/null | grep -q '127.0.0.1:8000/\$'"
+step "kiosk returns to library" kiosk_returns_to_library
 
 # --- 8. No console errors --------------------------------------------------
 

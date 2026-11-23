@@ -742,12 +742,15 @@ impl AppState {
             sample_rate: t.sample_rate,
             bit_depth: t.bit_depth,
             channels: t.channels,
-            duration: t.cue_index.and_then(|_| match (t.start_time, t.end_time) {
-                (Some(start), Some(end)) => Some((end - start).max(0.0)),
-                (Some(start), None) => t.duration.map(|d| (d - start).max(0.0)),
-                _ => t.duration,
-            }),
-            cue_start: t.cue_index.and(t.start_time),
+            duration: t.cue_index.and(t.duration),
+            cue_start: if uri.as_deref().is_some_and(|uri| {
+                uri.rsplit_once(".cue/track")
+                    .is_some_and(|(_, index)| index.parse::<u32>().is_ok())
+            }) {
+                None
+            } else {
+                t.cue_index.and(t.start_time)
+            },
             art_url: None,
         });
         // Fallback: MPD is playing a song but we couldn't resolve it from the
@@ -830,12 +833,27 @@ mod tests {
     use crate::mpd::{Mpd, MpdStatus};
     use std::path::Path;
 
-    async fn test_state() -> (AppState, LibraryDb) {
+    struct TestState {
+        state: AppState,
+        _root: tempfile::TempDir,
+    }
+    impl std::ops::Deref for TestState {
+        type Target = AppState;
+        fn deref(&self) -> &AppState {
+            &self.state
+        }
+    }
+
+    async fn test_state() -> (TestState, LibraryDb) {
         let db = LibraryDb::open(Path::new(":memory:")).unwrap();
         db.migrate().unwrap();
-        let cfg = Config::default_config();
+        let root = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            data_dir: root.path().to_path_buf(),
+            ..Config::default_config()
+        };
         let dsp = DspManager::new(
-            std::env::temp_dir().join("oxide_test_dsp.yaml"),
+            root.path().join("dsp.yaml"),
             None,
             "".to_string(),
             44100,
@@ -846,9 +864,84 @@ mod tests {
         let visualizer = VisualizerAnalyzer::new(&cfg);
         let bt = BluetoothManager::new().await;
         (
-            AppState::new(cfg, db.clone(), dsp, mpd, visualizer, bt, None),
+            TestState {
+                state: AppState::new(cfg, db.clone(), dsp, mpd, visualizer, bt, None),
+                _root: root,
+            },
             db,
         )
+    }
+
+    #[tokio::test]
+    async fn test_states_have_private_runtime_stores() {
+        let (first, _) = test_state().await;
+        let (second, _) = test_state().await;
+        let first_dir = first.config().await.data_dir;
+        let second_dir = second.config().await.data_dir;
+        assert_ne!(
+            first_dir,
+            Config::default_config().data_dir,
+            "test state uses the real runtime directory"
+        );
+        assert_ne!(first_dir, second_dir);
+        let second_stations = second.radio().list();
+        first.radio().remove(&first.radio().list()[0].id).unwrap();
+        assert_eq!(second.radio().list(), second_stations);
+        assert!(first_dir.is_dir());
+    }
+
+    #[tokio::test]
+    async fn final_cue_track_uses_split_duration_and_virtual_elapsed() {
+        let (state, db) = test_state().await;
+        db.insert_track(
+            "Album.flac",
+            "Album.flac",
+            Some("Finale"),
+            None,
+            Some("Album"),
+            None,
+            None,
+            None,
+            Some(2),
+            Some(80.0),
+            Some("FLAC"),
+            None,
+            None,
+            None,
+            None,
+            Some(2),
+            Some(100.0),
+            None,
+            Some(1),
+            None,
+        )
+        .unwrap();
+        for (uri, elapsed, cue_start) in [
+            ("Album.flac", 110.0, Some(100.0)),
+            ("Album.cue/track0002", 10.0, None),
+        ] {
+            let ms = MpdStatus {
+                state: crate::types::PlaybackState::Playing,
+                volume: Some(50),
+                elapsed,
+                duration: 80.0,
+                error: None,
+                current_uri: Some(uri.into()),
+                current_track: Some(2),
+                current_id: Some(7),
+                current_title: None,
+                random: false,
+            };
+            let song = state.resolve_current_song(&ms).await.unwrap();
+            assert_eq!(song.duration, Some(80.0));
+            assert_eq!(song.cue_start, cue_start);
+            assert_eq!(
+                song.cue_start
+                    .map(|start| elapsed - start)
+                    .unwrap_or(elapsed),
+                10.0
+            );
+        }
     }
 
     /// Regression: after a restart MPD resumes at the CUE address URI
@@ -892,8 +985,8 @@ mod tests {
         let ms = MpdStatus {
             state: PlaybackState::Playing,
             volume: Some(80),
-            elapsed: 120.0,
-            duration: 180.0,
+            elapsed: 20.0,
+            duration: 80.0,
             error: None,
             current_uri: Some("Music/Album.cue/track0002".to_string()),
             current_track: None,
@@ -909,7 +1002,11 @@ mod tests {
         assert_eq!(song.title.as_deref(), Some("Real Title"));
         assert!(song.has_cover, "cover metadata must survive resolution");
         assert_eq!(song.cover_key.as_deref(), Some("al_coverkey"));
-        assert_eq!(song.cue_start, Some(100.0));
+        assert_eq!(
+            song.cue_start, None,
+            "MPD virtual tracks already report split elapsed"
+        );
+        assert_eq!(song.duration, Some(80.0));
     }
 
     /// Regression: MPD reports URIs relative to its `music_directory`, while the
@@ -1014,7 +1111,7 @@ mod tests {
     async fn resolve_current_song_stream_carries_station_artwork() {
         let (state, _db) = test_state().await;
 
-        // test_state shares the real data dir; drop only this test's own
+        // Each test owns its runtime store; drop this test's own
         // leftovers from a previous run before adding (never other stations).
         for id in state.radio().list() {
             if id.url.contains("kiosk-art-test.example") {

@@ -32,19 +32,14 @@ export interface AudioPathReduction {
   message: string;
 }
 
-function liveOutput(
-  output: DeviceOutput,
-  status: PlayerStatus | null,
-): boolean {
+function liveOutput(output: DeviceOutput, status: PlayerStatus | null): boolean {
   const live = status?.outputs.find(
-    (candidate) => candidate.id === output.id || candidate.name === output.name,
+    (candidate) => candidate.id === output.id || candidate.name === output.name
   );
   return output.dsp_enabled || (live ? live.enabled : output.enabled);
 }
 
-export function stableOutputIdentity(
-  output: Pick<DeviceOutput, "selection_key" | "name">,
-): string {
+export function stableOutputIdentity(output: Pick<DeviceOutput, "selection_key" | "name">): string {
   return output.selection_key || `managed:${output.name}`;
 }
 
@@ -58,12 +53,10 @@ export function reduceAudioPath({
   detailsReady = true,
 }: AudioPathReductionInput): AudioPathReduction {
   const eligibleOutputs = outputs.filter(
-    (output) => output.role === "playback" && output.selectable,
+    (output) => output.role === "playback" && output.selectable
   );
   const runtimeOutputs = (status?.outputs ?? [])
-    .filter(
-      (output) => !["visualizer", "camilladsp-loopback"].includes(output.name),
-    )
+    .filter((output) => !["visualizer", "camilladsp-loopback"].includes(output.name))
     .map((output) => ({
       ...output,
       role: "playback" as const,
@@ -76,9 +69,9 @@ export function reduceAudioPath({
       dsp_supported: output.dsp_supported === true,
       dsp_enabled: output.dsp_enabled === true,
     }));
-  const enabledOutputs = (
-    detailsReady ? eligibleOutputs : runtimeOutputs
-  ).filter((output) => liveOutput(output, status));
+  const enabledOutputs = (detailsReady ? eligibleOutputs : runtimeOutputs).filter((output) =>
+    liveOutput(output, status)
+  );
 
   if (!status) {
     return {
@@ -86,8 +79,7 @@ export function reduceAudioPath({
       enabledOutputs,
       eligibleOutputs,
       message:
-        connectionError ??
-        "The player status is unavailable. Check the Oxide service and retry.",
+        connectionError ?? "The player status is unavailable. Check the Oxide service and retry.",
     };
   }
   if (
@@ -125,8 +117,15 @@ export function reduceAudioPath({
       state: "zero-output",
       enabledOutputs,
       eligibleOutputs,
-      message:
-        "No listening output is configured. Choose an output to send library playback to.",
+      message: "No listening output is configured. Choose an output to send library playback to.",
+    };
+  }
+  if (enabledOutputs.length === 0) {
+    return {
+      state: "zero-output",
+      enabledOutputs,
+      eligibleOutputs,
+      message: "No listening output is enabled. Choose an output to send playback to.",
     };
   }
   if (enabledOutputs.length > 1) {
@@ -134,13 +133,10 @@ export function reduceAudioPath({
       state: "multiple-output",
       enabledOutputs,
       eligibleOutputs,
-      message:
-        "Multiple playback outputs are enabled. Choose one route or resolve the extras.",
+      message: "Multiple playback outputs are enabled. Choose one route or resolve the extras.",
     };
   }
-  const disconnectedOutput = enabledOutputs.find(
-    (output) => output.connected === false,
-  );
+  const disconnectedOutput = enabledOutputs.find((output) => output.connected === false);
   if (disconnectedOutput) {
     return {
       state: "output-disconnected",
@@ -187,13 +183,11 @@ const stateLabels: Record<AudioPathState, string> = {
 };
 
 const diagnosticLabels: Record<string, string> = {
-  reload_error:
-    "Output changes are waiting for MPD or DSP reload confirmation.",
+  reload_error: "Output changes are waiting for MPD or DSP reload confirmation.",
   unsupported_output_type: "This output does not support DSP.",
   disconnected: "The configured output is disconnected.",
   inactive: "The output is configured but currently inactive.",
-  missing_profile:
-    "DSP is supported, but no profile is applied to this output.",
+  missing_profile: "DSP is supported, but no profile is applied to this output.",
   unknown_output: "This output is visible for technical inspection only.",
 };
 
@@ -224,7 +218,7 @@ export function AudioPathView({
   const reduction = reduceAudioPath(reductionInput);
   const selected =
     reduction.eligibleOutputs.find(
-      (output) => stableOutputIdentity(output) === selectedOutputKey,
+      (output) => stableOutputIdentity(output) === selectedOutputKey
     ) ?? null;
   const [confirmResolve, setConfirmResolve] = useState(false);
   const [confirmReconnect, setConfirmReconnect] = useState(false);
@@ -256,10 +250,7 @@ export function AudioPathView({
 
   return (
     <div className={styles.wrap}>
-      <section
-        className={styles.routeCard}
-        aria-labelledby="audio-path-heading"
-      >
+      <section className={styles.routeCard} aria-labelledby="audio-path-heading">
         <div className={styles.routeHead}>
           <div>
             <span className={styles.eyebrow}>Playback path</span>
@@ -267,9 +258,7 @@ export function AudioPathView({
               Library → output
             </h2>
           </div>
-          <span
-            className={`${styles.state} ${styles[`state_${reduction.state}`]}`}
-          >
+          <span className={`${styles.state} ${styles[`state_${reduction.state}`]}`}>
             {stateLabels[reduction.state]}
           </span>
         </div>
@@ -280,39 +269,30 @@ export function AudioPathView({
           <p className={styles.destination}>
             MPD output: <strong>{reduction.enabledOutputs[0].name}</strong>
             {" · "}
-            {reduction.enabledOutputs[0].dsp_enabled
-              ? "DSP route active"
-              : "enabled"}
+            {reduction.enabledOutputs[0].dsp_enabled ? "DSP route active" : "enabled"}
           </p>
         ) : reduction.enabledOutputs.length > 1 ? (
           <p className={styles.destination}>
-            Listening destination is unresolved until one output remains
-            enabled.
+            Listening destination is unresolved until one output remains enabled.
           </p>
         ) : (
           <p className={styles.destination}>No active listening destination.</p>
         )}
         {reduction.state === "healthy" && (
           <p className={styles.warning}>
-            MPD reports playback to an enabled output. Oxide cannot confirm
-            sound from the DAC itself.
+            MPD reports playback to an enabled output. Oxide cannot confirm sound from the DAC
+            itself.
           </p>
         )}
         {reduction.state === "multiple-output" && onResolveMultiple && (
-          <button
-            className={styles.primary}
-            onClick={() => setConfirmResolve(true)}
-          >
+          <button className={styles.primary} onClick={() => setConfirmResolve(true)}>
             Resolve extra outputs
           </button>
         )}
         {selected?.enabled &&
           selected.selection_key.toLowerCase().startsWith("alsa:") &&
           onReconnectOutput && (
-            <button
-              className={styles.secondary}
-              onClick={() => setConfirmReconnect(true)}
-            >
+            <button className={styles.secondary} onClick={() => setConfirmReconnect(true)}>
               Reconnect USB / DAC output
             </button>
           )}
@@ -323,8 +303,8 @@ export function AudioPathView({
         )}
         {deviceError && (
           <p className={styles.warning}>
-            Output details could not be refreshed. The route shown is based on
-            the live MPD snapshot only.
+            Output details could not be refreshed. The route shown is based on the live MPD snapshot
+            only.
           </p>
         )}
         {actionError && (
@@ -342,21 +322,18 @@ export function AudioPathView({
               Playback outputs
             </h3>
           </div>
-          <span className={styles.count}>
-            {reduction.eligibleOutputs.length}
-          </span>
+          <span className={styles.count}>{reduction.eligibleOutputs.length}</span>
         </div>
         {reduction.eligibleOutputs.length === 0 ? (
           <p className={styles.muted}>
-            No configured listening outputs are available. System outputs such
-            as the visualizer stay separate.
+            No configured listening outputs are available. System outputs such as the visualizer
+            stay separate.
           </p>
         ) : (
           <div className={styles.outputList}>
             {reduction.eligibleOutputs.map((output) => {
               const key = stableOutputIdentity(output);
-              const selectedClass =
-                key === selectedOutputKey ? styles.outputSelected : "";
+              const selectedClass = key === selectedOutputKey ? styles.outputSelected : "";
               return (
                 <button
                   type="button"
@@ -372,9 +349,7 @@ export function AudioPathView({
                         ? "Disconnected"
                         : output.connected === true
                           ? "Connected"
-                          : output.selection_key
-                                .toLowerCase()
-                                .startsWith("alsa:")
+                          : output.selection_key.toLowerCase().startsWith("alsa:")
                             ? "DAC connection not verified"
                             : output.available
                               ? "Available"
@@ -394,10 +369,7 @@ export function AudioPathView({
       </section>
 
       {selected && (
-        <section
-          className={styles.controls}
-          aria-labelledby="selected-output-heading"
-        >
+        <section className={styles.controls} aria-labelledby="selected-output-heading">
           <div className={styles.sectionHead}>
             <div>
               <span className={styles.eyebrow}>Selected output</span>
@@ -411,24 +383,17 @@ export function AudioPathView({
           </div>
           {selected.diagnostic_code && (
             <p className={styles.warning}>
-              {diagnosticLabels[selected.diagnostic_code] ??
-                selected.diagnostic_code}
+              {diagnosticLabels[selected.diagnostic_code] ?? selected.diagnostic_code}
             </p>
           )}
           <div className={styles.controlRow}>
             {onToggleOutput && (
-              <button
-                className={styles.secondary}
-                onClick={() => void onToggleOutput(selected)}
-              >
+              <button className={styles.secondary} onClick={() => void onToggleOutput(selected)}>
                 {selected.enabled ? "Disable output" : "Enable output"}
               </button>
             )}
             {onToggleDsp && selected.dsp_supported && (
-              <button
-                className={styles.secondary}
-                onClick={() => void onToggleDsp(selected)}
-              >
+              <button className={styles.secondary} onClick={() => void onToggleDsp(selected)}>
                 {selected.dsp_enabled ? "Disable DSP" : "Enable DSP"}
               </button>
             )}
@@ -469,8 +434,8 @@ export function AudioPathView({
           >
             <h3 id="reconnect-heading">Reconnect {selected.name}?</h3>
             <p>
-              Oxide will briefly disable and re-enable this MPD output. Playback
-              may pause while the DAC reconnects.
+              Oxide will briefly disable and re-enable this MPD output. Playback may pause while the
+              DAC reconnects.
             </p>
             <div className={styles.controlRow}>
               <button
@@ -507,8 +472,8 @@ export function AudioPathView({
           >
             <h3 id="resolve-heading">Disable extra outputs?</h3>
             <p>
-              This keeps {reduction.enabledOutputs[0]?.name ?? "one output"}{" "}
-              enabled and disables the other active routes.
+              This keeps {reduction.enabledOutputs[0]?.name ?? "one output"} enabled and disables
+              the other active routes.
             </p>
             <div className={styles.controlRow}>
               <button

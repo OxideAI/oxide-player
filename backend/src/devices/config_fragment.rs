@@ -278,6 +278,70 @@ pub struct ConfigFragmentManager {
     dir: PathBuf,
 }
 
+fn mpd_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn parse_mpd_string(value: &str) -> String {
+    let value = value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(value);
+    let mut chars = value.chars();
+    let mut out = String::new();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            } else {
+                out.push(ch);
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn validate_fragment(config: &DeviceConfig) -> io::Result<()> {
+    let validation = validate_config(
+        &config.name,
+        &config.output_type,
+        config.device.as_deref(),
+        config.format.as_deref(),
+        config.mixer_type.as_deref(),
+        config.mixer_device.as_deref(),
+        config.dop,
+    )
+    .merge(validate_buffer_fields(
+        config.buffer_time,
+        config.period_time,
+    ));
+    if let Some(error) = validation.into_error_string() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, error));
+    }
+    for value in [
+        Some(config.name.as_str()),
+        Some(config.output_type.as_str()),
+        config.device.as_deref(),
+        config.format.as_deref(),
+        config.mixer_type.as_deref(),
+        config.mixer_device.as_deref(),
+        config.mixer_control.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if value.chars().any(char::is_control) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MPD values must not contain control characters",
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl ConfigFragmentManager {
     /// Create a new manager for the given fragment directory. Creates the
     /// directory if it does not exist.
@@ -317,32 +381,38 @@ impl ConfigFragmentManager {
     /// Generate the `audio_output {}` block content.
     fn render_fragment(config: &DeviceConfig) -> String {
         let mut out = String::from("audio_output {\n");
-        out.push_str(&format!("    type        \"{}\"\n", config.output_type));
-        out.push_str(&format!("    name        \"{}\"\n", config.name));
+        out.push_str(&format!(
+            "    type        \"{}\"\n",
+            mpd_string(&config.output_type)
+        ));
+        out.push_str(&format!(
+            "    name        \"{}\"\n",
+            mpd_string(&config.name)
+        ));
 
         if let Some(device) = &config.device {
             if !device.trim().is_empty() {
-                out.push_str(&format!("    device      \"{}\"\n", device));
+                out.push_str(&format!("    device      \"{}\"\n", mpd_string(device)));
             }
         }
         if let Some(fmt) = &config.format {
             if !fmt.trim().is_empty() {
-                out.push_str(&format!("    format      \"{}\"\n", fmt));
+                out.push_str(&format!("    format      \"{}\"\n", mpd_string(fmt)));
             }
         }
         if let Some(mt) = &config.mixer_type {
             if !mt.trim().is_empty() {
-                out.push_str(&format!("    mixer_type  \"{}\"\n", mt));
+                out.push_str(&format!("    mixer_type  \"{}\"\n", mpd_string(mt)));
             }
         }
         if let Some(md) = &config.mixer_device {
             if !md.trim().is_empty() {
-                out.push_str(&format!("    mixer_device \"{}\"\n", md));
+                out.push_str(&format!("    mixer_device \"{}\"\n", mpd_string(md)));
             }
         }
         if let Some(mc) = &config.mixer_control {
             if !mc.trim().is_empty() {
-                out.push_str(&format!("    mixer_control \"{}\"\n", mc));
+                out.push_str(&format!("    mixer_control \"{}\"\n", mpd_string(mc)));
             }
         }
         if config.dop {
@@ -385,7 +455,7 @@ impl ConfigFragmentManager {
             }
             // Split on first whitespace after the key
             if let Some((key, rest)) = line.split_once(char::is_whitespace) {
-                let val = rest.trim().trim_matches('"');
+                let val = parse_mpd_string(rest.trim());
                 match key {
                     "name" => name = val.to_string(),
                     "type" => output_type = val.to_string(),
@@ -419,8 +489,21 @@ impl ConfigFragmentManager {
     /// Create a new device config fragment. Validates fields, sanitizes the
     /// name, and writes the file atomically (temp file + rename).
     pub fn create(&self, config: &DeviceConfig) -> io::Result<()> {
+        validate_fragment(config)?;
+        if sanitize_device_name(&config.name).is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "empty preset filename",
+            ));
+        }
         let filename = Self::filename_for(&config.name);
         let path = self.dir.join(&filename);
+        if path.exists() && self.get(&config.name).is_err() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "preset name collides with another output",
+            ));
+        }
         let content = Self::render_fragment(config);
         atomic_write(&path, &content)?;
         Ok(())
@@ -430,21 +513,38 @@ impl ConfigFragmentManager {
     /// find the existing file; if the sanitized name changed, the old file is
     /// removed and a new one is written.
     pub fn update(&self, old_name: &str, config: &DeviceConfig) -> io::Result<()> {
-        // Remove old file
+        validate_fragment(config)?;
+        self.get(old_name)?; // Confirm the display identity before replacing it.
+        if sanitize_device_name(&config.name).is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "empty preset filename",
+            ));
+        }
+        // Keep the old file until the replacement is safely on disk.
         let old_filename = Self::filename_for(old_name);
         let old_path = self.dir.join(&old_filename);
-        let _ = fs::remove_file(&old_path); // Ignore if already gone
 
         // Write new file
         let new_filename = Self::filename_for(&config.name);
         let new_path = self.dir.join(&new_filename);
+        if old_path != new_path && new_path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "preset destination already exists",
+            ));
+        }
         let content = Self::render_fragment(config);
         atomic_write(&new_path, &content)?;
+        if old_path != new_path && old_path.exists() {
+            fs::remove_file(&old_path)?;
+        }
         Ok(())
     }
 
     /// Delete a device config fragment by name.
     pub fn delete(&self, name: &str) -> io::Result<()> {
+        self.get(name)?;
         let filename = Self::filename_for(name);
         let path = self.dir.join(&filename);
         fs::remove_file(&path)?;
@@ -455,13 +555,19 @@ impl ConfigFragmentManager {
     pub fn get(&self, name: &str) -> io::Result<DeviceConfig> {
         let filename = Self::filename_for(name);
         let path = self.dir.join(&filename);
-        Self::parse_fragment(&path)
+        let config = Self::parse_fragment(&path)?;
+        if config.name != name {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "preset identity does not match",
+            ));
+        }
+        Ok(config)
     }
 
     /// Check if a fragment file exists for the given name.
     pub fn exists(&self, name: &str) -> bool {
-        let filename = Self::filename_for(name);
-        self.dir.join(&filename).exists()
+        self.get(name).is_ok()
     }
 
     /// Count existing fragment files.
@@ -494,6 +600,91 @@ fn atomic_write(path: &Path, content: &str) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    fn preset(name: &str) -> DeviceConfig {
+        DeviceConfig {
+            name: name.into(),
+            output_type: "alsa".into(),
+            device: Some("hw:USB".into()),
+            format: None,
+            mixer_type: None,
+            mixer_device: None,
+            mixer_control: None,
+            dop: false,
+            buffer_time: None,
+            period_time: None,
+        }
+    }
+
+    #[test]
+    fn quoted_preset_fields_round_trip_and_controls_are_rejected_before_write() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = ConfigFragmentManager::new(root.path().to_path_buf()).unwrap();
+        let mut config = preset("My \"DAC\"\\Room");
+        config.device = Some("hw:USB\\Path\"A".into());
+        config.mixer_control = Some("PCM \"Front\"\\Rear".into());
+        manager.create(&config).unwrap();
+        let content = fs::read_to_string(root.path().join("my-dac-room.conf")).unwrap();
+        assert!(
+            content.contains("name        \"My \\\"DAC\\\"\\\\Room\""),
+            "MPD name literal was not escaped: {content}"
+        );
+        let loaded = manager.get(&config.name).unwrap();
+        assert_eq!(loaded.device, config.device);
+        assert_eq!(loaded.mixer_control, config.mixer_control);
+        for field in ["type", "device", "mixer_control"] {
+            let mut invalid = config.clone();
+            match field {
+                "type" => invalid.output_type = "alsa\rbroken".into(),
+                "device" => invalid.device = Some("hw:USB\tbroken".into()),
+                _ => invalid.mixer_control = Some("PCM\nbroken".into()),
+            }
+            assert!(manager.update(&config.name, &invalid).is_err());
+            assert_eq!(
+                fs::read_to_string(root.path().join("my-dac-room.conf")).unwrap(),
+                content
+            );
+        }
+    }
+
+    #[test]
+    fn preset_name_collisions_never_overwrite_or_delete_another_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = ConfigFragmentManager::new(root.path().to_path_buf()).unwrap();
+        manager.create(&preset("USB DAC")).unwrap();
+        assert!(manager.create(&preset("USB-DAC")).is_err());
+        assert!(manager.get("USB-DAC").is_err());
+        assert!(manager.delete("USB-DAC").is_err());
+        manager.create(&preset("Other")).unwrap();
+        assert!(manager.update("Other", &preset("USB-DAC")).is_err());
+        assert_eq!(manager.get("USB DAC").unwrap().name, "USB DAC");
+        assert!(manager.get("Other").is_ok());
+        manager.create(&preset("USB DAC")).unwrap(); // Existing upsert callers remain valid.
+        assert_eq!(manager.list().len(), 2);
+    }
+
+    #[test]
+    fn failed_preset_replacement_keeps_the_original() {
+        for rename in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let manager = ConfigFragmentManager::new(root.path().to_path_buf()).unwrap();
+            manager.create(&preset("Original")).unwrap();
+            let name = if rename { "Renamed" } else { "Original" };
+            fs::create_dir(
+                root.path()
+                    .join(format!(".{}.conf.tmp", name.to_lowercase())),
+            )
+            .unwrap();
+            let mut replacement = preset(name);
+            replacement.device = Some("hw:Other".into());
+            assert!(manager.update("Original", &replacement).is_err());
+            assert_eq!(
+                manager.get("Original").unwrap().device.as_deref(),
+                Some("hw:USB")
+            );
+            assert_eq!(manager.list().len(), 1);
+        }
+    }
 
     fn temp_dir(test_name: &str) -> PathBuf {
         let pid = std::process::id();

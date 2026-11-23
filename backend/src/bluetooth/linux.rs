@@ -26,7 +26,7 @@ struct Inner {
     adapter_name: RwLock<Option<String>>,
     /// Address → BtDevice.  Populated from `adapter.device_addresses()`.
     devices: RwLock<HashMap<String, BtDevice>>,
-    discovery_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    discovery_handle: Mutex<super::discovery::DiscoverySession>,
     _event_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     input: BluetoothInputManager,
 }
@@ -52,7 +52,7 @@ impl BluetoothManager {
                 session: Mutex::new(None),
                 adapter_name: RwLock::new(None),
                 devices: RwLock::new(HashMap::new()),
-                discovery_handle: Mutex::new(None),
+                discovery_handle: Mutex::new(super::discovery::DiscoverySession::default()),
                 _event_task: Mutex::new(None),
                 input: BluetoothInputManager::new(),
             }),
@@ -257,18 +257,16 @@ impl BluetoothManager {
             tracing::debug!("Bluetooth discovery stopped");
         });
 
-        *self.inner.discovery_handle.lock().await = Some(handle);
+        self.inner.discovery_handle.lock().await.start(handle);
         Ok(())
     }
 
     pub async fn stop_discovery(&self) {
-        if let Some(h) = self.inner.discovery_handle.lock().await.take() {
-            h.abort();
-        }
+        self.inner.discovery_handle.lock().await.stop();
     }
 
     pub async fn is_discovering(&self) -> bool {
-        self.inner.discovery_handle.lock().await.is_some()
+        self.inner.discovery_handle.lock().await.is_active()
     }
 
     // -- pairing / bonding --

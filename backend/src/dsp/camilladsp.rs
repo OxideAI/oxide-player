@@ -34,6 +34,7 @@ pub struct DspManager {
 }
 
 struct DspInner {
+    route_lock: Mutex<()>,
     config_path: PathBuf,
     ws_url: Option<String>,
     ws_host: Option<String>,
@@ -62,6 +63,7 @@ impl DspManager {
             .unwrap_or((None, None));
         DspManager {
             inner: Arc::new(DspInner {
+                route_lock: Mutex::new(()),
                 config_path,
                 ws_url,
                 ws_host,
@@ -224,22 +226,74 @@ impl DspManager {
     /// the reload. Used by the status poller to self-heal the DSP route after
     /// CamillaDSP dropped (crash, BT disconnect, bluealsa restart).
     pub async fn restore_active_dsp_route(&self) -> Result<Option<DspApplyResult>> {
+        let _route = self.inner.route_lock.lock().await;
         let device = self.inner.active_device.lock().await.clone();
         let Some(device) = device else {
             return Ok(None);
         };
-        let result = self.apply_profile_for_device(&device).await?;
+        let mut profile = self
+            .get_profile(&device)
+            .await
+            .or(self.get_profile("default").await)
+            .unwrap_or_else(|| DspProfile::bit_perfect(&device));
+        profile.device = device;
+        let result = self.apply_profile_inner(profile).await?;
         Ok(Some(result))
     }
 
     pub async fn clear_active_device(&self) {
+        let _route = self.inner.route_lock.lock().await;
         *self.inner.active_device.lock().await = None;
+    }
+
+    /// Stop and confirm device release before MPD takes the playback endpoint.
+    pub async fn stop_processing(&self) -> Result<()> {
+        let _route = self.inner.route_lock.lock().await;
+        if let Some(url) = &self.inner.ws_url {
+            let connected = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                tokio_tungstenite::connect_async(url),
+            )
+            .await
+            .context("timed out connecting to stop CamillaDSP")?;
+            let mut ws = match connected {
+                Ok((ws, _)) => Some(ws),
+                Err(tokio_tungstenite::tungstenite::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::ConnectionRefused =>
+                {
+                    None
+                }
+                Err(error) => return Err(error).context("connect to stop CamillaDSP"),
+            };
+            if let Some(ws) = ws.as_mut() {
+                control_command(ws, "Stop").await?;
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let state = control_command(ws, "GetState").await?;
+                        if state["GetState"]["value"] == "Inactive" {
+                            break Ok::<(), anyhow::Error>(());
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                })
+                .await
+                .context("CamillaDSP did not release its device")??;
+                let _ = ws.close(None).await;
+            }
+        }
+        *self.inner.active_device.lock().await = None;
+        Ok(())
     }
 
     /// Persist the profile as a CamillaDSP config and signal a reload.
     /// Persist the profile as a CamillaDSP config and report whether the
     /// active route was confirmed by a successful reload acknowledgement.
     pub async fn apply_profile(&self, profile: DspProfile) -> Result<DspApplyResult> {
+        let _route = self.inner.route_lock.lock().await;
+        self.apply_profile_inner(profile).await
+    }
+
+    async fn apply_profile_inner(&self, profile: DspProfile) -> Result<DspApplyResult> {
         profile.validate().context("invalid dsp profile")?;
         let effective = profile.effective();
         let cfg = render_camilladsp_config(
@@ -417,6 +471,25 @@ impl DspManager {
         write.close().await.ok();
         Ok(confirmed)
     }
+}
+
+async fn control_command(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    command: &str,
+) -> Result<serde_json::Value> {
+    ws.send(Message::Text(serde_json::to_string(command)?.into()))
+        .await?;
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
+        .await
+        .context("CamillaDSP control response timed out")?
+        .ok_or_else(|| anyhow::anyhow!("CamillaDSP closed its control socket"))??;
+    let value: serde_json::Value = serde_json::from_str(reply.to_text()?)?;
+    if value[command]["result"] != "Ok" {
+        anyhow::bail!("CamillaDSP rejected {command}: {value}");
+    }
+    Ok(value)
 }
 
 /// Parse a `ws://host:port` (or `wss://...`) URL into its host and port.

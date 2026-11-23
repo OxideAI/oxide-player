@@ -202,7 +202,11 @@ impl Config {
             listen: "127.0.0.1:8000".to_string(),
             data_dir: cwd.join("data"),
             library_dirs: vec![cwd.join("music")],
-            static_dir: cwd.join("../frontend/dist"),
+            static_dir: if cwd.join("frontend").is_dir() {
+                cwd.join("frontend/dist")
+            } else {
+                cwd.join("../frontend/dist")
+            },
             camilladsp_config_path: cwd.join("data/camilladsp/config.yml"),
             camilladsp_ws_url: Some("ws://127.0.0.1:1234".to_string()),
             camilladsp_autostart: true,
@@ -319,6 +323,16 @@ pub struct Cli {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_workspace_defaults_find_the_frontend_built_by_dev_script() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("frontend/dist")).unwrap();
+        let cli = Cli::parse_from(["oxide-player"]);
+        let (config, path) = Config::load_from_dir(None, &cli, root.path()).unwrap();
+        assert!(path.is_none());
+        assert_eq!(config.static_dir, root.path().join("frontend/dist"));
+    }
     use std::fs;
     use std::path::Path;
 

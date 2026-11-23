@@ -145,12 +145,6 @@ impl RadioManager {
             ));
         }
         let artwork = normalize_artwork(artwork)?;
-        {
-            let stations = self.stations.read().expect("radio lock poisoned");
-            if stations.iter().any(|s| s.url == url) {
-                return Err(AppError::BadRequest("station url already exists".into()));
-            }
-        }
         let station = RadioStation {
             id: uuid::Uuid::new_v4().to_string(),
             name,
@@ -160,12 +154,13 @@ impl RadioManager {
                 .filter(|h| !h.is_empty()),
             artwork,
         };
-        self.stations
-            .write()
-            .expect("radio lock poisoned")
-            .push(station.clone());
-        self.save().map_err(|e| AppError::Library(e.to_string()))?;
-        Ok(station)
+        self.mutate(|stations| {
+            if stations.iter().any(|s| s.url == station.url) {
+                return Err(AppError::BadRequest("station url already exists".into()));
+            }
+            stations.push(station.clone());
+            Ok(station)
+        })
     }
 
     /// Update a station's display name and artwork without changing its stream.
@@ -175,43 +170,52 @@ impl RadioManager {
             return Err(AppError::BadRequest("station name is empty".into()));
         }
         let artwork = normalize_artwork(artwork)?;
-        let updated = {
-            let mut stations = self.stations.write().expect("radio lock poisoned");
+        self.mutate(|stations| {
             let station = stations
                 .iter_mut()
-                .find(|station| station.id == id)
+                .find(|s| s.id == id)
                 .ok_or_else(|| AppError::NotFound(format!("radio station {id}")))?;
             station.name = name;
             station.artwork = artwork;
-            station.clone()
-        };
-        self.save().map_err(|e| AppError::Library(e.to_string()))?;
-        Ok(updated)
+            Ok(station.clone())
+        })
     }
 
-    /// Remove a station by id. NotFound when the id is unknown.
     pub fn remove(&self, id: &str) -> AppResult<()> {
-        let removed = {
-            let mut stations = self.stations.write().expect("radio lock poisoned");
-            let before = stations.len();
-            stations.retain(|s| s.id != id);
-            stations.len() != before
-        };
-        if !removed {
-            return Err(AppError::NotFound(format!("radio station {id}")));
-        }
-        self.save().map_err(|e| AppError::Library(e.to_string()))?;
-        Ok(())
+        self.mutate(|stations| {
+            let index = stations
+                .iter()
+                .position(|s| s.id == id)
+                .ok_or_else(|| AppError::NotFound(format!("radio station {id}")))?;
+            stations.remove(index);
+            Ok(())
+        })
+    }
+
+    fn mutate<T>(
+        &self,
+        change: impl FnOnce(&mut Vec<RadioStation>) -> AppResult<T>,
+    ) -> AppResult<T> {
+        let mut stations = self.stations.write().expect("radio lock poisoned");
+        let mut candidate = stations.clone();
+        let result = change(&mut candidate)?;
+        self.save_stations(&candidate)
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        *stations = candidate;
+        Ok(result)
     }
 
     /// Atomic temp+rename write, same as `VizParams::save`.
     fn save(&self) -> Result<(), anyhow::Error> {
+        self.save_stations(&self.stations.read().expect("radio lock poisoned"))
+    }
+
+    fn save_stations(&self, stations: &[RadioStation]) -> Result<(), anyhow::Error> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| anyhow::anyhow!("create data dir: {e}"))?;
         }
-        let text =
-            serde_json::to_string_pretty(&*self.stations.read().expect("radio lock poisoned"))
-                .map_err(|e| anyhow::anyhow!("serialize radio stations: {e}"))?;
+        let text = serde_json::to_string_pretty(stations)
+            .map_err(|e| anyhow::anyhow!("serialize radio stations: {e}"))?;
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, text).map_err(|e| anyhow::anyhow!("write radio stations: {e}"))?;
         std::fs::rename(&tmp, &self.path)
@@ -223,6 +227,63 @@ impl RadioManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_radio_mutations_publish_one_consistent_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = std::sync::Arc::new(RadioManager::load(dir.path()));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|index| {
+                let manager = manager.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    manager
+                        .add(
+                            &format!("Station {index}"),
+                            &format!("https://example.com/{index}"),
+                            None,
+                            None,
+                        )
+                        .unwrap();
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(manager.list().len(), 11);
+        assert_eq!(RadioManager::load(dir.path()).list(), manager.list());
+    }
+
+    #[test]
+    fn failed_radio_writes_preserve_memory_disk_and_retry() {
+        for operation in ["add", "update", "delete"] {
+            let dir = tempfile::tempdir().unwrap();
+            let manager = RadioManager::load(dir.path());
+            let original = manager.list();
+            let id = &original[0].id;
+            std::fs::create_dir(dir.path().join("radio_stations.json.tmp")).unwrap();
+            let failed = match operation {
+                "add" => manager
+                    .add("Extra", "https://example.com/extra", None, None)
+                    .map(|_| ()),
+                "update" => manager.update(id, "Changed", None).map(|_| ()),
+                _ => manager.remove(id),
+            };
+            assert!(failed.is_err());
+            assert_eq!(
+                manager.list(),
+                original,
+                "{operation} changed memory despite write failure"
+            );
+            assert_eq!(RadioManager::load(dir.path()).list(), original);
+            std::fs::remove_dir(dir.path().join("radio_stations.json.tmp")).unwrap();
+            manager.remove(id).unwrap();
+            assert!(manager.get(id).is_none());
+        }
+    }
 
     fn temp_dir() -> tempfile::TempDir {
         tempfile::tempdir().expect("tempdir")

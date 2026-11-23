@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { PlayerStatus, QueueResponse } from "../types";
 import { api } from "../api";
-import { fmtTime, displayTitle, audioQuality, folderKey } from "../util";
+import { fmtTime, displayTitle, audioQuality } from "../util";
 import { useDragValue, useSmoothElapsed } from "./playerHooks";
 import {
   Visualizer,
@@ -23,7 +23,7 @@ interface Props {
   onPrev: () => void;
   onSeek: (seconds: number) => void;
   onVolume: (volume: number) => void;
-  onOpenAlbum: (album: string) => void;
+  onOpenAlbum: (album: string, trackId?: number) => void;
 }
 
 export function KioskView({
@@ -38,22 +38,14 @@ export function KioskView({
   const loading = status === null;
   const song = status?.current_song ?? null;
   const cover = artUrlFor(song);
-  const title = loading
-    ? "Loading…"
-    : song
-      ? displayTitle(song)
-      : "Nothing playing";
+  const title = loading ? "Loading…" : song ? displayTitle(song) : "Nothing playing";
   const duration = status?.duration ?? 0;
   const playing = status?.state === "playing";
 
-  const { elapsed: smoothElapsed, reset: resetElapsed } = useSmoothElapsed(
-    status,
-    duration,
-  );
+  const { elapsed: smoothElapsed, reset: resetElapsed } = useSmoothElapsed(status, duration);
   const seek = useDragValue(smoothElapsed, onSeek);
   const vol = useDragValue(status?.volume ?? 0, onVolume);
-  const volumeAvailable =
-    status?.volume !== null && status?.volume !== undefined;
+  const volumeAvailable = status?.volume !== null && status?.volume !== undefined;
 
   // The websocket is cheap when FFT capture is disabled and keeping it
   // connected avoids a config-request race hiding a live analyzer.
@@ -76,29 +68,15 @@ export function KioskView({
         const preset = VIZ_PRESETS[style];
         setVizParams({
           ...preset,
-          bloomAlpha:
-            typeof p.bloom_alpha === "number"
-              ? p.bloom_alpha
-              : preset.bloomAlpha,
-          bloomBeat:
-            typeof p.bloom_beat === "number" ? p.bloom_beat : preset.bloomBeat,
-          bloomEnergy:
-            typeof p.bloom_energy === "number"
-              ? p.bloom_energy
-              : preset.bloomEnergy,
-          bloomRadius:
-            typeof p.bloom_radius === "number"
-              ? p.bloom_radius
-              : preset.bloomRadius,
+          bloomAlpha: typeof p.bloom_alpha === "number" ? p.bloom_alpha : preset.bloomAlpha,
+          bloomBeat: typeof p.bloom_beat === "number" ? p.bloom_beat : preset.bloomBeat,
+          bloomEnergy: typeof p.bloom_energy === "number" ? p.bloom_energy : preset.bloomEnergy,
+          bloomRadius: typeof p.bloom_radius === "number" ? p.bloom_radius : preset.bloomRadius,
           barIdle: typeof p.bar_idle === "number" ? p.bar_idle : preset.barIdle,
           barPeak: typeof p.bar_peak === "number" ? p.bar_peak : preset.barPeak,
           barGap: typeof p.bar_gap === "number" ? p.bar_gap : preset.barGap,
-          barRadius:
-            typeof p.bar_radius === "number" ? p.bar_radius : preset.barRadius,
-          phaseSpeed:
-            typeof p.phase_speed === "number"
-              ? p.phase_speed
-              : preset.phaseSpeed,
+          barRadius: typeof p.bar_radius === "number" ? p.bar_radius : preset.barRadius,
+          phaseSpeed: typeof p.phase_speed === "number" ? p.phase_speed : preset.phaseSpeed,
           blur: typeof p.blur === "number" ? p.blur : preset.blur,
         });
       })
@@ -142,9 +120,7 @@ export function KioskView({
         className={styles.exit}
         onClick={() => {
           if (window.history.length > 1) window.history.back();
-          else
-            window.location.pathname =
-              window.location.pathname.replace(/\/kiosk$/, "") || "/";
+          else window.location.pathname = window.location.pathname.replace(/\/kiosk$/, "") || "/";
         }}
         title="Back"
         aria-label="Back"
@@ -178,7 +154,7 @@ export function KioskView({
             <button
               type="button"
               className={styles.subBtn}
-              onClick={() => onOpenAlbum(folderKey(song.uri))}
+              onClick={() => onOpenAlbum(song.uri, song.id)}
               title="Open album"
               aria-label={`Open album: ${[song.artist, song.album].filter(Boolean).join(" — ")}`}
             >
@@ -237,24 +213,12 @@ export function KioskView({
           >
             <span className={styles.playCore}>
               {playing ? (
-                <svg
-                  viewBox="0 0 24 24"
-                  width="30"
-                  height="30"
-                  fill="currentColor"
-                  stroke="none"
-                >
+                <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor" stroke="none">
                   <rect x="7" y="5.5" width="3.4" height="13" rx="1.2" />
                   <rect x="13.6" y="5.5" width="3.4" height="13" rx="1.2" />
                 </svg>
               ) : (
-                <svg
-                  viewBox="0 0 24 24"
-                  width="30"
-                  height="30"
-                  fill="currentColor"
-                  stroke="none"
-                >
+                <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor" stroke="none">
                   <path d="M8 5.5v13l11-6.5-11-6.5z" />
                 </svg>
               )}

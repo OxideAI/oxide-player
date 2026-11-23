@@ -10,15 +10,15 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Tag name to attach assets to (defaults to push tag)"
+        description: "Tag to build and attach assets to"
         type: string
-        required: false
+        required: true
   workflow_call:
     inputs:
       tag_name:
         description: "Tag name to attach assets to"
         type: string
-        required: false
+        required: true
 
 permissions:
   contents: write
@@ -41,6 +41,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          ref: refs/tags/${{ inputs.tag_name }}
+
+      - name: Verify release source
+        env:
+          RELEASE_TAG: ${{ inputs.tag_name }}
+        run: |
+          git check-ref-format "refs/tags/${RELEASE_TAG}"
+          TAG_COMMIT=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          test "$TAG_COMMIT" = "$(git rev-parse HEAD)"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -198,6 +207,6 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          tag_name: ${{ inputs.tag_name || github.ref_name }}
+          tag_name: ${{ inputs.tag_name }}
           files: ${{ steps.pkg.outputs.asset }}
           fail_on_unmatched_files: true

@@ -10,7 +10,7 @@ interface SearchViewProps {
   nowPlayingId: number | null;
   isPlaying: boolean;
   onBack: () => void;
-  onOpenAlbum: (album: string) => void;
+  onOpenAlbum: (album: string, trackId?: number) => void;
 }
 
 export function SearchView({
@@ -26,10 +26,7 @@ export function SearchView({
   const [playingUri, setPlayingUri] = useState<string | null>(null);
 
   const nowId =
-    nowPlayingId ??
-    (playingUri
-      ? (tracks.find((t) => t.uri === playingUri)?.id ?? null)
-      : null);
+    nowPlayingId ?? (playingUri ? (tracks.find((t) => t.uri === playingUri)?.id ?? null) : null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,11 +93,7 @@ export function SearchView({
               key={t.id}
               data-track-id={t.id}
               className={
-                nowId === t.id
-                  ? isPlaying
-                    ? styles.rowPlaying
-                    : styles.rowPaused
-                  : styles.row
+                nowId === t.id ? (isPlaying ? styles.rowPlaying : styles.rowPaused) : styles.row
               }
               onClick={() => play(t)}
             >
@@ -121,7 +114,7 @@ export function SearchView({
                 className={styles.tAlbum}
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (t.album) onOpenAlbum(t.album);
+                  onOpenAlbum(t.uri, t.id);
                 }}
               >
                 {t.album ?? "—"}

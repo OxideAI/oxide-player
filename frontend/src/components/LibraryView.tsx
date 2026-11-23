@@ -1,7 +1,8 @@
+import { libraryAlbumKeys } from "../albumIdentity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Track } from "../types";
 import { api, toPlayRef } from "../api";
-import { fmtTime, displayTitle, folderKey } from "../util";
+import { fmtTime, displayTitle } from "../util";
 import { readLibraryCache, writeLibraryCache } from "../libraryCache";
 import { TrackMenu } from "./TrackMenu";
 import { Reveal } from "./Reveal";
@@ -135,8 +136,9 @@ export function LibraryView({
 
   const folders = useMemo(() => {
     const map = new Map<string, Folder>();
+    const keys = libraryAlbumKeys(tracks);
     for (const t of tracks) {
-      const key = folderKey(t.uri);
+      const key = keys.get(t.id)!;
       let f = map.get(key);
       if (!f) {
         f = {

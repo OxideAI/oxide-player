@@ -365,7 +365,6 @@ async fn album_tags_get(
     State(s): State<AppState>,
     Path(album): Path<String>,
 ) -> AppResult<Json<Vec<AlbumTag>>> {
-    let album = percent_decode(&album);
     Ok(Json(s.db().album_tags(&album)?))
 }
 
@@ -387,7 +386,6 @@ async fn album_tags_put(
     Path(album): Path<String>,
     axum::Json(body): axum::Json<AlbumTagsPutBody>,
 ) -> AppResult<Json<Vec<AlbumTag>>> {
-    let album = percent_decode(&album);
     let key = body.key.trim();
     if key.is_empty() {
         return Err(AppError::BadRequest("tag key must not be empty".into()));
@@ -413,9 +411,6 @@ async fn album_tags_delete(
     State(s): State<AppState>,
     Path((album, key, value)): Path<(String, String, String)>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let album = percent_decode(&album);
-    let key = percent_decode(&key);
-    let value = percent_decode(&value);
     let removed = s.db().delete_user_tag(&album, &key, &value)?;
     if removed == 0 {
         // Distinguish "row exists but is system-owned" (400) from "no such
@@ -463,42 +458,24 @@ async fn album_tags_values(
     Ok(Json(s.db().user_tag_values_for_key(&q.key)?))
 }
 
-/// Axum Path segments are already UTF-8 percent-decoded, but `%2F` inside a
-/// segment stays encoded (Axum expands it to a literal `/` only in `{*rest}`
-/// captures). Decode manually so album names containing `/` still match the
-/// rows stored with the same encoded album name (`create_tag` path uses plain
-/// names through `list_albums`, which never percent-encodes).
-fn percent_decode(s: &str) -> String {
-    urldecode(s)
-}
-
-fn urldecode(s: &str) -> String {
-    percent_decoding(s)
-}
-
-fn percent_decoding(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = &s[i + 1..i + 3];
-            if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                out.push(byte);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 async fn cover(State(s): State<AppState>, Path(key): Path<String>) -> AppResult<Response> {
-    let dir = s.config().await.cover_cache_dir();
+    if key.is_empty()
+        || !key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err(AppError::NotFound(format!("cover {key}")));
+    }
+    let dir = tokio::fs::canonicalize(s.config().await.cover_cache_dir())
+        .await
+        .map_err(|_| AppError::NotFound(format!("cover {key}")))?;
     for ext in crate::library::scanner::COVER_EXTS {
-        let p = dir.join(format!("{key}.{ext}"));
+        let Ok(p) = tokio::fs::canonicalize(dir.join(format!("{key}.{ext}"))).await else {
+            continue;
+        };
+        if !p.starts_with(&dir) {
+            continue;
+        }
         if let Ok(bytes) = tokio::fs::read(&p).await {
             let ct = match *ext {
                 "jpg" => "image/jpeg",
@@ -540,15 +517,28 @@ async fn folder_cover(
     if folder.is_empty() {
         return Err(AppError::NotFound("cover folder".to_string()));
     }
-    let dir = std::path::Path::new(&folder);
+    let dir = tokio::fs::canonicalize(&folder)
+        .await
+        .map_err(|_| AppError::NotFound(format!("cover folder {folder}")))?;
     let cfg = s.config().await;
-    let in_library = cfg.library_dirs.iter().any(|d| dir.starts_with(d));
-    if !in_library {
+    let mut roots = Vec::new();
+    for root in &cfg.library_dirs {
+        if let Ok(root) = tokio::fs::canonicalize(root).await {
+            roots.push(root);
+        }
+    }
+    if !roots.iter().any(|root| dir.starts_with(root)) {
         return Err(AppError::NotFound(format!("cover folder {folder}")));
     }
-    let Some(local) = crate::library::scanner::find_local_cover(dir) else {
+    let Some(local) = crate::library::scanner::find_local_cover(&dir) else {
         return Err(AppError::NotFound(format!("cover folder {folder}")));
     };
+    let local = tokio::fs::canonicalize(local)
+        .await
+        .map_err(|_| AppError::NotFound(format!("cover folder {folder}")))?;
+    if !roots.iter().any(|root| local.starts_with(root)) {
+        return Err(AppError::NotFound(format!("cover folder {folder}")));
+    }
     let bytes = tokio::fs::read(&local)
         .await
         .map_err(|e| AppError::NotFound(format!("cover folder {folder}: {e}")))?;
@@ -909,7 +899,22 @@ struct SeekBody {
 }
 
 async fn seek(State(s): State<AppState>, Json(b): Json<SeekBody>) -> AppResult<StatusCode> {
-    s.mpd().seek(b.seconds).await?;
+    let ms = s.mpd().status().await?;
+    let db = s.db().clone();
+    let offset = tokio::task::spawn_blocking(move || {
+        ms.current_uri
+            .as_deref()
+            .filter(|uri| {
+                !uri.rsplit_once(".cue/track")
+                    .is_some_and(|(_, index)| index.parse::<u32>().is_ok())
+            })
+            .and_then(|uri| db.track_by_uri_and_elapsed(uri, ms.elapsed).ok().flatten())
+            .and_then(|track| track.start_time)
+            .unwrap_or(0.0)
+    })
+    .await
+    .map_err(|e| AppError::Library(e.to_string()))?;
+    s.mpd().seek(offset + b.seconds.max(0.0)).await?;
     Ok(StatusCode::OK)
 }
 
@@ -1040,7 +1045,7 @@ async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>
                 configured,
                 dsp_supported: capability_supported,
                 connected,
-                enabled: output.enabled,
+                enabled: output.enabled || dsp_route_active,
                 profile_configured,
                 reload_error: false,
             };
@@ -1080,7 +1085,7 @@ async fn devices(State(s): State<AppState>) -> AppResult<Json<Vec<DeviceOutput>>
                 configured,
                 available: true,
                 connected,
-                active: output.enabled,
+                active: output.enabled || dsp_route_active,
                 dsp_supported,
                 dsp_enabled,
                 dsp_reason,
@@ -1318,16 +1323,37 @@ async fn disable_device_dsp(
     State(s): State<AppState>,
     Path(id): Path<u32>,
 ) -> AppResult<StatusCode> {
-    let (target, _device, loopback) = dsp_output_target(&s, id).await?;
-    if loopback.enabled {
-        s.mpd().disable_output(loopback.id).await?;
+    let (target, device, loopback) = dsp_output_target(&s, id).await?;
+    if let Err(error) = s.dsp().stop_processing().await {
+        if loopback.enabled {
+            let _ = s.dsp().apply_profile_for_device(&device).await;
+        }
+        return Err(AppError::Dsp(error.to_string()));
     }
-    if !target.enabled {
-        s.mpd().enable_output(target.id).await?;
+    let switched: AppResult<()> = async {
+        if loopback.enabled {
+            s.mpd().disable_output(loopback.id).await?;
+        }
+        if !target.enabled {
+            s.mpd().enable_output(target.id).await?;
+        }
+        s.set_dsp_active_device(None)
+            .await
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        Ok(())
     }
-    s.set_dsp_active_device(None)
-        .await
-        .map_err(|e| AppError::Library(e.to_string()))?;
+    .await;
+    if let Err(error) = switched {
+        // Restore the previous route if output switching or persistence fails.
+        if !target.enabled {
+            let _ = s.mpd().disable_output(target.id).await;
+        }
+        if loopback.enabled {
+            let _ = s.dsp().apply_profile_for_device(&device).await;
+            let _ = s.mpd().enable_output(loopback.id).await;
+        }
+        return Err(error);
+    }
     let _ = s.mpd().clear_error().await;
     s.refresh_status().await;
     Ok(StatusCode::OK)
@@ -2152,6 +2178,377 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+
+    async fn routed_player(
+        ws_url: Option<String>,
+    ) -> (
+        AppState,
+        tempfile::TempDir,
+        tokio::task::JoinHandle<()>,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        routed_player_with_song(ws_url, None).await
+    }
+
+    async fn routed_player_with_song(
+        ws_url: Option<String>,
+        song: Option<(String, f64)>,
+    ) -> (
+        AppState,
+        tempfile::TempDir,
+        tokio::task::JoinHandle<()>,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let commands = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = commands.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut read = tokio::io::BufReader::new(read);
+            write.write_all(b"OK MPD 0.24.0\n").await.unwrap();
+            let mut target = false;
+            let mut loopback = true;
+            let mut line = String::new();
+            while read.read_line(&mut line).await.unwrap_or(0) > 0 {
+                let command = line.trim().to_string();
+                recorded.lock().unwrap().push(command.clone());
+                if command == "idle" {
+                    line.clear();
+                    continue;
+                }
+                let response = match command.as_str() {
+                    "outputs" => format!("outputid: 7\noutputname: USB DAC\noutputenabled: {}\noutputid: 8\noutputname: camilladsp-loopback\noutputenabled: {}\n", target as u8, loopback as u8),
+                    "enableoutput 7" => { target = true; String::new() },
+                    "disableoutput 7" => { target = false; String::new() },
+                    "enableoutput 8" => { loopback = true; String::new() },
+                    "disableoutput 8" => { loopback = false; String::new() },
+                    "status" => match &song {
+                        Some((_, elapsed)) => format!("state: play\nvolume: 50\nsong: 0\nelapsed: {elapsed}\nduration: 180\n"),
+                        None => "state: stop\nvolume: 50\n".into(),
+                    },
+                    "currentsong" => song.as_ref().map(|(uri, _)| format!("file: {uri}\nId: 7\nTrack: 2\nPos: 0\n")).unwrap_or_default(),
+                    _ => String::new(),
+                };
+                if write
+                    .write_all(format!("{response}OK\n").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                line.clear();
+            }
+        });
+        let cfg = Config {
+            data_dir: root.path().to_path_buf(),
+            default_dsp_profiles: vec![crate::dsp::profile::DspProfile::bit_perfect("hw:USB,0")],
+            ..Config::default_config()
+        };
+        let db = LibraryDb::open(std::path::Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let dsp = DspManager::new(
+            root.path().join("dsp.yaml"),
+            ws_url,
+            "hw:Loopback,1".into(),
+            44100,
+            false,
+            None,
+        );
+        let mpd = Mpd::with_connection("127.0.0.1", port, false, None, None);
+        let visualizer = crate::visualizer::VisualizerAnalyzer::new(&cfg);
+        let bt = crate::bluetooth::BluetoothManager::new().await;
+        let state = AppState::new(cfg, db, dsp, mpd, visualizer, bt, None);
+        state
+            .device_configs()
+            .create(&config("USB DAC", "alsa", Some("hw:USB,0")))
+            .unwrap();
+        tokio::task::yield_now().await;
+        (state, root, server, commands)
+    }
+
+    #[tokio::test]
+    async fn active_dsp_target_has_no_inactive_diagnostic() {
+        let (state, _root, server, commands) = routed_player(None).await;
+        let outputs = super::devices(axum::extract::State(state)).await.unwrap().0;
+        server.abort();
+        let target = outputs.iter().find(|o| o.id == 7).unwrap_or_else(|| {
+            panic!(
+                "outputs: {}; commands: {:?}",
+                serde_json::to_string(&outputs).unwrap(),
+                commands.lock().unwrap()
+            )
+        });
+        assert!(target.dsp_enabled);
+        assert_eq!(target.diagnostic_code, None);
+    }
+
+    #[tokio::test]
+    async fn cue_seeking_offsets_backing_files_but_not_virtual_tracks() {
+        for (uri, elapsed, expected) in [
+            ("Album.flac", 110.0, "seekcur 110.000"),
+            ("Album.cue/track0002", 10.0, "seekcur 10.000"),
+        ] {
+            let (state, _root, server, commands) =
+                routed_player_with_song(None, Some((uri.into(), elapsed))).await;
+            state
+                .db()
+                .insert_track(
+                    "Album.flac",
+                    "Album.flac",
+                    Some("Finale"),
+                    None,
+                    Some("Album"),
+                    None,
+                    None,
+                    None,
+                    Some(2),
+                    Some(80.0),
+                    Some("FLAC"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(2),
+                    Some(100.0),
+                    None,
+                    Some(1),
+                    None,
+                )
+                .unwrap();
+            super::seek(
+                axum::extract::State(state),
+                axum::Json(super::SeekBody { seconds: 10.0 }),
+            )
+            .await
+            .unwrap();
+            let recorded = commands.lock().unwrap().clone();
+            assert!(
+                recorded.iter().any(|command| command == expected),
+                "commands: {recorded:?}"
+            );
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn disabling_dsp_stops_processing_and_cannot_restore_the_disabled_route() {
+        for stop_ok in [true, false] {
+            use futures_util::{SinkExt, StreamExt};
+            use tokio_tungstenite::tungstenite::Message;
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let url = format!("ws://{}", listener.local_addr().unwrap());
+            let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let recorded = requests.clone();
+            let daemon = tokio::spawn(async move {
+                loop {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    while let Some(Ok(Message::Text(text))) = ws.next().await {
+                        let command: String = serde_json::from_str(&text).unwrap();
+                        recorded.lock().unwrap().push(command.clone());
+                        let reply = if command == "GetState" {
+                            serde_json::json!({"GetState":{"result":"Ok","value":"Inactive"}})
+                        } else {
+                            let result = if command == "Stop" && !stop_ok {
+                                "Error"
+                            } else {
+                                "Ok"
+                            };
+                            serde_json::json!({command: {"result": result}})
+                        };
+                        ws.send(Message::Text(reply.to_string().into()))
+                            .await
+                            .unwrap();
+                    }
+                }
+            });
+            let (state, _root, server, commands) = routed_player(Some(url)).await;
+            state
+                .dsp()
+                .apply_profile(crate::dsp::profile::DspProfile::bit_perfect("hw:USB,0"))
+                .await
+                .unwrap();
+            state
+                .set_dsp_active_device(Some("hw:USB,0".into()))
+                .await
+                .unwrap();
+            let result = super::disable_device_dsp(
+                axum::extract::State(state.clone()),
+                axum::extract::Path(7),
+            )
+            .await;
+            if stop_ok {
+                result.unwrap();
+                assert_eq!(state.config().await.dsp_active_device, None);
+                assert_eq!(state.dsp().active_device().await, None);
+                assert!(state
+                    .dsp()
+                    .restore_active_dsp_route()
+                    .await
+                    .unwrap()
+                    .is_none());
+                assert!(commands
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r == "enableoutput 7"));
+            } else {
+                assert!(result.is_err());
+                assert_eq!(
+                    state.config().await.dsp_active_device.as_deref(),
+                    Some("hw:USB,0")
+                );
+                assert_eq!(
+                    state.dsp().active_device().await.as_deref(),
+                    Some("hw:USB,0")
+                );
+                assert!(!commands
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r == "enableoutput 7"));
+            }
+            assert!(requests.lock().unwrap().iter().any(|r| r == "Stop"));
+            daemon.abort();
+            server.abort();
+        }
+    }
+
+    fn encode_segment(value: &str) -> String {
+        value
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cover_routes_reject_traversal_and_escaping_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("music");
+        let private = root.path().join("private");
+        let data = root.path().join("data");
+        for dir in [
+            &library,
+            &private,
+            &data.join("covers"),
+            &data.join("private"),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(private.join("cover.jpg"), b"private image").unwrap();
+        std::fs::write(data.join("private/secret.jpg"), b"private cache sibling").unwrap();
+        std::os::unix::fs::symlink(&private, library.join("link")).unwrap();
+        std::os::unix::fs::symlink(private.join("cover.jpg"), library.join("cover.jpg")).unwrap();
+        std::os::unix::fs::symlink(private.join("cover.jpg"), data.join("covers/escaped.jpg"))
+            .unwrap();
+        let config = Config {
+            data_dir: data,
+            library_dirs: vec![library.clone()],
+            ..Config::default_config()
+        };
+        let app = test_app_with_config(config).await;
+        let folders = [
+            library.join("../private"),
+            library.join("link"),
+            library.clone(),
+        ];
+        for folder in folders {
+            let url = format!(
+                "/api/library/cover/{}",
+                encode_segment(&folder.to_string_lossy())
+            );
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(url).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "outside image served for {}",
+                folder.display()
+            );
+        }
+        for key in ["../private/secret", "escaped"] {
+            let url = format!("/api/cover/{}", encode_segment(key));
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(url).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+    }
+
+    #[tokio::test]
+    async fn album_tag_paths_preserve_percent_unicode_and_slashes() {
+        let root = tempfile::tempdir().unwrap();
+        let config = Config {
+            data_dir: root.path().to_path_buf(),
+            ..Config::default_config()
+        };
+        let (app, state) = test_app_with_state(config).await;
+        for album in ["Album%20Name", "Album%💿", "Jazz / Live"] {
+            let key = "mood%🎵/kind";
+            let value = "calm%20 / 夜";
+            state
+                .db()
+                .set_user_tags(album, key, &[value.into()])
+                .unwrap();
+            let url = format!("/api/library/album-tags/{}", encode_segment(album));
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(&url).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let tags: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(tags[0]["album"], album, "album path was decoded twice");
+            let delete = format!("{url}/{}/{}", encode_segment(key), encode_segment(value));
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("DELETE")
+                        .uri(delete)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(state.db().album_tags(album).unwrap().is_empty());
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(&url)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({"key":key,"values":[value]}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(state.db().album_tags(album).unwrap()[0].value, value);
+        }
+    }
 
     async fn test_app() -> axum::Router {
         test_app_with_config(Config::default_config()).await

@@ -32,3 +32,6 @@ pub mod mpd_integration;
 
 /// Bluetooth A2DP Sink input management (ALSA loopback + CamillaDSP).
 pub mod input;
+
+#[cfg(any(target_os = "linux", test))]
+mod discovery;

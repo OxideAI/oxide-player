@@ -84,5 +84,11 @@ jobs:
         run: bash tests/install-music-bind.sh
       - name: Test generated kiosk launcher
         run: python3 tests/install-kiosk-launcher.py
+      - name: Test configured Samba shares
+        run: bash tests/install-samba-shares.sh
+      - name: Test release source ref
+        run: python3 tests/release-workflow.py
+      - name: Test kiosk smoke selectors
+        run: bash tests/ui-smoke-navigation.sh
       - name: Test release-please configuration
         run: tests/release-please-config.sh

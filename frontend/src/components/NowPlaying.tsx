@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import type { PlayerStatus, QueueResponse } from "../types";
 import { api } from "../api";
-import { fmtTime, displayTitle, audioQuality, folderKey, artUrlFor } from "../util";
+import { fmtTime, displayTitle, audioQuality, artUrlFor } from "../util";
 import { QueueView } from "./QueueView";
 import { fracFromPointer, useDragValue, useSmoothElapsed } from "./playerHooks";
 import styles from "./NowPlaying.module.css";
@@ -15,7 +15,7 @@ interface Props {
   onPrev: () => void;
   onSeek: (seconds: number) => void;
   onVolume: (volume: number) => void;
-  onOpenAlbum: (album: string) => void;
+  onOpenAlbum: (album: string, trackId?: number) => void;
 }
 export function NowPlaying({
   status,
@@ -113,7 +113,7 @@ export function NowPlaying({
             <button
               type="button"
               className={styles.artistBtn}
-              onClick={() => onOpenAlbum(folderKey(song.uri))}
+              onClick={() => onOpenAlbum(song.uri, song.id)}
               title="Open album"
               aria-label={`Open album: ${[song.artist, song.album].filter(Boolean).join(" — ")}`}
             >
@@ -158,6 +158,9 @@ export function NowPlaying({
             onKeyDown={(e) => {
               // Streams (duration 0) can't seek; sending seekcur against one
               // raises an MPD error that surfaces as a status banner.
+              if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+              e.preventDefault();
+              e.stopPropagation();
               if (duration <= 0) return;
               if (e.key === "ArrowRight") onSeek(Math.min(duration, displayElapsed + 5));
               if (e.key === "ArrowLeft") onSeek(Math.max(0, displayElapsed - 5));

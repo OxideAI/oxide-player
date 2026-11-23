@@ -746,7 +746,7 @@ impl LibraryDb {
                     if cleaned.is_empty() {
                         String::new()
                     } else {
-                        format!("{cleaned}*")
+                        format!("\"{}\"*", cleaned.replace('"', "\"\""))
                     }
                 })
                 .filter(|s| !s.is_empty())
@@ -1109,6 +1109,26 @@ fn row_to_track(r: &rusqlite::Row) -> Track {
 #[cfg(test)]
 mod search_tests {
     use super::*;
+
+    #[test]
+    fn search_treats_artist_punctuation_as_text() {
+        let db = fresh();
+        for (i, artist) in ["AC/DC", "Jean-Michel", "Miles \"Live\"", "Björk/夜"]
+            .iter()
+            .enumerate()
+        {
+            put(&db, &format!("/{i}.flac"), "Song", artist, "Album");
+            let found = db
+                .search(Some(artist), None, None, None)
+                .expect("punctuation must not be FTS syntax");
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].artist.as_deref(), Some(*artist));
+        }
+        assert!(db
+            .search(Some("\" OR *"), None, None, None)
+            .unwrap()
+            .is_empty());
+    }
 
     #[test]
     fn legacy_migration_preserves_tracks_tags_and_builds_search_index() {

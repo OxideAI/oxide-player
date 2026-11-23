@@ -52,9 +52,7 @@ function formatDspNumber(value: number, signed = false): string {
 }
 
 /** Serialize the import/export subset shared with AutoEQ-style text files. */
-export function formatDspSettings(
-  settings: Pick<DspProfile, "preamp" | "eq_bands">,
-): string {
+export function formatDspSettings(settings: Pick<DspProfile, "preamp" | "eq_bands">): string {
   const lines = [`Preamp: ${formatDspNumber(settings.preamp, true)} dB`, ""];
   const filterTypes: Record<EqBandType, string> = {
     peaking: "PK",
@@ -63,7 +61,7 @@ export function formatDspSettings(
   };
   settings.eq_bands.forEach((band, index) => {
     lines.push(
-      `Filter ${String(index + 1).padStart(2, " ")}: ON ${filterTypes[band.type]} Fc ${formatDspNumber(band.freq)} Hz Gain ${formatDspNumber(band.gain, true)} dB Q ${formatDspNumber(band.q)}`,
+      `Filter ${String(index + 1).padStart(2, " ")}: ON ${filterTypes[band.type]} Fc ${formatDspNumber(band.freq)} Hz Gain ${formatDspNumber(band.gain, true)} dB Q ${formatDspNumber(band.q)}`
     );
   });
   return `${lines.join("\n")}\n`;
@@ -92,7 +90,7 @@ function ProfileEditor({
       preamp: p.preamp,
       eq_bands: p.eq_bands.map((b) => ({ ...b, _id: nextBandId() })),
     }),
-    [],
+    []
   );
   const [draft, setDraft] = useState<Draft>(() => toRows(profile));
   const [saving, setSaving] = useState(false);
@@ -115,7 +113,7 @@ function ProfileEditor({
   // out from under the user; add/remove/type changes do an immediate sort.
   const sortedBands = useMemo(
     () => [...draft.eq_bands].sort((a, b) => a.freq - b.freq),
-    [draft.eq_bands],
+    [draft.eq_bands]
   );
 
   const update = (patch: Partial<Draft>) => {
@@ -143,10 +141,7 @@ function ProfileEditor({
     onDirtyChange?.(true);
     setDraft((d) => ({
       ...d,
-      eq_bands: [
-        ...d.eq_bands,
-        { type: "peaking", freq: 1000, gain: 0, q: 1, _id: nextBandId() },
-      ],
+      eq_bands: [...d.eq_bands, { type: "peaking", freq: 1000, gain: 0, q: 1, _id: nextBandId() }],
     }));
   };
 
@@ -166,7 +161,7 @@ function ProfileEditor({
       eq_bands: settings.eq_bands.map((b) => ({ ...b, _id: nextBandId() })),
     }));
     setImportNotice(
-      `Imported ${settings.eq_bands.length} filter${settings.eq_bands.length === 1 ? "" : "s"}. Click Apply to activate.`,
+      `Imported ${settings.eq_bands.length} filter${settings.eq_bands.length === 1 ? "" : "s"}. Click Apply to activate.`
     );
   };
 
@@ -213,12 +208,9 @@ function ProfileEditor({
       preamp: draft.preamp,
       eq_bands: sortedBands,
     });
-    const blobUrl = URL.createObjectURL(
-      new Blob([text], { type: "text/plain;charset=utf-8" }),
-    );
+    const blobUrl = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
     const link = document.createElement("a");
-    const name =
-      draft.device.trim().replace(/[^a-z0-9._-]+/gi, "-") || "dsp-settings";
+    const name = draft.device.trim().replace(/[^a-z0-9._-]+/gi, "-") || "dsp-settings";
     link.href = blobUrl;
     link.download = `${name}-eq.txt`;
     document.body.appendChild(link);
@@ -285,11 +277,7 @@ function ProfileEditor({
           ))}
         </div>
         {onRemove && (
-          <button
-            className={styles.remove}
-            onClick={onRemove}
-            aria-label="remove profile"
-          >
+          <button className={styles.remove} onClick={onRemove} aria-label="remove profile">
             Remove
           </button>
         )}
@@ -329,9 +317,7 @@ function ProfileEditor({
               <span>Resample quality</span>
               <select
                 value={draft.preset}
-                onChange={(e) =>
-                  update({ preset: e.target.value as ResamplePreset })
-                }
+                onChange={(e) => update({ preset: e.target.value as ResamplePreset })}
               >
                 {PRESETS.map((p) => (
                   <option key={p} value={p}>
@@ -356,8 +342,7 @@ function ProfileEditor({
               />
             </label>
             <p className={styles.help}>
-              Applied before the EQ filters to prevent imported boosts from
-              clipping.
+              Applied before the EQ filters to prevent imported boosts from clipping.
             </p>
           </div>
 
@@ -398,12 +383,9 @@ function ProfileEditor({
               </button>
             </div>
             <p className={styles.help}>
-              Only Preamp and numbered Filter values are imported. Apply saves
-              them to this profile.
+              Only Preamp and numbered Filter values are imported. Apply saves them to this profile.
             </p>
-            {importNotice && (
-              <div className={styles.notice}>{importNotice}</div>
-            )}
+            {importNotice && <div className={styles.notice}>{importNotice}</div>}
           </div>
 
           <div className={styles.eqHead}>
@@ -427,9 +409,7 @@ function ProfileEditor({
               <div key={b._id} className={styles.band}>
                 <select
                   value={b.type}
-                  onChange={(e) =>
-                    updateBand(b._id, { type: e.target.value as EqBandType })
-                  }
+                  onChange={(e) => updateBand(b._id, { type: e.target.value as EqBandType })}
                 >
                   {BAND_TYPES.map((t) => (
                     <option key={t} value={t}>
@@ -445,9 +425,7 @@ function ProfileEditor({
                     max={24000}
                     step={1}
                     value={b.freq}
-                    onChange={(e) =>
-                      updateBand(b._id, { freq: Number(e.target.value) })
-                    }
+                    onChange={(e) => updateBand(b._id, { freq: Number(e.target.value) })}
                     onBlur={sortBandsByFreq}
                   />
                 </label>
@@ -459,9 +437,7 @@ function ProfileEditor({
                     max={20}
                     step={0.5}
                     value={b.gain}
-                    onChange={(e) =>
-                      updateBand(b._id, { gain: Number(e.target.value) })
-                    }
+                    onChange={(e) => updateBand(b._id, { gain: Number(e.target.value) })}
                   />
                 </label>
                 <label className={styles.bandField}>
@@ -471,9 +447,7 @@ function ProfileEditor({
                     step={0.1}
                     min={0.1}
                     value={b.q}
-                    onChange={(e) =>
-                      updateBand(b._id, { q: Number(e.target.value) })
-                    }
+                    onChange={(e) => updateBand(b._id, { q: Number(e.target.value) })}
                   />
                 </label>
                 <button
@@ -520,20 +494,14 @@ export function DspView({
   const [dirty, setDirty] = useState(false);
   const [applyState, setApplyState] = useState<DspApplyResult | null>(null);
   const [pendingOutputKey, setPendingOutputKey] = useState<string | null>(null);
-  const previousOutputKey = useRef<string | null>(
-    selectedOutput?.selection_key ?? null,
-  );
+  const previousOutputKey = useRef<string | null>(selectedOutput?.selection_key ?? null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const got = await api.dsp();
-      setProfiles(
-        got.length
-          ? got
-          : [defaultProfile(selectedOutput?.dsp_device ?? "default")],
-      );
+      setProfiles(got.length ? got : [defaultProfile(selectedOutput?.dsp_device ?? "default")]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -570,28 +538,24 @@ export function DspView({
   }, []);
 
   const addProfile = useCallback(() => {
-    setProfiles((list) => [
-      ...list,
-      defaultProfile(`device-${list.length + 1}`),
-    ]);
+    setProfiles((list) => [...list, defaultProfile(`device-${list.length + 1}`)]);
   }, []);
 
   const selectedProfile = selectedOutput?.dsp_device
     ? profiles.find((profile) => profile.device === selectedOutput.dsp_device)
     : undefined;
-  const editorProfiles = selectedOutput
-    ? [
-        selectedProfile ??
-          defaultProfile(selectedOutput.dsp_device ?? selectedOutput.name),
-      ]
-    : profiles;
+  const fallbackProfile = useMemo(
+    () => defaultProfile(selectedOutput?.dsp_device ?? selectedOutput?.name ?? "default"),
+    [selectedOutput?.dsp_device, selectedOutput?.name]
+  );
+  const editorProfiles = selectedOutput ? [selectedProfile ?? fallbackProfile] : profiles;
   const blockedReason = selectedOutput?.diagnostic_code;
   const dspUnavailable = Boolean(
     selectedOutput &&
     (!selectedOutput.dsp_supported ||
       blockedReason === "unsupported_output_type" ||
       blockedReason === "disconnected" ||
-      blockedReason === "inactive"),
+      blockedReason === "inactive")
   );
 
   const apply = async (np: DspProfile) => {
@@ -637,13 +601,7 @@ export function DspView({
                     : "DSP is supported for this output; the route is not active."}
               </p>
               {applyState && (
-                <p
-                  className={
-                    applyState.reload_confirmed
-                      ? styles.success
-                      : styles.warning
-                  }
-                >
+                <p className={applyState.reload_confirmed ? styles.success : styles.warning}>
                   {applyState.reload_confirmed
                     ? "Saved and reload-confirmed active."
                     : `Saved, but the DSP route is not confirmed.${applyState.reload_error ? ` ${applyState.reload_error}` : ""}`}
@@ -655,9 +613,8 @@ export function DspView({
       )}
       {!selectedOutput && (
         <p className={styles.dim}>
-          Bit-perfect bypasses the resampler for unchanged passthrough. Select a
-          playback output to verify DSP routing before editing advanced
-          settings.
+          Bit-perfect bypasses the resampler for unchanged passthrough. Select a playback output to
+          verify DSP routing before editing advanced settings.
         </p>
       )}
       {selectedOutput && dspUnavailable ? (
@@ -673,11 +630,7 @@ export function DspView({
               advanced={!selectedOutput}
               onDirtyChange={setDirty}
               onSave={apply}
-              onRemove={
-                !selectedOutput && profiles.length > 1
-                  ? () => remove(p.device)
-                  : undefined
-              }
+              onRemove={!selectedOutput && profiles.length > 1 ? () => remove(p.device) : undefined}
             />
           ))}
           {!selectedOutput && (
@@ -695,14 +648,9 @@ export function DspView({
           aria-labelledby="dsp-switch-title"
         >
           <h3 id="dsp-switch-title">Unsaved DSP edits</h3>
-          <p>
-            Keep editing this profile, or discard the draft before switching
-            outputs?
-          </p>
+          <p>Keep editing this profile, or discard the draft before switching outputs?</p>
           <div className={styles.switchActions}>
-            <button onClick={() => setPendingOutputKey(null)}>
-              Keep editing
-            </button>
+            <button onClick={() => setPendingOutputKey(null)}>Keep editing</button>
             <button
               onClick={() => {
                 setDirty(false);

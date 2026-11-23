@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { QueueItem } from "../types";
-import { folderKey } from "../util";
 import styles from "./PlaylistsView.module.css";
 
 function fmt(d: number | null): string {
@@ -12,7 +11,7 @@ function fmt(d: number | null): string {
 }
 
 interface Props {
-  onOpenAlbum: (album: string) => void;
+  onOpenAlbum: (album: string, trackId?: number) => void;
 }
 
 export function PlaylistsView({ onOpenAlbum }: Props) {
@@ -160,27 +159,19 @@ export function PlaylistsView({ onOpenAlbum }: Props) {
       </div>
 
       {loading && <p className={styles.dim}>loading…</p>}
-      {!loading && !error && names.length === 0 && (
-        <p className={styles.dim}>No playlists yet.</p>
-      )}
+      {!loading && !error && names.length === 0 && <p className={styles.dim}>No playlists yet.</p>}
       <ul className={styles.list}>
         {names.map((n) => (
           <li key={n} className={styles.group}>
             <div className={styles.row}>
-              <button
-                className={styles.nameBtn}
-                onClick={() => openPlaylist(n)}
-              >
+              <button className={styles.nameBtn} onClick={() => openPlaylist(n)}>
                 {n}
               </button>
               <div className={styles.actions}>
                 <button className={styles.iconBtn} onClick={() => play(n)}>
                   Play
                 </button>
-                <button
-                  className={styles.iconBtn}
-                  onClick={() => startRename(n)}
-                >
+                <button className={styles.iconBtn} onClick={() => startRename(n)}>
                   Rename
                 </button>
                 <button className={styles.iconBtnDanger} onClick={() => del(n)}>
@@ -210,22 +201,18 @@ export function PlaylistsView({ onOpenAlbum }: Props) {
             {open === n && (
               <div className={styles.tracks}>
                 {tracksLoading && <p className={styles.dim}>loading…</p>}
-                {tracksError && (
-                  <div className={styles.error}>{tracksError}</div>
-                )}
+                {tracksError && <div className={styles.error}>{tracksError}</div>}
                 {!tracksLoading && !tracksError && tracks.length === 0 && (
                   <p className={styles.dim}>Empty playlist.</p>
                 )}
                 {tracks.map((t) => (
                   <div key={t.pos} className={styles.trackRow}>
-                    <span className={styles.trackTitle}>
-                      {t.title ?? t.uri}
-                    </span>
+                    <span className={styles.trackTitle}>{t.title ?? t.uri}</span>
                     {t.uri && (
                       <button
                         type="button"
                         className={styles.trackMetaBtn}
-                        onClick={() => onOpenAlbum(folderKey(t.uri))}
+                        onClick={() => onOpenAlbum(t.uri)}
                         title="Open album"
                         aria-label={`Open album: ${[t.artist, t.album].filter(Boolean).join(" — ")}`}
                       >

@@ -52,10 +52,16 @@ pub fn parse_dsp_text(text: &str) -> Result<DspSettings> {
         }
 
         let (number, values) = parse_filter_header(filter_tail, line_number)?;
-        if filters
-            .insert(number, parse_filter_values(values, line_number)?)
-            .is_some()
+        let band = if values
+            .split_whitespace()
+            .next()
+            .is_some_and(|v| v.eq_ignore_ascii_case("off"))
         {
+            None
+        } else {
+            Some(parse_filter_values(values, line_number)?)
+        };
+        if filters.insert(number, band).is_some() {
             bail!("line {line_number}: duplicate Filter {number}");
         }
         saw_setting = true;
@@ -67,7 +73,7 @@ pub fn parse_dsp_text(text: &str) -> Result<DspSettings> {
 
     let settings = DspSettings {
         preamp,
-        eq_bands: filters.into_values().collect(),
+        eq_bands: filters.into_values().flatten().collect(),
     };
     validate_settings(&settings)?;
     Ok(settings)
@@ -164,6 +170,19 @@ fn validate_settings(settings: &DspSettings) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_apo_filters_never_enter_the_eq_pipeline() {
+        let settings = parse_dsp_text("Preamp: -2 dB\nFilter 1: OFF PK Fc 100 Hz Gain +6 dB Q 1\nFilter 2: ON PK Fc 1000 Hz Gain -3 dB Q 1\n").unwrap();
+        assert_eq!(settings.preamp, -2.0);
+        assert_eq!(settings.eq_bands.len(), 1);
+        assert_eq!(settings.eq_bands[0].freq, 1000.0);
+        assert_eq!(settings.eq_bands[0].gain, -3.0);
+        assert!(parse_dsp_text("Filter 1: OFF PK Fc 100 Hz Gain +6 dB Q 1")
+            .unwrap()
+            .eq_bands
+            .is_empty());
+    }
 
     #[test]
     fn parses_spinorama_auto_eq_file() {
