@@ -438,7 +438,7 @@ pub fn scan(
                         }
                     }
                     for t in &tracks {
-                        referenced.insert(t.audio_rel.clone());
+                        referenced.insert(dir.join(&t.audio_rel));
                     }
                     for t in tracks {
                         parsed_cues.push((dir.clone(), t));
@@ -460,13 +460,13 @@ pub fn scan(
             .ok()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|| path.to_string_lossy().to_string());
-        if referenced.contains(Path::new(&uri)) {
+        if referenced.contains(&path) {
             continue;
         }
         // Incremental scan: skip files whose mtime already matches the stored
         // row, so a refresh only re-reads changed tracks (see #12 / track_mtime).
         let mtime = file_mtime(&path);
-        if let Some(db_mt) = db.track_mtime(&uri, None).ok().flatten() {
+        if let Some(db_mt) = db.track_mtime(&path.to_string_lossy(), None).ok().flatten() {
             if db_mt == mtime {
                 scanned += 1;
                 continue;
@@ -479,19 +479,23 @@ pub fn scan(
         }
     }
 
-    // Uris for which at least one CUE track was successfully ingested. We only
+    // Backing paths for which at least one CUE track was successfully ingested. We only
     // prune the leftover plain (non-CUE) row for these — if every CUE track
     // failed to ingest (e.g. a transient lofty error), the plain row is the
     // only playable entry and must survive.
-    let mut ingested_cue_uris: HashSet<String> = HashSet::new();
+    let mut ingested_cue_paths: HashSet<String> = HashSet::new();
     for (dir, ct) in &parsed_cues {
-        let uri = ct.audio_rel.to_string_lossy().replace('\\', "/");
-        let mtime = file_mtime(&dir.join(&ct.audio_rel));
-        // All CUE tracks of one file share `uri` (keyed by cue_index); compare
-        // against the per-track cue_index so only changed files are re-ingested.
-        if let Some(db_mt) = db.track_mtime(&uri, Some(ct.track_no)).ok().flatten() {
+        let path = dir.join(&ct.audio_rel);
+        let mtime = file_mtime(&path);
+        // Compare the backing path and CUE index, independently of source-relative URIs.
+        if let Some(db_mt) = db
+            .track_mtime(&path.to_string_lossy(), Some(ct.track_no))
+            .ok()
+            .flatten()
+        {
             if db_mt == mtime {
                 scanned += 1;
+                ingested_cue_paths.insert(path.to_string_lossy().to_string());
                 continue;
             }
         }
@@ -499,16 +503,14 @@ pub fn scan(
             tracing::warn!("skip cue track {}: {e}", ct.audio_rel.display());
         } else {
             scanned += 1;
-            ingested_cue_uris.insert(uri);
+            ingested_cue_paths.insert(path.to_string_lossy().to_string());
         }
     }
 
-    // Drop any leftover non-CUE (whole-file) row for a uri that also has CUE
-    // tracks: a CUE-backed file must surface as its split tracks, not one
-    // 75-minute blob. Without this, an older scan's plain row lingers forever.
-    for uri in ingested_cue_uris {
-        if let Err(e) = db.delete_non_cue(uri.as_str()) {
-            tracing::warn!("prune plain cue row {}: {e}", uri);
+    // Retire a whole-file row only for the same backing file as its CUE splits.
+    for path in ingested_cue_paths {
+        if let Err(e) = db.delete_non_cue(path.as_str()) {
+            tracing::warn!("prune plain cue row {}: {e}", path);
         }
     }
 
@@ -951,6 +953,156 @@ fn find_existing_cover(cover_dir: &Path, key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_test_wav(path: &Path) {
+        // One second of PCM silence: a valid independent fixture for lofty.
+        let bytes = 44_100u32 * 2;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(bytes + 36).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&44_100u32.to_le_bytes());
+        wav.extend_from_slice(&88_200u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&bytes.to_le_bytes());
+        wav.resize(44 + bytes as usize, 0);
+        std::fs::write(path, wav).unwrap();
+    }
+
+    #[test]
+    fn scans_keep_identical_relative_filenames_in_separate_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = vec![root.path().join("usb"), root.path().join("nas")];
+        for dir in &dirs {
+            std::fs::create_dir_all(dir.join("Album")).unwrap();
+            let path = dir.join("Album/song.wav");
+            write_test_wav(&path);
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+                .unwrap();
+        }
+        let db = LibraryDb::open(Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let covers = root.path().join("covers");
+        let opt =
+            crate::config::CoverOptimization::from_config(&crate::config::Config::default_config());
+        assert_eq!(scan(&dirs, &db, &covers, opt).unwrap(), 2);
+        let tracks = db.search(None, None, None, None).unwrap();
+        assert_eq!(
+            tracks.len(),
+            2,
+            "same relative URI collapsed two backing files"
+        );
+        let ids: HashSet<_> = tracks.iter().map(|t| t.id).collect();
+        for dir in &dirs {
+            assert!(tracks
+                .iter()
+                .any(|t| t.path == dir.join("Album/song.wav").to_string_lossy()));
+        }
+        scan(&dirs, &db, &covers, opt).unwrap();
+        assert_eq!(
+            db.search(None, None, None, None)
+                .unwrap()
+                .iter()
+                .map(|t| t.id)
+                .collect::<HashSet<_>>(),
+            ids
+        );
+        // Changing both files forces upserts, which must preserve their IDs.
+        for dir in &dirs {
+            std::fs::File::options()
+                .write(true)
+                .open(dir.join("Album/song.wav"))
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_001))
+                .unwrap();
+        }
+        scan(&dirs, &db, &covers, opt).unwrap();
+        assert_eq!(
+            db.search(None, None, None, None)
+                .unwrap()
+                .iter()
+                .map(|t| t.id)
+                .collect::<HashSet<_>>(),
+            ids
+        );
+        db.delete_by_source(&dirs[0]).unwrap();
+        let remaining = db.search(None, None, None, None).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(
+            remaining[0].path,
+            dirs[1].join("Album/song.wav").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn cue_splits_and_plain_rows_are_scoped_to_their_backing_source() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = vec![root.path().join("usb"), root.path().join("nas")];
+        for dir in &dirs {
+            std::fs::create_dir_all(dir).unwrap();
+            write_test_wav(&dir.join("song.wav"));
+        }
+        let db = LibraryDb::open(Path::new(":memory:")).unwrap();
+        db.migrate().unwrap();
+        let covers = root.path().join("covers");
+        let opt =
+            crate::config::CoverOptimization::from_config(&crate::config::Config::default_config());
+        scan(&dirs, &db, &covers, opt).unwrap();
+        let cue = "TITLE \"Split Album\"\nFILE \"song.wav\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First\"\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    TITLE \"Second\"\n    INDEX 01 00:00:38\n";
+        std::fs::write(dirs[0].join("song.cue"), cue).unwrap();
+        scan(&dirs, &db, &covers, opt).unwrap();
+        let tracks = db.search(None, None, None, None).unwrap();
+        assert_eq!(
+            tracks.len(),
+            3,
+            "CUE cleanup removed a different source's plain track"
+        );
+        assert_eq!(tracks.iter().filter(|t| t.cue_index.is_some()).count(), 2);
+        assert!(
+            tracks
+                .iter()
+                .any(|t| t.cue_index.is_none()
+                    && t.path == dirs[1].join("song.wav").to_string_lossy())
+        );
+        std::fs::write(dirs[1].join("song.cue"), cue).unwrap();
+        scan(&dirs, &db, &covers, opt).unwrap();
+        let tracks = db.search(None, None, None, None).unwrap();
+        assert_eq!(tracks.len(), 4);
+        assert!(
+            db.track_by_uri_cue("song.wav", Some(1)).unwrap().is_none(),
+            "ambiguous source selected for status"
+        );
+        assert!(db
+            .track_by_uri_and_elapsed("song.wav", 0.1)
+            .unwrap()
+            .is_none());
+        assert!(db.track_by_uri_suffix("song.wav").unwrap().is_none());
+        let exact = db
+            .track_by_uri_cue(&dirs[1].join("song.wav").to_string_lossy(), Some(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(exact.path, dirs[1].join("song.wav").to_string_lossy());
+        let ids: HashSet<_> = tracks.iter().map(|t| t.id).collect();
+        scan(&dirs, &db, &covers, opt).unwrap();
+        assert_eq!(
+            db.search(None, None, None, None)
+                .unwrap()
+                .iter()
+                .map(|t| t.id)
+                .collect::<HashSet<_>>(),
+            ids
+        );
+        assert_eq!(db.search(Some("First"), None, None, None).unwrap().len(), 2);
+    }
 
     #[test]
     fn detects_audio_extensions() {

@@ -81,6 +81,27 @@ fn path_tail_matches(left: &str, right: &str) -> bool {
     let right = right.trim_start_matches('/');
     left == right || left.ends_with(&format!("/{right}")) || right.ends_with(&format!("/{left}"))
 }
+// Prefer an exact backing path; a source-relative URI is usable only when
+// it identifies one backing file (multiple CUE splits of that file are fine).
+fn reference_path(conn: &Connection, reference: &str) -> AppResult<Option<String>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT path FROM tracks WHERE path = ?1 OR uri = ?1
+         ORDER BY path = ?1 DESC LIMIT 2",
+        )
+        .map_err(|e| AppError::Library(e.to_string()))?;
+    let paths = stmt
+        .query_map([reference], |r| r.get::<_, String>(0))
+        .map_err(|e| AppError::Library(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Library(e.to_string()))?;
+    match paths.as_slice() {
+        [path, ..] if path == reference => Ok(Some(path.clone())),
+        [path] => Ok(Some(path.clone())),
+        _ => Ok(None),
+    }
+}
+
 impl LibraryDb {
     pub fn open(path: &Path) -> AppResult<Self> {
         if let Some(parent) = path.parent() {
@@ -114,9 +135,11 @@ impl LibraryDb {
     }
 
     pub fn migrate(&self) -> AppResult<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute_batch(
-            "            CREATE TABLE IF NOT EXISTS tracks (
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS tracks (
                 id INTEGER PRIMARY KEY,
                 uri TEXT NOT NULL,
                 path TEXT NOT NULL,
@@ -138,35 +161,71 @@ impl LibraryDb {
                 start_time REAL,
                 end_time REAL,
                 file_mtime INTEGER,
-                source TEXT,
-                UNIQUE(uri, cue_index)
-            );
-            CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
+                source TEXT
+            );";
+        tx.execute_batch(SCHEMA)
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        // Upgrade columns before creating any index that refers to them.
+        for (col, col_ty) in [
+            ("cue_index", "INTEGER"),
+            ("start_time", "REAL"),
+            ("end_time", "REAL"),
+            ("file_mtime", "INTEGER"),
+            ("cover_key", "TEXT"),
+            ("source", "TEXT"),
+        ] {
+            let exists: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = ?",
+                    [col],
+                    |r| r.get(0),
+                )
+                .map_err(|e| AppError::Library(e.to_string()))?;
+            if exists == 0 {
+                tx.execute(&format!("ALTER TABLE tracks ADD COLUMN {col} {col_ty}"), [])
+                    .map_err(|e| AppError::Library(e.to_string()))?;
+            }
+        }
+        // The original inline UNIQUE(uri,cue_index) cannot be dropped. Detect
+        // URI-based unique indexes and rebuild the table without changing IDs.
+        let legacy_uri_key: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_index_list('tracks') AS indexes
+             JOIN pragma_index_info(indexes.name) AS columns
+             WHERE indexes.\"unique\" = 1 AND columns.name = 'uri')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        if legacy_uri_key {
+            tx.execute_batch(
+                "DROP TRIGGER IF EXISTS tracks_ai;
+                DROP TRIGGER IF EXISTS tracks_ad; DROP TRIGGER IF EXISTS tracks_au;",
+            )
+            .map_err(|e| AppError::Library(e.to_string()))?;
+            tx.execute_batch(&SCHEMA.replace("tracks (", "tracks_migrating ("))
+                .map_err(|e| AppError::Library(e.to_string()))?;
+            tx.execute_batch(&format!(
+                "INSERT INTO tracks_migrating ({TRACK_COLS}) SELECT {TRACK_COLS} FROM tracks;
+                DROP TABLE tracks; ALTER TABLE tracks_migrating RENAME TO tracks;"
+            ))
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        }
+        tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
             CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
-            -- SQLite treats NULLs as distinct in a UNIQUE constraint, so the
-            -- (uri, cue_index) key alone let incremental rescans insert
-            -- duplicate non-CUE rows. This partial index keeps at most one
-            -- non-CUE (cue_index IS NULL) row per uri, so INSERT OR REPLACE
-            -- dedupes on rescan while CUE tracks keep their own key.
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_uri_noncue
-                ON tracks(uri) WHERE cue_index IS NULL;
-
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_path_cue ON tracks(path,cue_index);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_path_noncue ON tracks(path) WHERE cue_index IS NULL;
             CREATE TABLE IF NOT EXISTS album_tags (
-                album TEXT NOT NULL,
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
+                album TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
                 origin TEXT NOT NULL CHECK (origin IN ('system','user')),
-                PRIMARY KEY (album, key, value, origin)
-            );
-            CREATE INDEX IF NOT EXISTS idx_album_tags_key ON album_tags(key);",
-        )
-        .map_err(|e| AppError::Library(e.to_string()))?;
-        // FTS5 index over the searchable text columns. External-content table
-        // backed by `tracks`, kept in sync by triggers below, so every
-        // `insert_track`/`prune` automatically updates the index without a
-        // separate write path. Prefix queries ('beat*') use the index instead
-        // of the previous full-table `LIKE '%q%'` scan.
-        conn.execute_batch(
+                PRIMARY KEY(album,key,value,origin));
+            CREATE INDEX IF NOT EXISTS idx_album_tags_key ON album_tags(key);")
+            .map_err(|e| AppError::Library(e.to_string()))?;
+        let fts_existed: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracks_fts')",
+            [], |r| r.get(0),
+        ).map_err(|e| AppError::Library(e.to_string()))?;
+        tx.execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
                 title, artist, album, album_artist,
                 content='tracks', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
@@ -187,38 +246,20 @@ impl LibraryDb {
             END;",
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
-        // Rebuild the FTS index when it's out of sync with `tracks` (e.g. an
-        // existing DB created before the index existed, or a recovery).
-        let fts_count: i64 = conn
-            .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
-            .unwrap_or(0);
-        let tracks_count: i64 = conn
-            .query_row("SELECT count(*) FROM tracks", [], |r| r.get(0))
-            .unwrap_or(0);
-        if fts_count != tracks_count {
-            conn.execute_batch("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');")
+
+        // An external-content FTS table's count reads the content table and
+        // cannot diagnose a missing index. Check the actual index integrity.
+        let fts_invalid = tx
+            .execute(
+                "INSERT INTO tracks_fts(tracks_fts, rank) VALUES('integrity-check', 1)",
+                [],
+            )
+            .is_err();
+        if legacy_uri_key || !fts_existed || fts_invalid {
+            tx.execute_batch("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');")
                 .map_err(|e| AppError::Library(e.to_string()))?;
         }
-        // Idempotent schema upgrades (only on pre-existing tables).
-        for (col, col_ty) in [
-            ("cue_index", "INTEGER"),
-            ("start_time", "REAL"),
-            ("end_time", "REAL"),
-            ("file_mtime", "INTEGER"),
-            ("cover_key", "TEXT"),
-            ("source", "TEXT"),
-        ] {
-            let exists: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = ?",
-                    [col],
-                    |r| r.get(0),
-                )
-                .map_err(|e| AppError::Library(e.to_string()))?;
-            if exists == 0 {
-                let _ = conn.execute(&format!("ALTER TABLE tracks ADD COLUMN {col} {col_ty}"), []);
-            }
-        }
+        tx.commit().map_err(|e| AppError::Library(e.to_string()))?;
         Ok(())
     }
 
@@ -246,37 +287,48 @@ impl LibraryDb {
         source: Option<&str>,
     ) -> AppResult<i64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "INSERT OR REPLACE INTO tracks
+        let id = conn.query_row(
+            "INSERT INTO tracks
              (uri, path, title, artist, album, album_artist, genre, year, track, duration, format, sample_rate, bit_depth, channels, has_cover, cover_key, cue_index, start_time, end_time, file_mtime, source)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,?15,?16,?17,?18,?19,?20)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,0,?15,?16,?17,?18,?19,?20)
+             ON CONFLICT DO UPDATE SET
+                uri=excluded.uri, title=excluded.title, artist=excluded.artist,
+                album=excluded.album, album_artist=excluded.album_artist, genre=excluded.genre,
+                year=excluded.year, track=excluded.track, duration=excluded.duration,
+                format=excluded.format, sample_rate=excluded.sample_rate,
+                bit_depth=excluded.bit_depth, channels=excluded.channels,
+                cover_key=COALESCE(excluded.cover_key,tracks.cover_key),
+                start_time=excluded.start_time, end_time=excluded.end_time,
+                file_mtime=excluded.file_mtime, source=excluded.source
+             RETURNING id",
             params![
                 uri, path, title, artist, album, album_artist, genre, year, track, duration,
                 format, sample_rate, bit_depth, channels, cover_key, cue_index, start_time,
                 end_time, file_mtime, source
             ],
+            |row| row.get(0),
         )
         .map_err(|e| AppError::Library(e.to_string()))?;
         self.bump_revision();
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
-    /// Return the stored `file_mtime` for the track identified by `(uri,
+    /// Return the stored `file_mtime` for the track identified by `(path,
     /// cue_index)`, used to skip re-ingesting files that haven't changed.
-    pub fn track_mtime(&self, uri: &str, cue_index: Option<i32>) -> AppResult<Option<i64>> {
+    pub fn track_mtime(&self, path: &str, cue_index: Option<i32>) -> AppResult<Option<i64>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mt: Option<i64> = if let Some(c) = cue_index {
             conn.query_row(
-                "SELECT file_mtime FROM tracks WHERE uri = ? AND cue_index = ?",
-                params![uri, c],
+                "SELECT file_mtime FROM tracks WHERE path = ? AND cue_index = ?",
+                params![path, c],
                 |r| r.get(0),
             )
             .optional()
             .map_err(|e| AppError::Library(e.to_string()))?
         } else {
             conn.query_row(
-                "SELECT file_mtime FROM tracks WHERE uri = ? AND cue_index IS NULL",
-                [uri],
+                "SELECT file_mtime FROM tracks WHERE path = ? AND cue_index IS NULL",
+                [path],
                 |r| r.get(0),
             )
             .optional()
@@ -409,16 +461,19 @@ impl LibraryDb {
     /// directly (MPD then reports the audio file, not the CUE track number).
     pub fn track_by_uri_and_elapsed(&self, uri: &str, elapsed: f64) -> AppResult<Option<Track>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(path) = reference_path(&conn, uri)? else {
+            return Ok(None);
+        };
         let track = conn
             .query_row(
                 &format!(
-                    "SELECT {TRACK_COLS} FROM tracks WHERE uri = ? \
+                    "SELECT {TRACK_COLS} FROM tracks WHERE path = ? \
                      AND cue_index IS NOT NULL \
                      AND start_time <= ? \
                      AND (end_time IS NULL OR ? < end_time) \
                      ORDER BY start_time DESC LIMIT 1"
                 ),
-                params![uri, elapsed, elapsed],
+                params![path, elapsed, elapsed],
                 |r| Ok(row_to_track(r)),
             )
             .optional()
@@ -431,11 +486,14 @@ impl LibraryDb {
     /// to the specific track MPD is reporting).
     pub fn track_by_uri_cue(&self, uri: &str, cue_index: Option<i32>) -> AppResult<Option<Track>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(path) = reference_path(&conn, uri)? else {
+            return Ok(None);
+        };
         if let Some(c) = cue_index {
             let exact = conn
                 .query_row(
-                    &format!("SELECT {TRACK_COLS} FROM tracks WHERE uri = ? AND cue_index = ?"),
-                    params![uri, c],
+                    &format!("SELECT {TRACK_COLS} FROM tracks WHERE path = ? AND cue_index = ?"),
+                    params![path, c],
                     |r| Ok(row_to_track(r)),
                 )
                 .optional()
@@ -447,10 +505,10 @@ impl LibraryDb {
         let track = conn
             .query_row(
                 &format!(
-                    "SELECT {TRACK_COLS} FROM tracks WHERE uri = ? \
+                    "SELECT {TRACK_COLS} FROM tracks WHERE path = ? \
                      ORDER BY cue_index IS NOT NULL, id LIMIT 1"
                 ),
-                [uri],
+                [path],
                 |r| Ok(row_to_track(r)),
             )
             .optional()
@@ -465,20 +523,10 @@ impl LibraryDb {
     /// prefix strip can't always compute that segment, so match by suffix: the
     /// DB uri is the tail of the MPD uri for the same file.
     pub fn track_by_uri_suffix(&self, mpd_uri: &str) -> AppResult<Option<Track>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let track = conn
-            .query_row(
-                &format!(
-                    "SELECT {TRACK_COLS} FROM tracks \
-                     WHERE ? LIKE '%/' || uri OR ? = uri \
-                     ORDER BY length(uri) DESC LIMIT 1"
-                ),
-                params![mpd_uri, mpd_uri],
-                |r| Ok(row_to_track(r)),
-            )
-            .optional()
-            .map_err(|e| AppError::Library(e.to_string()))?;
-        Ok(track)
+        if let Some(exact) = self.track_by_uri_cue(mpd_uri, None)? {
+            return Ok(Some(exact));
+        }
+        self.track_by_uri_suffix_unique(mpd_uri)
     }
 
     /// Look up a unique track by its stored absolute backing path. Recovery
@@ -536,18 +584,16 @@ impl LibraryDb {
         Ok(first)
     }
 
-    /// Delete tracks whose backing file is no longer in the scanned set
-    /// (deleted or newly ignored via `.mpdignore`). Returns the number removed.
-    /// Delete the non-CUE (whole-file) row for `uri`, if one exists while CUE
-    /// tracks for the same uri are present. Used by the scanner so a CUE-backed
+    /// Delete the non-CUE (whole-file) row for `path`, if one exists while CUE
+    /// tracks for the same backing file are present. Used by the scanner so a CUE-backed
     /// file never lingers as a single full-length track.
-    pub fn delete_non_cue(&self, uri: &str) -> AppResult<u64> {
+    pub fn delete_non_cue(&self, path: &str) -> AppResult<u64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let n = conn
             .execute(
-                "DELETE FROM tracks WHERE uri = ? AND cue_index IS NULL \
-                 AND EXISTS (SELECT 1 FROM tracks t2 WHERE t2.uri = ? AND t2.cue_index IS NOT NULL)",
-                params![uri, uri],
+                "DELETE FROM tracks WHERE path = ? AND cue_index IS NULL \
+                 AND EXISTS (SELECT 1 FROM tracks t2 WHERE t2.path = ? AND t2.cue_index IS NOT NULL)",
+                params![path, path],
             )
             .map_err(|e| AppError::Library(e.to_string()))?;
         if n > 0 {
@@ -622,15 +668,25 @@ impl LibraryDb {
     /// can `add` regardless of its `music_directory` (see `api::play`).
     pub fn path_for_uri(&self, uri: &str) -> AppResult<Option<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let path: Option<String> = conn
+        let count: i64 = conn
             .query_row(
-                "SELECT path FROM tracks WHERE uri = ? AND cue_index IS NULL LIMIT 1",
+                "SELECT count(DISTINCT path) FROM tracks WHERE uri = ?",
                 [uri],
                 |r| r.get(0),
             )
-            .optional()
             .map_err(|e| AppError::Library(e.to_string()))?;
-        Ok(path)
+        if count > 1 {
+            return Err(AppError::BadRequest(
+                "Ambiguous library URI; supply track_id".into(),
+            ));
+        }
+        conn.query_row(
+            "SELECT path FROM tracks WHERE uri = ? AND cue_index IS NULL LIMIT 1",
+            [uri],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| AppError::Library(e.to_string()))
     }
 
     /// Delete exactly one row after confirming its backing path is absent.
@@ -1053,6 +1109,131 @@ fn row_to_track(r: &rusqlite::Row) -> Track {
 #[cfg(test)]
 mod search_tests {
     use super::*;
+
+    #[test]
+    fn legacy_migration_preserves_tracks_tags_and_builds_search_index() {
+        for existing_fts in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("library.db");
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE tracks (
+                id INTEGER PRIMARY KEY, uri TEXT NOT NULL, path TEXT NOT NULL,
+                title TEXT, artist TEXT, album TEXT, album_artist TEXT, genre TEXT,
+                year INTEGER, track INTEGER, duration REAL, format TEXT,
+                sample_rate INTEGER, bit_depth INTEGER, channels INTEGER,
+                has_cover INTEGER NOT NULL DEFAULT 0, cover_key TEXT, cue_index INTEGER,
+                start_time REAL, end_time REAL, file_mtime INTEGER, source TEXT,
+                UNIQUE(uri, cue_index));
+                CREATE UNIQUE INDEX idx_tracks_uri_noncue ON tracks(uri) WHERE cue_index IS NULL;
+                INSERT INTO tracks (id, uri, path, title, artist, album, has_cover, cover_key, file_mtime, source)
+                VALUES (42, 'Album/song.wav', '/usb/Album/song.wav', 'Legacy Melody', 'Artist', 'Album', 1, 'cover42', 123, '/usb');
+                CREATE TABLE album_tags (album TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+                    origin TEXT NOT NULL, PRIMARY KEY(album,key,value,origin));
+                INSERT INTO album_tags VALUES ('Album', 'mood', 'calm', 'user');
+                INSERT INTO tracks (id, uri, path, title, album, cover_key, cue_index, start_time, end_time, duration, source)
+                VALUES (43, 'Album/image.wav', '/usb/Album/image.wav', 'CUE Introduction', 'Album', 'cuecover', 1, 0, 100, 100, '/usb'),
+                       (44, 'Album/image.wav', '/usb/Album/image.wav', 'CUE Finale', 'Album', 'cuecover', 2, 100, NULL, 80, '/usb');").unwrap();
+            if existing_fts {
+                conn.execute_batch(
+                    "CREATE VIRTUAL TABLE tracks_fts USING fts5(
+                    title, artist, album, album_artist, content='tracks', content_rowid='id',
+                    tokenize='unicode61 remove_diacritics 2');
+                    INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');
+                    CREATE TRIGGER tracks_ai AFTER INSERT ON tracks BEGIN
+                        INSERT INTO tracks_fts(rowid,title,artist,album,album_artist)
+                        VALUES(new.id,new.title,new.artist,new.album,new.album_artist);
+                    END;",
+                )
+                .unwrap();
+            }
+            drop(conn);
+            let db = LibraryDb::open(&path).unwrap();
+            db.migrate().unwrap();
+            let found = db.search(Some("Legacy"), None, None, None).unwrap();
+            assert_eq!(found.len(), 1, "existing rows were never indexed");
+            assert_eq!(found[0].id, 42);
+            assert!(found[0].has_cover);
+            assert_eq!(found[0].cover_key.as_deref(), Some("cover42"));
+            assert_eq!(found[0].source.as_deref(), Some("/usb"));
+            let split = db.track_by_id(44).unwrap().unwrap();
+            assert_eq!(split.cue_index, Some(2));
+            assert_eq!(split.start_time, Some(100.0));
+            assert_eq!(split.duration, Some(80.0));
+            assert_eq!(split.cover_key.as_deref(), Some("cuecover"));
+            assert_eq!(db.search(Some("CUE"), None, None, None).unwrap().len(), 2);
+            db.migrate().unwrap();
+            assert_eq!(
+                db.search(Some("Melody"), None, None, None).unwrap()[0].id,
+                42
+            );
+            let tags = db.album_tags("Album").unwrap();
+            assert!(tags
+                .iter()
+                .any(|t| t.key == "mood" && t.value == "calm" && !t.system));
+            let same_id = db
+                .insert_track(
+                    "Album/song.wav",
+                    "/usb/Album/song.wav",
+                    Some("Updated Melody"),
+                    Some("Artist"),
+                    Some("Album"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(1.0),
+                    Some("WAV"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(124),
+                    Some("/usb"),
+                )
+                .unwrap();
+            assert_eq!(same_id, 42);
+            let updated = db.track_by_id(42).unwrap().unwrap();
+            assert!(updated.has_cover);
+            assert_eq!(updated.cover_key.as_deref(), Some("cover42"));
+            let sibling = db
+                .insert_track(
+                    "Album/song.wav",
+                    "/nas/Album/song.wav",
+                    Some("Sibling Melody"),
+                    Some("Artist"),
+                    Some("Album"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(1.0),
+                    Some("WAV"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(124),
+                    Some("/nas"),
+                )
+                .unwrap();
+            assert_ne!(sibling, 42, "legacy URI uniqueness was not removed");
+            assert_eq!(
+                db.search(Some("Melody"), None, None, None).unwrap().len(),
+                2
+            );
+            db.migrate().unwrap();
+            assert_eq!(
+                db.track_by_id(42).unwrap().unwrap().title.as_deref(),
+                Some("Updated Melody")
+            );
+        }
+    }
 
     fn fresh() -> LibraryDb {
         let db = LibraryDb::open(Path::new(":memory:")).unwrap();

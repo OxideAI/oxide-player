@@ -1799,7 +1799,7 @@ async fn resolve_play_uri(
     let track = track_id.and_then(|id| s.db().track_by_id(id).ok().flatten());
     let (path, cue_index) = match &track {
         Some(t) => (Some(t.path.clone()), t.cue_index),
-        None => (s.db().path_for_uri(uri).ok().flatten(), None),
+        None => (s.db().path_for_uri(uri)?, None),
     };
 
     let abs = match path {
@@ -2488,6 +2488,96 @@ mod tests {
         let shared = std::fs::read_to_string(&share_file).unwrap();
         assert!(!shared.contains(second.to_str().unwrap()));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn ambiguous_library_uri_requires_track_id_for_playback() {
+        let root = tempfile::tempdir().unwrap();
+        let config = Config {
+            data_dir: root.path().to_path_buf(),
+            ..Config::default_config()
+        };
+        let (_app, state) = test_app_with_state(config).await;
+        let mut ids = Vec::new();
+        for path in ["/usb/Album/song.wav", "/nas/Album/song.wav"] {
+            ids.push(
+                state
+                    .db()
+                    .insert_track(
+                        "Album/song.wav",
+                        path,
+                        Some("Song"),
+                        None,
+                        Some("Album"),
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(1.0),
+                        Some("WAV"),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(123),
+                        None,
+                    )
+                    .unwrap(),
+            );
+        }
+        let result = super::resolve_play_uri(&state, "Album/song.wav", None).await;
+        assert!(
+            matches!(result, Err(crate::error::AppError::BadRequest(_))),
+            "ambiguous URI silently selected a source: {result:?}"
+        );
+        for (id, expected) in ids
+            .into_iter()
+            .zip(["/usb/Album/song.wav", "/nas/Album/song.wav"])
+        {
+            assert_eq!(
+                super::resolve_play_uri(&state, "Album/song.wav", Some(id))
+                    .await
+                    .unwrap(),
+                (expected.to_string(), false)
+            );
+        }
+        for path in ["/usb/Album/image.wav", "/nas/Album/image.wav"] {
+            state
+                .db()
+                .insert_track(
+                    "Album/image.wav",
+                    path,
+                    Some("Split"),
+                    None,
+                    Some("Album"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(1.0),
+                    Some("WAV"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(1),
+                    Some(0.0),
+                    None,
+                    Some(123),
+                    None,
+                )
+                .unwrap();
+        }
+        assert!(
+            matches!(
+                super::resolve_play_uri(&state, "Album/image.wav", None).await,
+                Err(crate::error::AppError::BadRequest(_))
+            ),
+            "ambiguous CUE backing URI was accepted"
+        );
     }
 
     #[tokio::test]

@@ -228,6 +228,36 @@ pub struct VisualizerAnalyzer {
 struct Inner {
     tx: broadcast::Sender<SpectrumFrame>,
     status: Arc<Mutex<VisualizerStatus>>,
+    capture: Mutex<Option<CaptureWorker>>,
+    publisher: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+// CPAL streams may be !Send. Build, retain and drop them on one owning thread.
+struct CaptureWorker {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for CaptureWorker {
+    fn drop(&mut self) {
+        self.stop.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        if let Some(task) = self
+            .publisher
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            task.abort();
+        }
+    }
 }
 
 impl VisualizerAnalyzer {
@@ -266,15 +296,35 @@ impl VisualizerAnalyzer {
     /// broadcast channel still exists (so clients can connect and receive an
     /// empty frame) but no audio device is opened.
     pub fn new(config: &Config) -> Self {
+        Self::with_capture(config, Self::open_capture)
+    }
+
+    fn with_capture<R, F>(config: &Config, factory: F) -> Self
+    where
+        F: FnOnce(
+                Config,
+                broadcast::Sender<SpectrumFrame>,
+                Arc<Mutex<VisualizerStatus>>,
+            ) -> Result<(R, Arc<SharedState>)>
+            + Send
+            + 'static,
+    {
         let (tx, _rx) = broadcast::channel(64);
         let analyzer = VisualizerAnalyzer {
             inner: Arc::new(Inner {
                 tx,
                 status: Arc::new(Mutex::new(initial_status(config))),
+                capture: Mutex::new(None),
+                publisher: Mutex::new(None),
             }),
         };
         if config.visualizer_fft {
-            if let Err(e) = analyzer.start(config) {
+            let result = if let Some(fifo) = config.visualizer_fifo.as_deref() {
+                analyzer.start_fifo(fifo)
+            } else {
+                analyzer.start_capture(config, factory)
+            };
+            if let Err(e) = result {
                 tracing::warn!("visualizer FFT capture did not start: {e}");
                 analyzer.transition(VisualizerStatusEvent::StartupRuntimeError(e.to_string()));
             }
@@ -287,14 +337,53 @@ impl VisualizerAnalyzer {
         self.inner.tx.subscribe()
     }
 
-    fn start(&self, config: &Config) -> Result<()> {
-        // MPD fifo tap takes precedence over ALSA capture when configured: it
-        // works in every output mode and avoids loopback substream contention
-        // with CamillaDSP (snd-aloop delivers a substream to one capture
-        // client only).
-        if let Some(fifo) = config.visualizer_fifo.as_deref() {
-            return self.start_fifo(fifo);
-        }
+    fn start_capture<R, F>(&self, config: &Config, factory: F) -> Result<()>
+    where
+        F: FnOnce(
+                Config,
+                broadcast::Sender<SpectrumFrame>,
+                Arc<Mutex<VisualizerStatus>>,
+            ) -> Result<(R, Arc<SharedState>)>
+            + Send
+            + 'static,
+    {
+        let config = config.clone();
+        let tx = self.inner.tx.clone();
+        let status = self.inner.status.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("visualizer-capture".into())
+            .spawn(move || match factory(config, tx, status) {
+                Ok((capture, shared)) => {
+                    if ready_tx.send(Ok(shared)).is_ok() {
+                        let _ = stop_rx.recv();
+                    }
+                    drop(capture);
+                }
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error));
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("spawn capture worker: {e}"))?;
+        let worker = CaptureWorker {
+            stop: Some(stop_tx),
+            thread: Some(thread),
+        };
+        let shared = ready_rx
+            .recv()
+            .map_err(|e| anyhow::anyhow!("capture worker startup: {e}"))??;
+        *self.inner.capture.lock().unwrap_or_else(|e| e.into_inner()) = Some(worker);
+        self.spawn_publisher(shared, self.inner.tx.clone());
+        self.transition(VisualizerStatusEvent::CaptureStarted);
+        Ok(())
+    }
+
+    fn open_capture(
+        config: Config,
+        tx: broadcast::Sender<SpectrumFrame>,
+        status: Arc<Mutex<VisualizerStatus>>,
+    ) -> Result<(cpal::Stream, Arc<SharedState>)> {
         let device_name = config
             .visualizer_capture_device
             .clone()
@@ -353,7 +442,6 @@ impl VisualizerAnalyzer {
         let rate = selected_config.sample_rate();
         let stream_config: StreamConfig = selected_config.into();
 
-        let tx = self.inner.tx.clone();
         // `window` holds the most recent samples; the callback writes into a
         // ring and a publishing task reads it out on the PUBLISH_HZ cadence.
         let window_size = (rate as f64 * WINDOW_SECONDS).round() as usize;
@@ -362,7 +450,6 @@ impl VisualizerAnalyzer {
         let shared_capture = shared.clone();
 
         let err_tx = tx.clone();
-        let status = self.inner.status.clone();
         let stream = build_stream_for_format(
             &device,
             &stream_config,
@@ -375,22 +462,17 @@ impl VisualizerAnalyzer {
         stream
             .play()
             .map_err(|e| anyhow::anyhow!("play stream: {e}"))?;
-        // Keep the stream alive for the process lifetime without holding a
-        // `!Send` `cpal::Stream` inside the `Send` `AppState`. Leaking is safe:
-        // capture runs until the process exits, which is exactly what we want.
-        self.spawn_publisher(shared, tx);
-        self.transition(VisualizerStatusEvent::CaptureStarted);
         tracing::info!(
             "visualizer FFT capture started on device '{device_name}' @ {rate} Hz, {channels}ch, {BANDS} bands"
         );
-        Ok(())
+        Ok((stream, shared))
     }
 
     /// Spawn the FFT publisher: pulls the latest window, runs the FFT, groups
-    /// into BANDS, and broadcasts at PUBLISH_HZ. Runs detached and never
-    /// touches the capture hot path, so capture stays glitch-free.
+    /// into BANDS, and broadcasts at PUBLISH_HZ. The analyzer owns the task
+    /// and aborts it on shutdown; it never touches the capture hot path.
     fn spawn_publisher(&self, shared: Arc<SharedState>, tx: broadcast::Sender<SpectrumFrame>) {
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             tracing::debug!("visualizer publisher task started");
             let padded = shared.window_size.next_power_of_two();
             let mut planner = FftPlanner::<f32>::new();
@@ -419,6 +501,11 @@ impl VisualizerAnalyzer {
                 }
             }
         });
+        *self
+            .inner
+            .publisher
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(task);
     }
 
     /// Tap the MPD `fifo` output (format "44100:16:2", S16_LE interleaved
@@ -774,6 +861,88 @@ fn compute_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn capture_startup_error_is_reported_and_disabled_capture_opens_no_device() {
+        let mut config = Config::default_config();
+        config.visualizer_fft = true;
+        config.visualizer_fifo = None;
+        let analyzer = VisualizerAnalyzer::with_capture::<(), _>(&config, |_, _, _| {
+            Err(anyhow::anyhow!("device unavailable"))
+        });
+        let status = analyzer.status(&config);
+        assert_eq!(status.status, VisualizerStatusState::StartupRuntimeError);
+        assert!(status.detail.unwrap().contains("device unavailable"));
+        config.visualizer_fft = false;
+        let analyzer = VisualizerAnalyzer::with_capture::<(), _>(&config, |_, _, _| {
+            panic!("disabled visualizer opened capture device")
+        });
+        assert_eq!(
+            analyzer.status(&config).status,
+            VisualizerStatusState::Disabled
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_continues_after_startup_until_last_analyzer_is_dropped() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Capture {
+            live: Arc<AtomicBool>,
+            _thread_bound: std::rc::Rc<()>,
+        }
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                self.live.store(false, Ordering::SeqCst);
+            }
+        }
+        let live = Arc::new(AtomicBool::new(false));
+        let capture_live = live.clone();
+        let config = Config {
+            visualizer_fft: true,
+            visualizer_fifo: None,
+            ..Config::default_config()
+        };
+        let analyzer = VisualizerAnalyzer::with_capture(&config, move |_, _, _| {
+            let shared = SharedState::new(2048, 1);
+            for index in 0..2048 {
+                shared.samples.lock().unwrap().push(
+                    (index as f32 * 2.0 * std::f32::consts::PI * 440.0 / 44_100.0).sin() * 0.8,
+                );
+            }
+            capture_live.store(true, Ordering::SeqCst);
+            Ok((
+                Capture {
+                    live: capture_live,
+                    _thread_bound: std::rc::Rc::new(()),
+                },
+                shared,
+            ))
+        });
+        assert!(
+            live.load(Ordering::SeqCst),
+            "capture was released on startup return"
+        );
+        let mut frames = analyzer.subscribe();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), frames.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(frame.level > 0.2);
+        let clone = analyzer.clone();
+        drop(analyzer);
+        assert!(live.load(Ordering::SeqCst));
+        drop(clone);
+        assert!(
+            !live.load(Ordering::SeqCst),
+            "capture resource leaked after shutdown"
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), frames.recv())
+                .await
+                .expect("publisher outlived analyzer")
+                .is_err()
+        );
+    }
 
     fn legacy_params_json() -> serde_json::Value {
         serde_json::json!({

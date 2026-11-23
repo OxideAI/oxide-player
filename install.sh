@@ -19,6 +19,7 @@ SHARE_DIR="${SHARE_DIR:-/usr/local/share/oxide-player}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/oxide-player}"
 DATA_DIR="${DATA_DIR:-/var/lib/oxide-player}"
 MPD_CONFIG="${MPD_CONFIG:-/etc/mpd.conf}"
+FSTAB_FILE="${FSTAB_FILE:-/etc/fstab}"
 CAMILLADSP_CONFIG="${CAMILLADSP_CONFIG:-/etc/camilladsp/config.yml}"
 CAMILLADSP_WS="${CAMILLADSP_WS:-ws://127.0.0.1:1234}"
 AIRPLAY_NAME="${AIRPLAY_NAME:-Oxide Player}"
@@ -72,7 +73,7 @@ Options:
   --help, -h   Show this help.
 
 Environment variables (all optional):
-  DATA_DIR, MPD_CONFIG, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
+  DATA_DIR, MPD_CONFIG, FSTAB_FILE, LISTEN, MUSIC_DIR, MPD_MUSIC_DIR, CAMILLADSP_CONFIG,
   CAMILLADSP_WS, AIRPLAY_NAME, AIRPLAY_CONFIG, ASOUND_CONFIG, SAMBA_CONFIG,
   SAMBA_SHARES_CONFIG, SERVICE_USER, BUILD_DIR, RELEASE_ASSET_RETRIES,
   RELEASE_ASSET_RETRY_DELAY, KIOSK_ENABLED, KIOSK_IDLE_SECONDS, KIOSK_TTY
@@ -695,7 +696,92 @@ EOF
 # a time — 10-15s of avoidable startup, and auto_update keeps the DB empty.
 # Bind each external library mount into MPD_MUSIC_DIR so MPD serves the real
 # files from its configured directory.
+fstab_path() {
+  local value="$1"
+  value="${value//\\/\\134}"
+  value="${value// /\\040}"
+  value="${value//$'\t'/\\011}"
+  printf '%s' "$value"
+}
+
+fstab_unescape() {
+  local value="$1"
+  value="${value//\\040/ }"
+  value="${value//\\011/$'\t'}"
+  value="${value//\\134/\\}"
+  printf '%s' "$value"
+}
+
+music_bind_entries() {
+  [ -f "$FSTAB_FILE" ] || return 0
+  OXIDE_BIND_TARGET="$(fstab_path "$MPD_MUSIC_DIR")" \
+  OXIDE_BIND_FILTER="${1:-all}" awk '
+    BEGIN {
+      target = ENVIRON["OXIDE_BIND_TARGET"]
+      filter = ENVIRON["OXIDE_BIND_FILTER"]
+      marker = "# oxide-player: managed music bind"
+    }
+    $2 == target {
+      owned = $3 == "none" && ("," $4 ",") ~ /,bind,/ &&
+        substr($0, length($0) - length(marker) + 1) == marker
+      if (filter == "all" || owned) print
+    }
+  ' "$FSTAB_FILE"
+}
+
+remove_music_bind() {
+  local owned source tmp
+  owned="$(music_bind_entries owned)"
+  [ -n "$owned" ] || return 0
+  if [ "$owned" != "$(music_bind_entries)" ] || [[ "$owned" == *$'\n'* ]]; then
+    warn "Music mount entries are ambiguous; preserving them"
+    return 0
+  fi
+  if mountpoint -q "$MPD_MUSIC_DIR"; then
+    read -r source _ <<< "$owned"
+    source="$(fstab_unescape "$source")"
+    if ! [ "$MPD_MUSIC_DIR" -ef "$source" ]; then
+      warn "The mounted music directory does not match the managed bind; preserving it"
+      return 0
+    fi
+    if ! run umount "$MPD_MUSIC_DIR"; then
+      warn "Could not unmount the managed music bind; preserving its fstab entry"
+      return 0
+    fi
+  fi
+  tmp="$(mktemp "${FSTAB_FILE}.oxide.XXXXXX")"
+  if ! OXIDE_BIND_ENTRIES="$owned" awk '
+    BEGIN {
+      count = split(ENVIRON["OXIDE_BIND_ENTRIES"], entries, "\n")
+      for (i = 1; i <= count; i++) owned[entries[i]] = 1
+    }
+    !($0 in owned) { print }
+  ' "$FSTAB_FILE" > "$tmp"; then
+    rm -f "$tmp"
+    die "Cannot prepare managed music bind removal"
+  fi
+  cat "$tmp" > "$FSTAB_FILE"
+  rm -f "$tmp"
+  run systemctl daemon-reload || true
+  log "Removed installer-managed music bind for $MPD_MUSIC_DIR"
+}
+
 setup_music_bind() {
+  local existing
+  existing="$(music_bind_entries)"
+  if [ -n "$existing" ]; then
+    if [ "$existing" = "$(music_bind_entries owned)" ]; then
+      mountpoint -q "$MPD_MUSIC_DIR" || \
+        run mount "$MPD_MUSIC_DIR" || warn "Managed music bind is not mounted"
+    else
+      log "Preserving the existing music mount configured in $FSTAB_FILE"
+    fi
+    return 0
+  fi
+  if mountpoint -q "$MPD_MUSIC_DIR"; then
+    log "Preserving the existing music mount at $MPD_MUSIC_DIR"
+    return 0
+  fi
   # Collect candidate sources: MPD_MUSIC_DIR itself is the target.
   local dirs=()
   dirs+=("$MPD_MUSIC_DIR")
@@ -715,28 +801,20 @@ for d in json.load(open(sys.argv[1])).get("library_dirs", []): print(d)' "$CONFI
     [ -n "$d" ] || continue
     [ "$d" = "$MPD_MUSIC_DIR" ] && continue
     # Only real mounts qualify (directories on the root fs would just be data).
-    if ! awk -v mp="$d" '$2==mp {found=1; exit} END{exit !found}' /proc/mounts 2>/dev/null; then
+    if ! mountpoint -q "$d"; then
       continue
     fi
     # Skip if this dir already lives inside MPD_MUSIC_DIR or vice versa.
     case "$d" in "$MPD_MUSIC_DIR"|"$MPD_MUSIC_DIR"/*) continue ;; esac
     case "$MPD_MUSIC_DIR" in "$d"|"$d"/*) continue ;; esac
-    # Idempotent: fstab entry + mounted => done.
-    if mountpoint -q "$MPD_MUSIC_DIR" && grep -qF " $MPD_MUSIC_DIR " /etc/fstab 2>/dev/null; then
-      log "Library bind $d -> $MPD_MUSIC_DIR already active"
-      return 0
-    fi
     if [ -L "$MPD_MUSIC_DIR" ]; then
       log "$MPD_MUSIC_DIR is a symlink; skipping library bind"
       return 0
     fi
     log "Binding library mount $d into $MPD_MUSIC_DIR (MPD restart speed)"
-    grep -qF " $MPD_MUSIC_DIR " /etc/fstab || \
-      printf "%s %s none bind,nofail,x-systemd.device-timeout=10s 0 0\n" "$d" "$MPD_MUSIC_DIR" >> /etc/fstab
     run mkdir -p "$MPD_MUSIC_DIR"
-    if mountpoint -q "$MPD_MUSIC_DIR"; then
-      run umount "$MPD_MUSIC_DIR" 2>/dev/null || true
-    fi
+    printf '%s %s none bind,nofail,x-systemd.device-timeout=10s 0 0 # oxide-player: managed music bind\n' \
+      "$(fstab_path "$d")" "$(fstab_path "$MPD_MUSIC_DIR")" >> "$FSTAB_FILE"
     run mount "$MPD_MUSIC_DIR" 2>/dev/null || warn "Library bind not active under $MPD_MUSIC_DIR"
     run systemctl daemon-reload 2>/dev/null || true
     return 0
@@ -1752,6 +1830,69 @@ MOTD_EOF
 # pointed at the backend's /kiosk view on the attached HDMI touchscreen.
 # Blank/wake policy: playing or paused keeps the panel lit; continuous stopped
 # playback past KIOSK_IDLE_SECONDS blanks it; touch wakes it (swayidle resume).
+render_kiosk_session() {
+  local _port="${LISTEN##*:}" _port_suffix="" _idle="${KIOSK_IDLE_SECONDS:-600}" _kiosk_url
+  [ "$_port" != "80" ] && _port_suffix=":$_port"
+  local _session
+  _session="$(cat <<'SESSION_EOF'
+#!/bin/sh
+# oxide-kiosk-session — single-app Wayland kiosk session for the wall display.
+export XDG_SESSION_TYPE=wayland
+export GDK_BACKEND=wayland
+# PAM does not always export this into the unit environment; Chromium (snap)
+# needs it to locate the Wayland compositor socket.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+# Wait for the backend before launching the browser (After= orders exec, not bind).
+i=0
+until curl -sf --max-time 2 "http://127.0.0.1__PORT_SUFFIX__/api/version" >/dev/null 2>&1; do
+    [ "$i" -ge 60 ] && break
+    sleep 1
+    i=$((i + 1))
+done
+
+cage -d -s -- sh -c 'unset DISPLAY; i=0; while :; do for f in "$XDG_RUNTIME_DIR"/wayland-*; do [ -S "$f" ] && export WAYLAND_DISPLAY="$(basename "$f")" && exec "${OXIDE_KIOSK_BROWSER:-/snap/bin/chromium}" --enable-features=UseOzonePlatform --ozone-platform=wayland --kiosk --noerrdialogs --disable-dev-shm-usage --password-store=basic "$1"; done; i=$((i+1)); [ "$i" -ge 150 ] && break; sleep 0.2; done; exit 1' oxide-kiosk __KIOSK_URL__ &
+CAGE_PID=$!
+
+i=0
+while :; do
+    [ -n "$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null)" ] && break
+    # Cage exited (no DRM seat / headless): fail now so Restart=always and the
+    # start limit engage instead of burning the poll budget as a zombie.
+    kill -0 "$CAGE_PID" 2>/dev/null || exit 1
+    [ "$i" -ge 100 ] && break
+    sleep 0.2
+    i=$((i + 1))
+done
+_wl="$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null | head -n 1)"
+[ -n "$_wl" ] && WAYLAND_DISPLAY="$(basename "$_wl")" && export WAYLAND_DISPLAY
+
+# Supervised swayidle: if it ever exits, relaunch it — its resume hook is the
+# only wake-on-touch path, so losing it silently would strand a blanked panel.
+( while :; do
+      swayidle -w timeout 10 'true' \
+          resume 'wlopm --on "*"; touch /tmp/oxide-kiosk-wake'
+      sleep 2
+  done ) &
+"__BINDIR__/oxide-kiosk-idle-watcher" &
+
+wait "$CAGE_PID"
+SESSION_EOF
+)"
+  _session="${_session//__PORT_SUFFIX__/$_port_suffix}"
+  _session="${_session//__KIOSK_IDLE_SECONDS__/$_idle}"
+  _session="${_session//__BINDIR__/$BIN_DIR}"
+  case "$KIOSK_MODE" in
+    full) _kiosk_url="http://127.0.0.1${_port_suffix}/kiosk?panel=1&idle=${_idle}" ;;
+    *)    _kiosk_url="http://127.0.0.1${_port_suffix}/viz.html" ;;
+  esac
+  # Quote for the outer POSIX shell; the inner shell receives it as $1.
+  local _url_arg
+  _url_arg="'$(printf '%s' "$_kiosk_url" | sed "s/'/'\\\\''/g")'"
+  # Concatenation keeps '&' literal even with bash patsub_replacement enabled.
+  _session="${_session%%__KIOSK_URL__*}${_url_arg}${_session#*__KIOSK_URL__}"
+  printf '%s\n' "$_session"
+}
+
 write_kiosk() {
   log "Installing wall display kiosk (cage + snap Chromium)"
   # Fault isolation: a host where a kiosk package is unavailable (e.g. the
@@ -1878,60 +2019,7 @@ WATCHER_EOF
   #      fires when input follows an idle stretch, so frequent-enough touches
   #      keep stamping activity and the watcher never blanks under an active
   #      finger.
-  local _session
-  _session="$(cat <<'SESSION_EOF'
-#!/bin/sh
-# oxide-kiosk-session — single-app Wayland kiosk session for the wall display.
-export XDG_SESSION_TYPE=wayland
-export GDK_BACKEND=wayland
-# PAM does not always export this into the unit environment; Chromium (snap)
-# needs it to locate the Wayland compositor socket.
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-# Wait for the backend before launching the browser (After= orders exec, not bind).
-i=0
-until curl -sf --max-time 2 "http://127.0.0.1__PORT_SUFFIX__/api/version" >/dev/null 2>&1; do
-    [ "$i" -ge 60 ] && break
-    sleep 1
-    i=$((i + 1))
-done
-
-cage -d -s -- sh -c 'unset DISPLAY; i=0; while :; do for f in "$XDG_RUNTIME_DIR"/wayland-*; do [ -S "$f" ] && export WAYLAND_DISPLAY="$(basename "$f")" && exec /snap/bin/chromium --enable-features=UseOzonePlatform --ozone-platform=wayland --kiosk --noerrdialogs --disable-dev-shm-usage --password-store=basic __KIOSK_URL__; done; i=$((i+1)); [ "$i" -ge 150 ] && break; sleep 0.2; done; exit 1' &
-CAGE_PID=$!
-
-i=0
-while :; do
-    [ -n "$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null)" ] && break
-    # Cage exited (no DRM seat / headless): fail now so Restart=always and the
-    # start limit engage instead of burning the poll budget as a zombie.
-    kill -0 "$CAGE_PID" 2>/dev/null || exit 1
-    [ "$i" -ge 100 ] && break
-    sleep 0.2
-    i=$((i + 1))
-done
-_wl="$(ls "$XDG_RUNTIME_DIR"/wayland-* 2>/dev/null | head -n 1)"
-[ -n "$_wl" ] && WAYLAND_DISPLAY="$(basename "$_wl")" && export WAYLAND_DISPLAY
-
-# Supervised swayidle: if it ever exits, relaunch it — its resume hook is the
-# only wake-on-touch path, so losing it silently would strand a blanked panel.
-( while :; do
-      swayidle -w timeout 10 'true' \
-          resume 'wlopm --on "*"; touch /tmp/oxide-kiosk-wake'
-      sleep 2
-  done ) &
-"__BINDIR__/oxide-kiosk-idle-watcher" &
-
-wait "$CAGE_PID"
-SESSION_EOF
-)"
-  _session="${_session//__PORT_SUFFIX__/$_port_suffix}"
-  _session="${_session//__KIOSK_IDLE_SECONDS__/$_idle}"
-  _session="${_session//__BINDIR__/$BIN_DIR}"
-  case "$KIOSK_MODE" in
-    full) _kiosk_url="http://127.0.0.1${_port_suffix}/kiosk?panel=1&idle=${_idle}" ;;
-    *)    _kiosk_url="http://127.0.0.1${_port_suffix}/viz.html" ;;
-  esac
-  _session="${_session//__KIOSK_URL__/$_kiosk_url}"
-  printf '%s\n' "$_session" > "$BIN_DIR/oxide-kiosk-session"
+  render_kiosk_session > "$BIN_DIR/oxide-kiosk-session"
   run chmod 755 "$BIN_DIR/oxide-kiosk-session"
 
   # Switch to the kiosk VT before the compositor starts: logind activates the
@@ -2088,15 +2176,7 @@ do_uninstall() {
     remove_path /etc/udev/rules.d/69-oxide-sata-lpm.rules
     udevadm control --reload-rules 2>/dev/null || true
   fi
-  if mountpoint -q "$MPD_MUSIC_DIR" && grep -qF " $MPD_MUSIC_DIR " /etc/fstab 2>/dev/null; then
-    run umount "$MPD_MUSIC_DIR" 2>/dev/null || warn "Could not unmount library bind at $MPD_MUSIC_DIR"
-    local fstab_tmp
-    fstab_tmp="$(mktemp)"
-    grep -vF " $MPD_MUSIC_DIR " /etc/fstab > "$fstab_tmp" && cat "$fstab_tmp" > /etc/fstab
-    rm -f "$fstab_tmp"
-    run systemctl daemon-reload || true
-    warn "Removed library bind fstab entry for $MPD_MUSIC_DIR"
-  fi
+  remove_music_bind
 
   remove_path "$BIN_DIR/oxide-player"
   remove_path "$BIN_DIR/camilladsp"
