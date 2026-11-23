@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.4](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.23.3...oxide-player-v0.23.4) (2026-11-23)
+
+
+### Bug Fixes
+
+* fix:  ([d95c862](https://github.com/OxideAI/oxide-player/commit/d95c862e07c01e979c31309147fe7ad3ea538ce2))
+* issues fixed ([b8f543e](https://github.com/OxideAI/oxide-player/commit/b8f543e87e5c0710b9dc758073016143c370103e))
+
 ## [0.23.3](https://github.com/OxideAI/oxide-player/compare/oxide-player-v0.23.2...oxide-player-v0.23.3) (2026-11-22)
 
 
